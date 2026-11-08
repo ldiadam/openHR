@@ -67,6 +67,13 @@ export const HREmployees: React.FC = () => {
     bpjs_kesehatan_number: '',
     bpjs_tk_number: '',
     bpjs_wage_basis: '',
+    // Foreign Worker Fields
+    is_foreign_worker: false,
+    nationality: 'Indonesia',
+    passport_number: '',
+    passport_expiry_date: '',
+    kitas_kitap_number: '',
+    tax_id_type: 'NPWP',
     provision_company_email: true,
     company_email_username: '',
   });
@@ -109,6 +116,16 @@ export const HREmployees: React.FC = () => {
   const handleCreateEmployee = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+
+    if (formData.is_foreign_worker && !formData.passport_number.trim()) {
+      setMsg({ type: 'error', text: 'Nomor paspor wajib diisi untuk Tenaga Kerja Asing (TKA / Foreign Worker)' });
+      return;
+    }
+    if (!formData.is_foreign_worker && !formData.ktp_number.trim()) {
+      setMsg({ type: 'error', text: 'Nomor KTP wajib diisi untuk karyawan WNI' });
+      return;
+    }
+
     try {
       const res = await apiFetch('/employees', {
         method: 'POST',
@@ -394,8 +411,17 @@ export const HREmployees: React.FC = () => {
                 filtered.map((emp) => (
                   <tr key={emp.id} className="hover:bg-slate-50/80 transition">
                     <td className="py-3 px-4">
-                      <div className="font-bold text-slate-900">{emp.full_name}</div>
-                      <div className="text-[11px] text-slate-400 font-mono">{emp.nik}</div>
+                      <div className="font-bold text-slate-900 flex items-center gap-1.5">
+                        <span>{emp.full_name}</span>
+                        {emp.is_foreign_worker === 1 && (
+                          <span className="px-1.5 py-0.5 rounded text-[9px] font-semibold bg-amber-50 text-amber-800 border border-amber-200">
+                            TKA ({emp.nationality || 'WNA'})
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400 font-mono">
+                        {emp.nik} {emp.passport_number ? `• Paspor: ${emp.passport_number}` : ''}
+                      </div>
                     </td>
                     <td className="py-3 px-4">
                       <div className="font-medium text-slate-800">{emp.job_title}</div>
@@ -446,8 +472,30 @@ export const HREmployees: React.FC = () => {
 
             <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
+                <span className="text-slate-400 block text-[10px] uppercase">Kewarganegaraan</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedEmp.is_foreign_worker ? `TKA (${selectedEmp.nationality || 'WNA'})` : 'WNI (Indonesia)'}
+                </span>
+              </div>
+              {selectedEmp.is_foreign_worker === 1 && (
+                <>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Nomor Paspor</span>
+                    <span className="font-semibold text-slate-800 font-mono">{selectedEmp.passport_number || '-'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Masa Berlaku Paspor</span>
+                    <span className="font-semibold text-slate-800">{selectedEmp.passport_expiry_date || '-'}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 block text-[10px] uppercase">Nomor KITAS / KITAP</span>
+                    <span className="font-semibold text-slate-800 font-mono">{selectedEmp.kitas_kitap_number || '-'}</span>
+                  </div>
+                </>
+              )}
+              <div>
                 <span className="text-slate-400 block text-[10px] uppercase">Nomor KTP</span>
-                <span className="font-semibold text-slate-800">{selectedEmp.ktp_number}</span>
+                <span className="font-semibold text-slate-800">{selectedEmp.ktp_number || '-'}</span>
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase">NPWP</span>
@@ -519,6 +567,74 @@ export const HREmployees: React.FC = () => {
             </div>
 
             <form onSubmit={handleCreateEmployee} className="space-y-4 text-xs">
+              {/* Kewarganegaraan: WNI vs WNA (Foreign Worker) */}
+              <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
+                <span className="block font-semibold text-slate-700 mb-1.5">Status Kewarganegaraan:</span>
+                <div className="flex items-center gap-6">
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-800 font-medium">
+                    <input
+                      type="radio"
+                      name="is_foreign_worker"
+                      checked={!formData.is_foreign_worker}
+                      onChange={() => setFormData({ ...formData, is_foreign_worker: false, nationality: 'Indonesia' })}
+                      className="text-slate-900 focus:ring-slate-900"
+                    />
+                    <span>Warga Negara Indonesia (WNI)</span>
+                  </label>
+
+                  <label className="flex items-center gap-2 cursor-pointer text-slate-800 font-medium">
+                    <input
+                      type="radio"
+                      name="is_foreign_worker"
+                      checked={formData.is_foreign_worker}
+                      onChange={() => setFormData({ ...formData, is_foreign_worker: true, nationality: 'WNA', ptkp_status: 'TK/0' })}
+                      className="text-slate-900 focus:ring-slate-900"
+                    />
+                    <span className="text-amber-800 font-semibold">Tenaga Kerja Asing (TKA / Foreign Worker)</span>
+                  </label>
+                </div>
+              </div>
+
+              {/* Foreign Worker Specific Fields */}
+              {formData.is_foreign_worker && (
+                <div className="bg-amber-50/50 p-3.5 rounded-xl border border-amber-200 grid grid-cols-1 md:grid-cols-3 gap-3">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Nomor Paspor *</label>
+                    <input
+                      type="text"
+                      required={formData.is_foreign_worker}
+                      value={formData.passport_number}
+                      onChange={(e) => setFormData({ ...formData, passport_number: e.target.value })}
+                      placeholder="Contoh: TR1234567"
+                      className="w-full p-2.5 border border-amber-300 rounded-xl font-mono bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Negara Asal / Kewarganegaraan *</label>
+                    <input
+                      type="text"
+                      required={formData.is_foreign_worker}
+                      value={formData.nationality}
+                      onChange={(e) => setFormData({ ...formData, nationality: e.target.value })}
+                      placeholder="Contoh: Jepang, Singapura, dll."
+                      className="w-full p-2.5 border border-amber-300 rounded-xl bg-white"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Nomor KITAS / KITAP (Opsional)</label>
+                    <input
+                      type="text"
+                      value={formData.kitas_kitap_number}
+                      onChange={(e) => setFormData({ ...formData, kitas_kitap_number: e.target.value })}
+                      placeholder="Contoh: 2C21..."
+                      className="w-full p-2.5 border border-slate-300 rounded-xl bg-white font-mono"
+                    />
+                  </div>
+                </div>
+              )}
+
               <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
                 <div>
                   <label className="block text-slate-700 font-semibold mb-1">NIK (Nomor Induk Karyawan) *</label>
@@ -533,36 +649,41 @@ export const HREmployees: React.FC = () => {
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Nama Lengkap (Sesuai KTP) *</label>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    Nama Lengkap ({formData.is_foreign_worker ? 'Sesuai Paspor' : 'Sesuai KTP'}) *
+                  </label>
                   <input
                     type="text"
                     required
                     value={formData.full_name}
                     onChange={(e) => setFormData({ ...formData, full_name: e.target.value })}
-                    placeholder="Contoh: Hendra Kurniawan"
+                    placeholder={formData.is_foreign_worker ? 'Contoh: Kenji Takahashi' : 'Contoh: Hendra Kurniawan'}
                     className="w-full p-2.5 border border-slate-300 rounded-xl"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">Nomor KTP (16 Digit) *</label>
+                  <label className="block text-slate-700 font-semibold mb-1">
+                    {formData.is_foreign_worker ? 'Nomor KTP (Opsional untuk WNA)' : 'Nomor KTP (16 Digit) *'}
+                  </label>
                   <input
                     type="text"
-                    required
+                    required={!formData.is_foreign_worker}
                     maxLength={16}
                     value={formData.ktp_number}
                     onChange={(e) => setFormData({ ...formData, ktp_number: e.target.value })}
+                    placeholder={formData.is_foreign_worker ? 'Kosongkan jika hanya menggunakan paspor' : '31710101019...'}
                     className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
                   />
                 </div>
 
                 <div>
-                  <label className="block text-slate-700 font-semibold mb-1">NPWP</label>
+                  <label className="block text-slate-700 font-semibold mb-1">NPWP (Opsional / Pajak)</label>
                   <input
                     type="text"
                     value={formData.npwp_number}
                     onChange={(e) => setFormData({ ...formData, npwp_number: e.target.value })}
-                    placeholder="00.000.000.0-000.000"
+                    placeholder="00.000.000.0-000.000 (Opsional)"
                     className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
                   />
                 </div>

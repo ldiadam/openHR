@@ -16,7 +16,7 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { apiFetch, formatRupiah, formatDateIndo } from '../api';
+import { apiFetch, formatRupiah, formatDateIndo, downloadFile } from '../api';
 import { PayslipModal } from '../components/PayslipModal';
 
 export const HRPayroll: React.FC = () => {
@@ -191,9 +191,14 @@ export const HRPayroll: React.FC = () => {
     }
   };
 
-  const downloadBankFile = (format: 'BCA' | 'MANDIRI') => {
+  const downloadBankFile = async (format: 'BCA' | 'MANDIRI') => {
     if (!selectedRun) return;
-    window.open(`/api/payroll/runs/${selectedRun.id}/bank-file?format=${format}`, '_blank');
+    try {
+      const filename = `${format === 'BCA' ? 'KlikBCA' : 'Mandiri_MCM'}_${selectedRun.period_end || 'export'}.csv`;
+      await downloadFile(`/payroll/runs/${selectedRun.id}/bank-file?format=${format}`, filename);
+    } catch (err: any) {
+      alert(err.message || 'Gagal mengunduh file bank transfer');
+    }
   };
 
   const isLocked = selectedRun?.status === 'locked' || selectedRun?.status === 'paid';
@@ -421,15 +426,20 @@ export const HRPayroll: React.FC = () => {
                   <Download size={13} />
                   <span>Mandiri (MCM)</span>
                 </button>
-                <a
-                  href={`/api/reports/payroll-recap?run_id=${selectedRun.id}&export=excel`}
-                  target="_blank"
-                  rel="noreferrer"
-                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1"
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await downloadFile(`/reports/payroll-recap?run_id=${selectedRun.id}&export=excel`, `Rekap_Penggajian_${selectedRun.period_end}.xlsx`);
+                    } catch (e: any) {
+                      alert(e.message || 'Gagal mengunduh rekap');
+                    }
+                  }}
+                  className="px-2.5 py-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-200 rounded-lg text-xs font-semibold flex items-center gap-1 cursor-pointer"
                 >
                   <FileSpreadsheet size={13} />
                   <span>Rekap Excel</span>
-                </a>
+                </button>
               </div>
             )}
           </div>

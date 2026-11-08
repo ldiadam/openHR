@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
-import { Clock, CheckCircle2, XCircle, AlertCircle, Upload, Calendar } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
+import { Clock, CheckCircle2, XCircle, AlertCircle, Upload, Calendar, ArrowLeft } from 'lucide-react';
 import { apiFetch, formatDateIndo } from '../api';
 
 export const HRAttendance: React.FC = () => {
+  const navigate = useNavigate();
   const [activeTab, setActiveTab] = useState<'today' | 'recap' | 'corrections'>('today');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [todayData, setTodayData] = useState<any>({ summary: {}, records: [] });
@@ -102,10 +104,24 @@ export const HRAttendance: React.FC = () => {
 
   return (
     <div className="space-y-6">
+      {/* Breadcrumb Navigation */}
+      <div className="flex items-center gap-2 text-xs text-slate-500">
+        <button
+          type="button"
+          onClick={() => navigate('/')}
+          className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium transition cursor-pointer"
+        >
+          <ArrowLeft size={13} />
+          <span>Dashboard</span>
+        </button>
+        <span className="text-slate-300">/</span>
+        <span className="font-semibold text-slate-800">Presensi & Kehadiran</span>
+      </div>
+
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Presensi & Kehadiran</h1>
-          <p className="text-xs text-slate-500">
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Presensi & Kehadiran</h1>
+          <p className="text-xs text-slate-500 mt-0.5">
             Monitoring kehadiran harian karyawan, koreksi presensi, dan log fingerprint
           </p>
         </div>

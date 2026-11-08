@@ -44,7 +44,7 @@ payrollRoutes.post('/runs', requireRole(['owner_admin']), async (c) => {
     return c.json({ error: 'Semua field wajib diisi (Periode awal, akhir, tanggal bayar, judul)' }, 400);
   }
 
-  const runId = `prun-${Date.now()}`;
+  const runId = `prun-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
   await c.env.DB.prepare(
     `INSERT INTO payroll_runs (
       id, tenant_id, period_start, period_end, payment_date, title, status, notes

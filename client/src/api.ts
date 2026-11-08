@@ -147,3 +147,40 @@ export function formatDateIndo(dateStr: string): string {
     return dateStr;
   }
 }
+
+export async function downloadFile(endpoint: string, fallbackFilename: string = 'export.xlsx'): Promise<void> {
+  const token = getToken();
+  const url = endpoint.startsWith('http') || endpoint.startsWith('/api') ? endpoint : `${API_BASE}${endpoint}`;
+
+  const headers = new Headers();
+  if (token) {
+    headers.set('Authorization', `Bearer ${token}`);
+  }
+
+  const res = await fetch(url, { headers });
+  if (!res.ok) {
+    let msg = `Gagal mengunduh file (HTTP ${res.status})`;
+    try {
+      const json: any = await res.json();
+      if (json && json.error) msg = json.error;
+    } catch {}
+    throw new Error(msg);
+  }
+
+  let filename = fallbackFilename;
+  const disp = res.headers.get('Content-Disposition');
+  if (disp && disp.includes('filename=')) {
+    const match = disp.match(/filename="?([^";]+)"?/);
+    if (match && match[1]) filename = match[1];
+  }
+
+  const blob = await res.blob();
+  const blobUrl = window.URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = blobUrl;
+  a.download = filename;
+  document.body.appendChild(a);
+  a.click();
+  a.remove();
+  setTimeout(() => window.URL.revokeObjectURL(blobUrl), 1000);
+}

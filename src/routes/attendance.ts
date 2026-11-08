@@ -44,6 +44,27 @@ attendanceRoutes.post('/clock', async (c) => {
     return c.json({ error: 'Data karyawan tidak ditemukan' }, 400);
   }
 
+  // Location is strictly required: if GPS is blocked or missing, cannot clock in
+  if (latitude === undefined || latitude === null || longitude === undefined || longitude === null || latitude === '' || longitude === '') {
+    return c.json({ error: 'Akses GPS diblokir atau tidak aktif. Lokasi GPS wajib disertakan untuk melakukan presensi.' }, 400);
+  }
+
+  const latNum = parseFloat(latitude);
+  const lngNum = parseFloat(longitude);
+  if (isNaN(latNum) || isNaN(lngNum) || (latNum === 0 && lngNum === 0)) {
+    return c.json({ error: 'Koordinat lokasi GPS tidak valid. Izin lokasi wajib diaktifkan pada browser.' }, 400);
+  }
+
+  // Check admin settings for selfie requirement (optional set by admin)
+  const settings = await c.env.DB.prepare(
+    `SELECT attendance_require_selfie FROM payroll_settings LIMIT 1`
+  ).first<any>();
+  const requireSelfie = settings ? settings.attendance_require_selfie === 1 : false;
+
+  if (type === 'in' && requireSelfie && !photo_base64) {
+    return c.json({ error: 'Admin mewajibkan pengambilan foto selfie untuk presensi masuk.' }, 400);
+  }
+
   // Get employee and branch info for geofence and shift
   const emp = await c.env.DB.prepare(
     `SELECT e.*, b.latitude as branch_lat, b.longitude as branch_lng, b.radius_meters as branch_radius,

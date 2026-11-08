@@ -132,7 +132,37 @@ settingsRoutes.post('/departments', requireRole(['owner_admin']), async (c) => {
   return c.json({ message: 'Departemen berhasil ditambahkan', departmentId: id });
 });
 
-// 4. Payroll Settings (Indonesia Rules: BPJS rates, caps, TER rules, Overtime, toggles)
+// 5. Attendance Config (Selfie & GPS Settings)
+settingsRoutes.get('/attendance', async (c) => {
+  const row = await c.env.DB.prepare(
+    `SELECT attendance_require_selfie, attendance_require_location FROM payroll_settings LIMIT 1`
+  ).first<any>();
+  return c.json({
+    require_selfie: row ? row.attendance_require_selfie === 1 : false,
+    require_location: row ? row.attendance_require_location === 1 : true,
+  });
+});
+
+settingsRoutes.put('/attendance', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const requireSelfie = body.require_selfie ? 1 : 0;
+  const requireLocation = body.require_location !== undefined ? (body.require_location ? 1 : 0) : 1;
+
+  await c.env.DB.prepare(
+    `UPDATE payroll_settings SET
+      attendance_require_selfie = ?,
+      attendance_require_location = ?,
+      updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(requireSelfie, requireLocation)
+    .run();
+
+  return c.json({
+    message: 'Pengaturan presensi berhasil disimpan',
+    require_selfie: requireSelfie === 1,
+    require_location: requireLocation === 1,
+  });
+});
 settingsRoutes.get('/payroll', requireRole(['owner_admin', 'finance']), async (c) => {
   const row = await c.env.DB.prepare(
     `SELECT * FROM payroll_settings ORDER BY effective_date DESC LIMIT 1`

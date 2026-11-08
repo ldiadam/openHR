@@ -10,12 +10,18 @@ import {
   AlertCircle,
   Mail,
   FileText,
+  Clock,
+  Camera,
 } from 'lucide-react';
 import { apiFetch, formatRupiah, formatDateIndo } from '../api';
 
 export const HRSettings: React.FC = () => {
-  const [activeTab, setActiveTab] = useState<'payroll' | 'branches' | 'company' | 'audit'>('payroll');
+  const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'audit'>('payroll');
   const [payrollSettings, setPayrollSettings] = useState<any>(null);
+  const [attendancePolicy, setAttendancePolicy] = useState<{ require_selfie: boolean; require_location: boolean }>({
+    require_selfie: false,
+    require_location: true,
+  });
   const [branches, setBranches] = useState<any[]>([]);
   const [company, setCompany] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -28,16 +34,18 @@ export const HRSettings: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [pRes, bRes, cRes, aRes] = await Promise.all([
+      const [pRes, bRes, cRes, aRes, attRes] = await Promise.all([
         apiFetch('/settings/payroll'),
         apiFetch('/settings/branches'),
         apiFetch('/settings/company'),
         apiFetch('/settings/audit-logs'),
+        apiFetch('/settings/attendance').catch(() => ({ require_selfie: false, require_location: true })),
       ]);
       setPayrollSettings(pRes.settings || {});
       setBranches(bRes.branches || []);
       setCompany(cRes.company || {});
       setAuditLogs(aRes.logs || []);
+      setAttendancePolicy(attRes);
     } catch (err: any) {
       console.warn('Settings load err:', err.message);
     } finally {
@@ -56,6 +64,21 @@ export const HRSettings: React.FC = () => {
       const res = await apiFetch('/settings/payroll', {
         method: 'PUT',
         body: JSON.stringify(payrollSettings),
+      });
+      setMsg({ type: 'success', text: res.message });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleSaveAttendancePolicy = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setMsg(null);
+    try {
+      const res = await apiFetch('/settings/attendance', {
+        method: 'PUT',
+        body: JSON.stringify(attendancePolicy),
       });
       setMsg({ type: 'success', text: res.message });
       loadData();
@@ -120,6 +143,15 @@ export const HRSettings: React.FC = () => {
         >
           <MapPin size={15} />
           <span>Cabang & Geofence (Presensi)</span>
+        </button>
+        <button
+          onClick={() => setActiveTab('attendance')}
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+            activeTab === 'attendance' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          <Clock size={15} />
+          <span>Kebijakan Presensi & Selfie</span>
         </button>
         <button
           onClick={() => setActiveTab('company')}
@@ -537,6 +569,86 @@ export const HRSettings: React.FC = () => {
             </div>
           )}
         </div>
+      )}
+
+      {/* TAB: ATTENDANCE & SELFIE POLICY */}
+      {activeTab === 'attendance' && (
+        <form onSubmit={handleSaveAttendancePolicy} className="space-y-6">
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-6">
+            <div>
+              <h3 className="font-bold text-base text-slate-900">Kebijakan Presensi Masuk & Verifikasi</h3>
+              <p className="text-xs text-slate-500 mt-1">
+                Atur apakah pengambilan foto selfie bersifat wajib atau opsional bagi karyawan saat melakukan presensi masuk di ponsel.
+              </p>
+            </div>
+
+            <div className="space-y-4">
+              {/* Option 1: Selfie Requirement (Toggleable by Admin) */}
+              <div className="flex items-start gap-4 p-4 rounded-2xl border border-slate-200 bg-slate-50/50">
+                <div className="p-2.5 rounded-xl bg-blue-50 text-blue-600 border border-blue-200 shrink-0">
+                  <Camera size={20} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <label htmlFor="selfie_toggle" className="font-bold text-sm text-slate-900 cursor-pointer">
+                      Wajibkan Foto Selfie Saat Presensi Masuk
+                    </label>
+                    <input
+                      id="selfie_toggle"
+                      type="checkbox"
+                      checked={attendancePolicy.require_selfie}
+                      onChange={(e) =>
+                        setAttendancePolicy({ ...attendancePolicy, require_selfie: e.target.checked })
+                      }
+                      className="w-4 h-4 text-slate-900 rounded border-slate-300 focus:ring-slate-900 cursor-pointer"
+                    />
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    {attendancePolicy.require_selfie ? (
+                      <span className="text-emerald-700 font-medium">
+                        Aktif: Karyawan wajib menyalakan kamera depan dan mengambil foto selfie setiap kali melakukan presensi masuk (Clock In).
+                      </span>
+                    ) : (
+                      <span className="text-slate-600">
+                        Opsional (Nonaktif): Karyawan dapat langsung melakukan presensi masuk hanya dengan verifikasi lokasi GPS tanpa harus mengambil foto. Opsi selfie tetap disediakan sebagai fitur opsional.
+                      </span>
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              {/* Option 2: Location Requirement (Strict - Cannot be disabled) */}
+              <div className="flex items-start gap-4 p-4 rounded-2xl border border-slate-200 bg-slate-50/50">
+                <div className="p-2.5 rounded-xl bg-emerald-50 text-emerald-600 border border-emerald-200 shrink-0">
+                  <MapPin size={20} />
+                </div>
+                <div className="flex-1">
+                  <div className="flex items-center justify-between">
+                    <span className="font-bold text-sm text-slate-900">
+                      Verifikasi Lokasi GPS (Wajib & Mengikat)
+                    </span>
+                    <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
+                      Selalu Wajib
+                    </span>
+                  </div>
+                  <p className="text-xs text-slate-500 mt-1 leading-relaxed">
+                    Presensi wajib menyertakan koordinat GPS nyata. Jika karyawan memblokir izin lokasi browser atau GPS perangkat nonaktif, tombol presensi otomatis terkunci dan karyawan tidak dapat melakukan clock in/out.
+                  </p>
+                </div>
+              </div>
+            </div>
+
+            <div className="flex justify-end pt-4 border-t border-slate-100">
+              <button
+                type="submit"
+                className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
+              >
+                <Save size={15} />
+                <span>Simpan Pengaturan Presensi</span>
+              </button>
+            </div>
+          </div>
+        </form>
       )}
 
       {/* TAB 3: COMPANY & PURELYMAIL */}

@@ -50,11 +50,11 @@ reportRoutes.get('/attendance-recap', async (c) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(formattedData);
     XLSX.utils.book_append_sheet(wb, ws, `Presensi ${month}`);
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     c.header('Content-Disposition', `attachment; filename="Rekap_Presensi_${month}.xlsx"`);
-    return c.body(buf);
+    return c.body(new Uint8Array(buf));
   }
 
   return c.json({ month, records: data });
@@ -110,11 +110,11 @@ reportRoutes.get('/payroll-recap', requireRole(['owner_admin', 'finance']), asyn
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(formatted);
     XLSX.utils.book_append_sheet(wb, ws, 'Rekap Penggajian');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     c.header('Content-Disposition', `attachment; filename="Rekap_Penggajian.xlsx"`);
-    return c.body(buf);
+    return c.body(new Uint8Array(buf));
   }
 
   return c.json({ records: list });
@@ -154,11 +154,11 @@ reportRoutes.get('/headcount', requireRole(['owner_admin', 'manager', 'finance']
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(formatted);
     XLSX.utils.book_append_sheet(wb, ws, 'Headcount');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     c.header('Content-Disposition', 'attachment; filename="Laporan_Headcount.xlsx"');
-    return c.body(buf);
+    return c.body(new Uint8Array(buf));
   }
 
   return c.json({
@@ -214,11 +214,11 @@ reportRoutes.get('/bpjs-tax-export', requireRole(['owner_admin', 'finance']), as
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(formatted);
     XLSX.utils.book_append_sheet(wb, ws, 'Laporan Pajak & BPJS');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     c.header('Content-Disposition', 'attachment; filename="Export_BPJS_PPh21.xlsx"');
-    return c.body(buf);
+    return c.body(new Uint8Array(buf));
   }
 
   return c.json({ records: list });
@@ -256,11 +256,11 @@ reportRoutes.get('/leave-balances', async (c) => {
     const wb = XLSX.utils.book_new();
     const ws = XLSX.utils.json_to_sheet(formatted);
     XLSX.utils.book_append_sheet(wb, ws, 'Sisa Cuti');
-    const buf = XLSX.write(wb, { type: 'buffer', bookType: 'xlsx' });
+    const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
 
     c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
     c.header('Content-Disposition', 'attachment; filename="Laporan_Sisa_Cuti.xlsx"');
-    return c.body(buf);
+    return c.body(new Uint8Array(buf));
   }
 
   return c.json({ balances: list });

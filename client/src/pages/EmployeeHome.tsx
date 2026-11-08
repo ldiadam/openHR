@@ -4,14 +4,18 @@ import {
   Clock,
   Calendar,
   DollarSign,
-  Send,
   MapPin,
   CheckCircle2,
   AlertTriangle,
-  FileText,
   CreditCard,
   Receipt,
-  Eye,
+  Camera,
+  RefreshCw,
+  History,
+  ShieldCheck,
+  ShieldAlert,
+  ChevronRight,
+  ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import {
@@ -19,8 +23,6 @@ import {
   formatRupiah,
   formatDateIndo,
   saveToOfflineQueue,
-  getOfflineQueue,
-  syncOfflineQueue,
 } from '../api';
 import { CameraModal } from '../components/CameraModal';
 import { PayslipModal } from '../components/PayslipModal';
@@ -35,10 +37,20 @@ export const EmployeeHome: React.FC = () => {
   const [latestPayslip, setLatestPayslip] = useState<any>(null);
   const [selectedPayslip, setSelectedPayslip] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const [submitting, setSubmitting] = useState(false);
   const [clockAction, setClockAction] = useState<'in' | 'out'>('in');
   const [cameraOpen, setCameraOpen] = useState(false);
-  const [locationStatus, setLocationStatus] = useState<string>('Mendeteksi GPS...');
+
+  // GPS & Attendance Policy Settings
   const [coords, setCoords] = useState<{ lat: number; lng: number } | null>(null);
+  const [locationStatus, setLocationStatus] = useState<string>('Mendeteksi GPS...');
+  const [gpsBlocked, setGpsBlocked] = useState(false);
+  const [detectingGps, setDetectingGps] = useState(false);
+  const [attendanceConfig, setAttendanceConfig] = useState<{ require_selfie: boolean; require_location: boolean }>({
+    require_selfie: false,
+    require_location: true,
+  });
+
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
 
   // Clock ticker
@@ -47,11 +59,19 @@ export const EmployeeHome: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
-  // Fetch initial data
+  // Fetch initial data & config
   const loadDashboardData = async () => {
     try {
       const todayStr = new Date().toISOString().split('T')[0];
-      const todayRes = await apiFetch(`/attendance/today?date=${todayStr}`);
+      const [todayRes, balRes, payRes, attConfig] = await Promise.all([
+        apiFetch(`/attendance/today?date=${todayStr}`),
+        apiFetch('/leave/balances'),
+        apiFetch('/payroll/my-payslips'),
+        apiFetch('/settings/attendance').catch(() => ({ require_selfie: false, require_location: true })),
+      ]);
+
+      setAttendanceConfig(attConfig);
+
       const myRecord = (todayRes.records || []).find((r: any) => r.employee_id === user?.employeeId);
       setTodayAttendance(myRecord || null);
 
@@ -62,12 +82,10 @@ export const EmployeeHome: React.FC = () => {
       }
 
       // Leave balance
-      const balRes = await apiFetch('/leave/balances');
       const annual = (balRes.balances || []).find((b: any) => b.leave_type_code === 'annual');
       if (annual) setLeaveBalance(annual.remaining_days);
 
       // Latest payslip
-      const payRes = await apiFetch('/payroll/my-payslips');
       if (payRes.payslips && payRes.payslips.length > 0) {
         setLatestPayslip(payRes.payslips[0]);
       }
@@ -78,55 +96,72 @@ export const EmployeeHome: React.FC = () => {
     }
   };
 
+  const detectLocation = () => {
+    setDetectingGps(true);
+    setGpsBlocked(false);
+    setLocationStatus('Mendeteksi sinyal GPS presisi...');
+
+    if (!('geolocation' in navigator)) {
+      setGpsBlocked(true);
+      setCoords(null);
+      setLocationStatus('Perangkat tidak mendukung GPS');
+      setDetectingGps(false);
+      return;
+    }
+
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
+        setLocationStatus(`GPS Terkunci (Akurasi: ±${Math.round(pos.coords.accuracy)}m)`);
+        setGpsBlocked(false);
+        setDetectingGps(false);
+      },
+      (err) => {
+        console.warn('Geolocation blocked or error:', err.message);
+        // Location is STRICTLY required - do not mock or fallback
+        setCoords(null);
+        setGpsBlocked(true);
+        setLocationStatus('Akses GPS Diblokir / Nonaktif');
+        setDetectingGps(false);
+      },
+      { enableHighAccuracy: true, timeout: 12000, maximumAge: 0 }
+    );
+  };
+
   useEffect(() => {
     loadDashboardData();
     detectLocation();
   }, [user]);
 
-  const detectLocation = () => {
-    if ('geolocation' in navigator) {
-      navigator.geolocation.getCurrentPosition(
-        (pos) => {
-          setCoords({ lat: pos.coords.latitude, lng: pos.coords.longitude });
-          setLocationStatus('GPS Siap (Akurasi: ' + Math.round(pos.coords.accuracy) + 'm)');
-        },
-        (err) => {
-          // Fallback to Jakarta office coordinates if simulator/browser denies
-          console.warn('Geolocation denied or unavailable, using branch default:', err.message);
-          setCoords({ lat: -6.2255, lng: 106.8095 });
-          setLocationStatus('GPS Default Kantor');
-        },
-        { enableHighAccuracy: true, timeout: 10000 }
-      );
-    } else {
-      setCoords({ lat: -6.2255, lng: 106.8095 });
-      setLocationStatus('GPS Default Kantor');
+  // Execute Clock In / Out
+  const executeClock = async (action: 'in' | 'out', photoBase64?: string) => {
+    if (!coords) {
+      setFeedback({
+        type: 'error',
+        message: 'Akses GPS diblokir atau belum aktif. Anda wajib mengizinkan lokasi di browser untuk melakukan presensi.',
+      });
+      detectLocation();
+      return;
     }
-  };
 
-  const handleStartClock = (action: 'in' | 'out') => {
-    setClockAction(action);
-    setCameraOpen(true);
-  };
-
-  const handlePhotoCaptured = async (base64Photo: string) => {
-    const lat = coords?.lat || -6.2255;
-    const lng = coords?.lng || 106.8095;
+    setSubmitting(true);
+    setFeedback(null);
     const nowIso = new Date().toISOString();
 
     if (!navigator.onLine) {
       // Offline mode
       saveToOfflineQueue({
         id: `off-${Date.now()}`,
-        type: clockAction,
-        latitude: lat,
-        longitude: lng,
-        photo_base64: base64Photo,
+        type: action,
+        latitude: coords.lat,
+        longitude: coords.lng,
+        photo_base64: photoBase64,
         device_timestamp: nowIso,
       });
+      setSubmitting(false);
       setFeedback({
         type: 'success',
-        message: `Offline: Presensi ${clockAction === 'in' ? 'Masuk' : 'Pulang'} disimpan di perangkat dan akan disinkron saat online.`,
+        message: `Offline: Presensi ${action === 'in' ? 'Masuk' : 'Pulang'} tersimpan di memori perangkat dan akan disinkron saat internet tersambung.`,
       });
       return;
     }
@@ -135,10 +170,10 @@ export const EmployeeHome: React.FC = () => {
       const res = await apiFetch('/attendance/clock', {
         method: 'POST',
         body: JSON.stringify({
-          type: clockAction,
-          latitude: lat,
-          longitude: lng,
-          photo_base64: base64Photo,
+          type: action,
+          latitude: coords.lat,
+          longitude: coords.lng,
+          photo_base64: photoBase64 || null,
           device_timestamp: nowIso,
         }),
       });
@@ -150,7 +185,27 @@ export const EmployeeHome: React.FC = () => {
       loadDashboardData();
     } catch (err: any) {
       setFeedback({ type: 'error', message: err.message || 'Presensi gagal diproses' });
+    } finally {
+      setSubmitting(false);
     }
+  };
+
+  // Click on Clock In/Out button
+  const handlePrimaryClockClick = () => {
+    if (!coords) {
+      detectLocation();
+      return;
+    }
+
+    if (clockAction === 'in' && attendanceConfig.require_selfie) {
+      setCameraOpen(true);
+    } else {
+      executeClock(clockAction);
+    }
+  };
+
+  const handlePhotoCaptured = async (base64Photo: string) => {
+    await executeClock(clockAction, base64Photo);
   };
 
   const openPayslipDetail = async (payslipId: string) => {
@@ -176,83 +231,163 @@ export const EmployeeHome: React.FC = () => {
   });
 
   return (
-    <div className="max-w-md mx-auto space-y-5">
-      {/* Employee Greeting & Branch Badge */}
-      <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs flex items-center justify-between">
-        <div>
-          <span className="text-[11px] font-semibold text-blue-600 uppercase tracking-wider">
-            Employee Self-Service
-          </span>
-          <h2 className="text-lg font-bold text-slate-900 mt-0.5">{user?.name}</h2>
-          <p className="text-xs text-slate-500">{user?.jobTitle || 'Karyawan'}</p>
+    <div className="max-w-md mx-auto space-y-4">
+      {/* Employee Header & Status Card */}
+      <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs">
+        <div className="flex items-center justify-between">
+          <div>
+            <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
+              Portal Karyawan (ESS)
+            </span>
+            <h2 className="text-base font-bold text-slate-900 mt-0.5">{user?.name}</h2>
+            <p className="text-xs text-slate-500">{user?.jobTitle || 'Staff'}</p>
+          </div>
+          <button
+            type="button"
+            onClick={() => navigate('/app/attendance')}
+            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium transition cursor-pointer"
+          >
+            <History size={13} />
+            <span>Riwayat</span>
+          </button>
         </div>
-        <div className="text-right">
-          <span className="inline-flex items-center gap-1 bg-slate-100 text-slate-700 text-[11px] font-medium px-2.5 py-1 rounded-full border border-slate-200">
-            <MapPin size={12} className="text-blue-600" />
-            <span>{user?.branchName || 'Kantor'}</span>
-          </span>
-          <p className="text-[10px] text-slate-400 mt-1">{locationStatus}</p>
+
+        {/* GPS Verification Badge */}
+        <div className="mt-3 pt-3 border-t border-slate-100 flex items-center justify-between text-xs">
+          <div className="flex items-center gap-1.5">
+            <span
+              className={`w-2 h-2 rounded-full ${
+                coords ? 'bg-emerald-500 ring-2 ring-emerald-200' : 'bg-rose-500 animate-pulse'
+              }`}
+            />
+            <span className={`font-medium ${coords ? 'text-slate-700' : 'text-rose-700'}`}>
+              {locationStatus}
+            </span>
+          </div>
+
+          <button
+            type="button"
+            disabled={detectingGps}
+            onClick={detectLocation}
+            className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
+          >
+            <RefreshCw size={11} className={detectingGps ? 'animate-spin' : ''} />
+            <span>Segarkan</span>
+          </button>
         </div>
       </div>
 
-      {feedback && (
-        <div
-          className={`p-3.5 rounded-2xl text-xs flex items-center gap-2 shadow-xs ${
-            feedback.type === 'success'
-              ? 'bg-emerald-50 text-emerald-800 border border-emerald-200'
-              : 'bg-rose-50 text-rose-800 border border-rose-200'
-          }`}
-        >
-          {feedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
-          <span className="flex-1">{feedback.message}</span>
-          <button onClick={() => setFeedback(null)} className="text-xs font-bold px-1">
-            ✕
+      {/* GPS BLOCKED ALERT BANNER (Strict Requirement) */}
+      {gpsBlocked && (
+        <div className="bg-rose-50 border border-rose-200 rounded-2xl p-4 text-xs text-rose-900 space-y-2">
+          <div className="flex items-start gap-2">
+            <ShieldAlert size={18} className="text-rose-600 shrink-0 mt-0.5" />
+            <div>
+              <p className="font-bold">Akses Lokasi (GPS) Wajib Diaktifkan</p>
+              <p className="text-[11px] text-rose-700 mt-0.5 leading-relaxed">
+                Sistem mendeteksi izin lokasi diblokir atau GPS nonaktif. Sesuai kebijakan perusahaan, presensi tidak dapat dilakukan tanpa koordinat GPS yang valid.
+              </p>
+            </div>
+          </div>
+          <button
+            type="button"
+            onClick={detectLocation}
+            className="w-full py-1.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium text-xs transition cursor-pointer"
+          >
+            Coba Izinkan & Deteksi Lokasi Sekarang
           </button>
         </div>
       )}
 
-      {/* CLOCK IN/OUT BUTTON CARD (Primary Thumb Target) */}
-      <div className="bg-linear-to-br from-blue-600 via-indigo-600 to-blue-800 text-white rounded-3xl p-6 shadow-xl text-center relative overflow-hidden">
-        <div className="relative z-10">
-          <div className="text-4xl font-extrabold tracking-tight font-mono">{timeString}</div>
-          <p className="text-xs text-blue-100 mt-1 font-medium">{dateString}</p>
-
-          <div className="mt-6 flex justify-center">
-            {clockAction === 'in' ? (
-              <button
-                onClick={() => handleStartClock('in')}
-                className="w-44 h-44 rounded-full bg-white text-blue-700 font-extrabold text-lg flex flex-col items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all cursor-pointer border-4 border-blue-200/50"
-              >
-                <Clock size={36} className="text-blue-600 mb-1" />
-                <span>CLOCK IN</span>
-                <span className="text-[11px] font-medium text-slate-500">Presensi Masuk</span>
-              </button>
-            ) : (
-              <button
-                onClick={() => handleStartClock('out')}
-                className="w-44 h-44 rounded-full bg-amber-500 text-white font-extrabold text-lg flex flex-col items-center justify-center shadow-2xl hover:scale-105 active:scale-95 transition-all cursor-pointer border-4 border-amber-300/50"
-              >
-                <Clock size={36} className="text-white mb-1" />
-                <span>CLOCK OUT</span>
-                <span className="text-[11px] font-medium text-amber-100">Presensi Pulang</span>
-              </button>
-            )}
+      {feedback && (
+        <div
+          className={`p-3.5 rounded-xl text-xs flex items-center justify-between border ${
+            feedback.type === 'success'
+              ? 'bg-emerald-50 text-emerald-900 border-emerald-200'
+              : 'bg-rose-50 text-rose-900 border-rose-200'
+          }`}
+        >
+          <div className="flex items-center gap-2">
+            {feedback.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
+            <span className="font-medium">{feedback.message}</span>
           </div>
+          <button onClick={() => setFeedback(null)} className="text-xs underline opacity-80 hover:opacity-100">
+            Tutup
+          </button>
+        </div>
+      )}
 
-          <div className="mt-5 text-xs text-blue-100 flex items-center justify-center gap-4">
-            <div>
-              <span className="opacity-75 block text-[10px]">Presensi Masuk</span>
-              <strong className="text-white font-mono">
-                {todayAttendance?.clock_in_time || '--:--'}
-              </strong>
-            </div>
-            <div className="w-px h-6 bg-blue-400/40" />
-            <div>
-              <span className="opacity-75 block text-[10px]">Presensi Pulang</span>
-              <strong className="text-white font-mono">
-                {todayAttendance?.clock_out_time || '--:--'}
-              </strong>
-            </div>
+      {/* CLOCK IN/OUT CARD (Antislop Design) */}
+      <div className="bg-white rounded-2xl p-6 border border-slate-200 shadow-2xs text-center space-y-5">
+        <div>
+          <div className="text-3xl font-extrabold tracking-tight font-mono text-slate-900">
+            {timeString}
+          </div>
+          <p className="text-xs text-slate-500 mt-1 font-medium">{dateString}</p>
+        </div>
+
+        {/* Primary Action Button */}
+        <div className="space-y-2">
+          <button
+            type="button"
+            disabled={!coords || submitting}
+            onClick={handlePrimaryClockClick}
+            className={`w-full py-3.5 px-6 rounded-xl font-bold text-sm transition cursor-pointer flex items-center justify-center gap-2 shadow-xs disabled:opacity-50 disabled:cursor-not-allowed ${
+              clockAction === 'in'
+                ? 'bg-slate-900 hover:bg-slate-800 text-white'
+                : 'bg-amber-600 hover:bg-amber-700 text-white'
+            }`}
+          >
+            <Clock size={16} />
+            <span>
+              {submitting
+                ? 'Memproses Presensi...'
+                : !coords
+                ? 'GPS Belum Diizinkan (Presensi Dikunci)'
+                : clockAction === 'in'
+                ? attendanceConfig.require_selfie
+                  ? 'Presensi Masuk (Buka Kamera Selfie)'
+                  : 'Presensi Masuk Sekarang'
+                : 'Presensi Pulang'}
+            </span>
+          </button>
+
+          {/* Optional Selfie Button when Admin set it to optional */}
+          {clockAction === 'in' && !attendanceConfig.require_selfie && coords && (
+            <button
+              type="button"
+              disabled={submitting}
+              onClick={() => setCameraOpen(true)}
+              className="w-full py-2 px-3 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition cursor-pointer"
+            >
+              <Camera size={13} className="text-slate-500" />
+              <span>Sertakan Foto Selfie (Opsional)</span>
+            </button>
+          )}
+        </div>
+
+        {/* Policy status notice */}
+        <div className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
+          <ShieldCheck size={13} className="text-slate-400" />
+          <span>
+            Kebijakan: Lokasi GPS Wajib | Foto Selfie{' '}
+            {attendanceConfig.require_selfie ? 'Wajib' : 'Opsional'}
+          </span>
+        </div>
+
+        {/* Today's Log Summary */}
+        <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-xs">
+          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+            <span className="text-[10px] text-slate-500 uppercase block font-medium">Jam Masuk</span>
+            <span className="font-bold text-slate-900 font-mono text-sm">
+              {todayAttendance?.clock_in_time || '--:--'}
+            </span>
+          </div>
+          <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
+            <span className="text-[10px] text-slate-500 uppercase block font-medium">Jam Pulang</span>
+            <span className="font-bold text-slate-900 font-mono text-sm">
+              {todayAttendance?.clock_out_time || '--:--'}
+            </span>
           </div>
         </div>
       </div>
@@ -261,91 +396,72 @@ export const EmployeeHome: React.FC = () => {
       <div className="grid grid-cols-2 gap-3">
         <div
           onClick={() => navigate('/app/requests')}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs cursor-pointer hover:border-blue-400 transition"
+          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs cursor-pointer hover:border-slate-300 transition"
         >
-          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
-            <Calendar size={16} className="text-blue-600" />
-            <span>Sisa Cuti Tahunan</span>
+          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+            <span className="text-[11px] font-medium">Sisa Cuti Tahunan</span>
+            <Calendar size={14} className="text-slate-400" />
           </div>
-          <div className="text-2xl font-black text-slate-900">
+          <div className="text-lg font-bold text-slate-900">
             {leaveBalance} <span className="text-xs font-normal text-slate-500">Hari</span>
           </div>
         </div>
 
         <div
           onClick={() => latestPayslip && openPayslipDetail(latestPayslip.id)}
-          className="bg-white p-4 rounded-2xl border border-slate-200/80 shadow-xs cursor-pointer hover:border-emerald-400 transition"
+          className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs cursor-pointer hover:border-slate-300 transition"
         >
-          <div className="flex items-center gap-2 text-slate-500 text-xs mb-1">
-            <DollarSign size={16} className="text-emerald-600" />
-            <span>Slip Gaji Terakhir</span>
+          <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
+            <span className="text-[11px] font-medium">Slip Gaji Terakhir</span>
+            <DollarSign size={14} className="text-slate-400" />
           </div>
-          <div className="text-base font-bold text-emerald-600 truncate">
+          <div className="text-sm font-bold text-slate-900 truncate">
             {latestPayslip ? formatRupiah(latestPayslip.take_home_pay) : 'Belum Ada'}
           </div>
-          {latestPayslip && (
-            <p className="text-[10px] text-slate-400 truncate">{latestPayslip.period_title}</p>
-          )}
         </div>
       </div>
 
-      {/* FIVE ACTIONS, ONE THUMB: QUICK REQUEST BUTTONS */}
-      <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3">
-        <h3 className="font-bold text-slate-900 text-xs uppercase tracking-wider">
-          Pengajuan Mandiri (Self-Service)
+      {/* QUICK REQUEST SHORTCUTS (Thumb Optimized) */}
+      <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-2.5">
+        <h3 className="font-bold text-slate-900 text-xs tracking-tight">
+          Layanan Mandiri (Self-Service)
         </h3>
 
-        <div className="grid grid-cols-2 gap-2.5">
+        <div className="grid grid-cols-2 gap-2">
           <button
+            type="button"
             onClick={() => navigate('/app/requests?type=leave')}
-            className="flex items-center gap-2.5 p-3 rounded-xl bg-blue-50 text-blue-800 hover:bg-blue-100 text-left transition font-medium text-xs border border-blue-100"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
           >
-            <div className="p-2 rounded-lg bg-blue-600 text-white shrink-0">
-              <Calendar size={16} />
-            </div>
-            <div>
-              <div className="font-bold">Ajukan Cuti / Izin</div>
-              <div className="text-[10px] text-blue-600">Sakit, Tahunan, Izin</div>
-            </div>
+            <Calendar size={15} className="text-blue-600 shrink-0" />
+            <span className="truncate">Cuti & Izin</span>
           </button>
 
           <button
+            type="button"
             onClick={() => navigate('/app/requests?type=overtime')}
-            className="flex items-center gap-2.5 p-3 rounded-xl bg-amber-50 text-amber-900 hover:bg-amber-100 text-left transition font-medium text-xs border border-amber-100"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
           >
-            <div className="p-2 rounded-lg bg-amber-600 text-white shrink-0">
-              <Clock size={16} />
-            </div>
-            <div>
-              <div className="font-bold">Ajukan Lembur</div>
-              <div className="text-[10px] text-amber-700">Hari Kerja & Libur</div>
-            </div>
+            <Clock size={15} className="text-amber-600 shrink-0" />
+            <span className="truncate">Lembur</span>
           </button>
 
           <button
+            type="button"
             onClick={() => navigate('/app/requests?type=kasbon')}
-            className="flex items-center gap-2.5 p-3 rounded-xl bg-purple-50 text-purple-900 hover:bg-purple-100 text-left transition font-medium text-xs border border-purple-100"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
           >
-            <div className="p-2 rounded-lg bg-purple-600 text-white shrink-0">
-              <CreditCard size={16} />
-            </div>
-            <div>
-              <div className="font-bold">Ajukan Kasbon</div>
-              <div className="text-[10px] text-purple-700">Potong Gaji Bulanan</div>
-            </div>
+            <CreditCard size={15} className="text-purple-600 shrink-0" />
+            <span className="truncate">Kasbon</span>
           </button>
 
           <button
+            type="button"
             onClick={() => navigate('/app/requests?type=reimbursement')}
-            className="flex items-center gap-2.5 p-3 rounded-xl bg-emerald-50 text-emerald-900 hover:bg-emerald-100 text-left transition font-medium text-xs border border-emerald-100"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
           >
-            <div className="p-2 rounded-lg bg-emerald-600 text-white shrink-0">
-              <Receipt size={16} />
-            </div>
-            <div>
-              <div className="font-bold">Klaim Biaya</div>
-              <div className="text-[10px] text-emerald-700">Foto Struk / Nota</div>
-            </div>
+            <Receipt size={15} className="text-emerald-600 shrink-0" />
+            <span className="truncate">Klaim Biaya</span>
           </button>
         </div>
       </div>

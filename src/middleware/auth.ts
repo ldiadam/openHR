@@ -103,12 +103,21 @@ export interface AuthContext {
 }
 
 export async function authMiddleware(c: Context<{ Bindings: Bindings; Variables: AuthContext }>, next: Next) {
+  let token: string | undefined;
   const authHeader = c.req.header('Authorization');
-  if (!authHeader || !authHeader.startsWith('Bearer ')) {
+  if (authHeader && authHeader.startsWith('Bearer ')) {
+    token = authHeader.substring(7);
+  } else {
+    const queryToken = c.req.query('token');
+    if (queryToken) {
+      token = queryToken;
+    }
+  }
+
+  if (!token) {
     return c.json({ error: 'Unauthorized: Missing or invalid token' }, 401);
   }
 
-  const token = authHeader.substring(7);
   const secret = c.env.JWT_SECRET || DEFAULT_SECRET;
   const payload = await verifyJwt(token, secret);
 

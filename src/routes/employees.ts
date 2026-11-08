@@ -126,17 +126,22 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json();
   const user = c.get('user');
 
+  const isForeign = body.is_foreign_worker ? 1 : 0;
+  const nationality = body.nationality ? body.nationality.trim() : (isForeign ? 'WNA' : 'Indonesia');
+  const passportNumber = body.passport_number ? body.passport_number.trim() : null;
+  const passportExpiry = body.passport_expiry_date || null;
+  const kitasKitapNumber = body.kitas_kitap_number ? body.kitas_kitap_number.trim() : null;
+  const taxIdType = body.tax_id_type || (isForeign ? (body.npwp_number ? 'NPWP' : 'PASSPORT') : 'NPWP');
+
   // Validate required fields
   const required = [
     'nik',
     'full_name',
-    'ktp_number',
     'date_of_birth',
     'place_of_birth',
     'gender',
     'religion',
     'marital_status',
-    'ptkp_status',
     'address',
     'phone',
     'personal_email',
@@ -152,6 +157,20 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       return c.json({ error: `Field wajib '${field}' belum diisi` }, 400);
     }
   }
+
+  // Identity validation: Foreigner requires passport; Indonesian requires KTP
+  if (isForeign) {
+    if (!passportNumber) {
+      return c.json({ error: 'Nomor Paspor wajib diisi untuk Tenaga Kerja Asing (TKA / Foreign Worker)' }, 400);
+    }
+  } else {
+    if (!body.ktp_number) {
+      return c.json({ error: 'Nomor KTP wajib diisi untuk Tenaga Kerja Indonesia' }, 400);
+    }
+  }
+
+  const ktpToSave = body.ktp_number ? body.ktp_number.trim() : (passportNumber || '');
+  const ptkpStatus = body.ptkp_status || 'TK/0';
 
   // Check NIK uniqueness
   const existing = await c.env.DB.prepare(`SELECT id FROM employees WHERE nik = ?`).bind(body.nik).first();
@@ -203,7 +222,8 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       employment_status, lifecycle_status, join_date, contract_start_date, contract_end_date,
       job_title, shift_pattern_id,
       base_salary, fixed_allowances, fixed_allowances_detail, bank_name, bank_account_number, bank_account_holder,
-      bpjs_kesehatan_number, bpjs_tk_number, bpjs_wage_basis
+      bpjs_kesehatan_number, bpjs_tk_number, bpjs_wage_basis,
+      is_foreign_worker, nationality, passport_number, passport_expiry_date, kitas_kitap_number, tax_id_type
     ) VALUES (
       ?, 'default', ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -211,7 +231,8 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       ?, ?, ?, ?, ?,
       ?, ?,
       ?, ?, ?, ?, ?, ?,
-      ?, ?, ?
+      ?, ?, ?,
+      ?, ?, ?, ?, ?, ?
     )`
   )
     .bind(
@@ -222,14 +243,14 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       body.manager_id || null,
       body.nik.trim(),
       body.full_name.trim(),
-      body.ktp_number.trim(),
+      ktpToSave,
       body.npwp_number || null,
       body.date_of_birth,
       body.place_of_birth,
       body.gender,
       body.religion,
       body.marital_status,
-      body.ptkp_status,
+      ptkpStatus,
       body.address,
       body.phone,
       body.personal_email.toLowerCase().trim(),
@@ -249,7 +270,13 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       body.bank_account_holder || body.full_name,
       body.bpjs_kesehatan_number || null,
       body.bpjs_tk_number || null,
-      body.bpjs_wage_basis || null
+      body.bpjs_wage_basis || null,
+      isForeign,
+      nationality,
+      passportNumber,
+      passportExpiry,
+      kitasKitapNumber,
+      taxIdType
     )
     .run();
 
@@ -384,6 +411,12 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
       bpjs_kesehatan_number = ?,
       bpjs_tk_number = ?,
       bpjs_wage_basis = ?,
+      is_foreign_worker = COALESCE(?, is_foreign_worker),
+      nationality = COALESCE(?, nationality),
+      passport_number = COALESCE(?, passport_number),
+      passport_expiry_date = COALESCE(?, passport_expiry_date),
+      kitas_kitap_number = COALESCE(?, kitas_kitap_number),
+      tax_id_type = COALESCE(?, tax_id_type),
       updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   )
@@ -420,6 +453,12 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
       body.bpjs_kesehatan_number !== undefined ? body.bpjs_kesehatan_number : oldEmp.bpjs_kesehatan_number,
       body.bpjs_tk_number !== undefined ? body.bpjs_tk_number : oldEmp.bpjs_tk_number,
       body.bpjs_wage_basis !== undefined ? body.bpjs_wage_basis : oldEmp.bpjs_wage_basis,
+      body.is_foreign_worker !== undefined ? (body.is_foreign_worker ? 1 : 0) : null,
+      body.nationality !== undefined ? body.nationality : null,
+      body.passport_number !== undefined ? body.passport_number : null,
+      body.passport_expiry_date !== undefined ? body.passport_expiry_date : null,
+      body.kitas_kitap_number !== undefined ? body.kitas_kitap_number : null,
+      body.tax_id_type !== undefined ? body.tax_id_type : null,
       empId
     )
     .run();
@@ -479,8 +518,16 @@ employeeRoutes.post('/bulk-import', requireRole(['owner_admin']), async (c) => {
       errors.push({ row: rowNum, nik: row.nik, error: 'Baris ' + rowNum + ': Nama lengkap wajib diisi' });
       continue;
     }
-    if (!row.ktp_number) {
-      errors.push({ row: rowNum, nik: row.nik, error: 'Baris ' + rowNum + ': Nomor KTP wajib diisi' });
+    const isForeign = row.is_foreign_worker === 1 || row.is_foreign_worker === true || String(row.is_foreign_worker).toLowerCase() === 'wna';
+    const passportNumber = row.passport_number ? String(row.passport_number).trim() : null;
+    const ktpNumber = row.ktp_number ? String(row.ktp_number).trim() : (passportNumber || '');
+
+    if (!isForeign && !ktpNumber) {
+      errors.push({ row: rowNum, nik: row.nik, error: 'Baris ' + rowNum + ': Nomor KTP wajib diisi untuk WNI' });
+      continue;
+    }
+    if (isForeign && !passportNumber && !ktpNumber) {
+      errors.push({ row: rowNum, nik: row.nik, error: 'Baris ' + rowNum + ': Nomor Paspor wajib diisi untuk TKA / WNA' });
       continue;
     }
     if (row.ptkp_status && !validPtkp.has(row.ptkp_status.toUpperCase())) {
@@ -501,12 +548,12 @@ employeeRoutes.post('/bulk-import', requireRole(['owner_admin']), async (c) => {
       id: `emp-bulk-${Date.now()}-${i}`,
       nik: String(row.nik).trim(),
       full_name: String(row.full_name).trim(),
-      ktp_number: String(row.ktp_number).trim(),
+      ktp_number: ktpNumber,
       npwp_number: row.npwp_number ? String(row.npwp_number).trim() : null,
       date_of_birth: row.date_of_birth || '1995-01-01',
-      place_of_birth: row.place_of_birth || 'Indonesia',
+      place_of_birth: row.place_of_birth || (isForeign ? 'Foreign' : 'Indonesia'),
       gender: row.gender?.toLowerCase() === 'female' ? 'female' : 'male',
-      religion: row.religion || 'Islam',
+      religion: row.religion || 'Lainnya',
       marital_status: row.marital_status?.toLowerCase() === 'married' ? 'married' : 'single',
       ptkp_status: ptkp,
       address: row.address || 'Alamat Karyawan',
@@ -525,6 +572,9 @@ employeeRoutes.post('/bulk-import', requireRole(['owner_admin']), async (c) => {
       bank_account_number: row.bank_account_number ? String(row.bank_account_number) : '',
       bank_account_holder: row.bank_account_holder || row.full_name,
       shift_pattern_id: row.shift_pattern_id || 'shift-reg',
+      is_foreign_worker: isForeign ? 1 : 0,
+      nationality: row.nationality || (isForeign ? 'WNA' : 'Indonesia'),
+      passport_number: passportNumber,
     });
   }
 
@@ -540,13 +590,15 @@ employeeRoutes.post('/bulk-import', requireRole(['owner_admin']), async (c) => {
           nik, full_name, ktp_number, npwp_number, date_of_birth, place_of_birth, gender, religion, marital_status, ptkp_status,
           address, phone, personal_email, company_email,
           employment_status, lifecycle_status, join_date, job_title, shift_pattern_id,
-          base_salary, fixed_allowances, bank_name, bank_account_number, bank_account_holder
+          base_salary, fixed_allowances, bank_name, bank_account_number, bank_account_holder,
+          is_foreign_worker, nationality, passport_number
         ) VALUES (
           ?, 'default', 'comp-nusantara', ?, ?,
           ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
           ?, ?, ?, ?,
           ?, ?, ?, ?, ?,
-          ?, ?, ?, ?, ?
+          ?, ?, ?, ?, ?,
+          ?, ?, ?
         )`
       )
         .bind(
@@ -576,7 +628,10 @@ employeeRoutes.post('/bulk-import', requireRole(['owner_admin']), async (c) => {
           emp.fixed_allowances,
           emp.bank_name,
           emp.bank_account_number,
-          emp.bank_account_holder
+          emp.bank_account_holder,
+          emp.is_foreign_worker || 0,
+          emp.nationality || 'Indonesia',
+          emp.passport_number || null
         )
         .run();
 
