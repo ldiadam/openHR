@@ -123,54 +123,18 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
-          {/* Quick Demo Logins for Pair Programming Review */}
-          <div className="mt-8 border-t border-slate-200 pt-5">
-            <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 text-center">
-              {t.auth.quickDemo}
-            </p>
-            <div className="grid grid-cols-2 gap-2 text-xs">
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('budi.santoso@nusantara.id')}
-                className="p-2 border border-purple-200 bg-purple-50 text-purple-900 rounded-lg hover:bg-purple-100 text-left font-medium cursor-pointer"
-              >
-                <div className="font-bold flex items-center gap-1">
-                  <ShieldCheck size={14} /> {t.nav.roleAdmin}
-                </div>
-                <div className="text-[10px] text-purple-700">budi.santoso@</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('siti.rahma@nusantara.id')}
-                className="p-2 border border-blue-200 bg-blue-50 text-blue-900 rounded-lg hover:bg-blue-100 text-left font-medium cursor-pointer"
-              >
-                <div className="font-bold flex items-center gap-1">
-                  <UserCheck size={14} /> {t.nav.roleManager}
-                </div>
-                <div className="text-[10px] text-blue-700">siti.rahma@</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('dewi.lestari@nusantara.id')}
-                className="p-2 border border-emerald-200 bg-emerald-50 text-emerald-900 rounded-lg hover:bg-emerald-100 text-left font-medium cursor-pointer"
-              >
-                <div className="font-bold">💰 {t.nav.roleFinance}</div>
-                <div className="text-[10px] text-emerald-700">dewi.lestari@</div>
-              </button>
-
-              <button
-                type="button"
-                onClick={() => handleQuickLogin('agus.setiawan@nusantara.id')}
-                className="p-2 border border-slate-200 bg-slate-50 text-slate-900 rounded-lg hover:bg-slate-100 text-left font-medium cursor-pointer"
-              >
-                <div className="font-bold">📱 {t.nav.roleEmployee}</div>
-                <div className="text-[10px] text-slate-600">agus.setiawan@</div>
-              </button>
-            </div>
-            <p className="text-[11px] text-slate-400 text-center mt-2">
-              {t.auth.defaultPassword} <code className="bg-slate-100 px-1 py-0.5 rounded">Password123!</code>
+          {/* Quick Admin Login for Fast Access */}
+          <div className="mt-8 border-t border-slate-200 pt-5 text-center">
+            <button
+              type="button"
+              onClick={() => handleQuickLogin('admin@openhr.id')}
+              className="w-full py-2.5 px-4 border border-blue-200 bg-blue-50 text-blue-900 rounded-xl hover:bg-blue-100 font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-2xs"
+            >
+              <ShieldCheck size={16} className="text-blue-600" />
+              <span>Login Admin (1-Click) &bull; <strong className="font-mono">admin@openhr.id</strong></span>
+            </button>
+            <p className="text-[11px] text-slate-400 mt-2">
+              {t.auth.defaultPassword} <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono">Password123!</code>
             </p>
           </div>
         </div>
