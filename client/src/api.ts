@@ -48,10 +48,27 @@ export async function apiFetch<T = any>(
 
   if (response.status === 401) {
     clearToken();
+    let errorMsg = '';
+    try {
+      const data: any = await response.json();
+      errorMsg = data.error;
+    } catch {
+      // ignore
+    }
+
+    // For auth endpoints (login, invite, reset), throw the exact credential error from server
+    if (
+      endpoint.includes('/auth/login') ||
+      endpoint.includes('/auth/accept-invite') ||
+      endpoint.includes('/auth/reset-password')
+    ) {
+      throw new Error(errorMsg || 'Email atau kata sandi tidak sesuai. Silakan periksa kembali.');
+    }
+
     if (window.location.pathname !== '/login') {
       window.location.href = '/login';
     }
-    throw new Error('Sesi Anda telah berakhir. Silakan login kembali.');
+    throw new Error(errorMsg || 'Sesi Anda telah berakhir. Silakan login kembali.');
   }
 
   const contentType = response.headers.get('content-type') || '';
