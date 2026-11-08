@@ -1,0 +1,447 @@
+import React, { useState, useEffect } from 'react';
+import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit } from 'lucide-react';
+import { apiFetch, formatDateIndo } from '../api';
+
+export const HRLeave: React.FC = () => {
+  const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays'>('requests');
+  const [requests, setRequests] = useState<any[]>([]);
+  const [balances, setBalances] = useState<any[]>([]);
+  const [holidays, setHolidays] = useState<any[]>([]);
+  const [loading, setLoading] = useState(true);
+
+  // Modals
+  const [showAdjustModal, setShowAdjustModal] = useState(false);
+  const [selectedBalance, setSelectedBalance] = useState<any>(null);
+  const [adjustDays, setAdjustDays] = useState('1');
+  const [adjustReason, setAdjustReason] = useState('');
+
+  const [showHolidayModal, setShowHolidayModal] = useState(false);
+  const [holidayName, setHolidayName] = useState('');
+  const [holidayDate, setHolidayDate] = useState('');
+  const [holidayType, setHolidayType] = useState('national');
+  const [holidayDeduct, setHolidayDeduct] = useState(false);
+
+  const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
+
+  const loadData = async () => {
+    setLoading(true);
+    try {
+      const [reqRes, holRes, balRes] = await Promise.all([
+        apiFetch('/leave/requests'),
+        apiFetch('/leave/holidays?year=2026'),
+        apiFetch('/reports/leave-balances'),
+      ]);
+      setRequests(reqRes.requests || []);
+      setHolidays(holRes.holidays || []);
+      setBalances(balRes.balances || []);
+    } catch (err: any) {
+      console.warn('Leave err:', err.message);
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  useEffect(() => {
+    loadData();
+  }, []);
+
+  const handleReview = async (id: string, status: 'approved' | 'rejected') => {
+    const note = prompt(`Catatan ${status === 'approved' ? 'persetujuan' : 'penolakan'} (opsional):`);
+    try {
+      const res = await apiFetch(`/leave/requests/${id}/review`, {
+        method: 'POST',
+        body: JSON.stringify({ status, note }),
+      });
+      setMsg({ type: 'success', text: res.message });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleAdjustBalance = async (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!selectedBalance) return;
+    try {
+      const res = await apiFetch('/leave/adjust-balance', {
+        method: 'POST',
+        body: JSON.stringify({
+          employee_id: selectedBalance.nik ? undefined : selectedBalance.employee_id,
+          leave_type_id: 'lt-annual',
+          adjustment_days: parseFloat(adjustDays),
+          reason: adjustReason,
+        }),
+      });
+      setMsg({ type: 'success', text: res.message });
+      setShowAdjustModal(false);
+      setAdjustReason('');
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleAddHoliday = async (e: React.FormEvent) => {
+    e.preventDefault();
+    try {
+      const res = await apiFetch('/leave/holidays', {
+        method: 'POST',
+        body: JSON.stringify({
+          name: holidayName,
+          date: holidayDate,
+          type: holidayType,
+          is_cuti_bersama_deducts_leave: holidayDeduct,
+        }),
+      });
+      setMsg({ type: 'success', text: res.message });
+      setShowHolidayModal(false);
+      setHolidayName('');
+      setHolidayDate('');
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  return (
+    <div className="space-y-6">
+      <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+        <div>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Cuti & Perizinan</h1>
+          <p className="text-xs text-slate-500">
+            Persetujuan cuti/izin, penyesuaian saldo cuti tahunan, dan kalender libur nasional
+          </p>
+        </div>
+
+        {activeTab === 'holidays' && (
+          <button
+            onClick={() => setShowHolidayModal(true)}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+          >
+            <Plus size={16} />
+            <span>Tambah Hari Libur</span>
+          </button>
+        )}
+      </div>
+
+      {msg && (
+        <div
+          className={`p-4 rounded-2xl text-xs flex items-center gap-2 shadow-2xs ${
+            msg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
+          }`}
+        >
+          {msg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertCircle size={16} />}
+          <span className="flex-1 font-medium">{msg.text}</span>
+          <button onClick={() => setMsg(null)}>✕</button>
+        </div>
+      )}
+
+      {/* Tabs */}
+      <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
+        <button
+          onClick={() => setActiveTab('requests')}
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+            activeTab === 'requests' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          <span>Pengajuan Masuk</span>
+          {requests.filter((r) => r.status === 'pending').length > 0 && (
+            <span className="bg-blue-600 text-white text-[10px] px-1.5 py-0.2 rounded-full">
+              {requests.filter((r) => r.status === 'pending').length}
+            </span>
+          )}
+        </button>
+        <button
+          onClick={() => setActiveTab('balances')}
+          className={`pb-3 transition border-b-2 -mb-px ${
+            activeTab === 'balances' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          Saldo Cuti Karyawan
+        </button>
+        <button
+          onClick={() => setActiveTab('holidays')}
+          className={`pb-3 transition border-b-2 -mb-px ${
+            activeTab === 'holidays' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          Kalender Libur & Cuti Bersama 2026
+        </button>
+      </div>
+
+      {/* TAB 1: REQUESTS */}
+      {activeTab === 'requests' && (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-600">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4 font-bold">Karyawan</th>
+                  <th className="py-3 px-4 font-bold">Jenis Cuti</th>
+                  <th className="py-3 px-4 font-bold">Rentang Tanggal</th>
+                  <th className="py-3 px-4 font-bold">Total Hari</th>
+                  <th className="py-3 px-4 font-bold">Alasan</th>
+                  <th className="py-3 px-4 font-bold">Status</th>
+                  <th className="py-3 px-4 font-bold text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {requests.map((r) => (
+                  <tr key={r.id}>
+                    <td className="py-3 px-4 font-bold text-slate-900">{r.full_name}</td>
+                    <td className="py-3 px-4 font-medium text-slate-800">{r.leave_type_name}</td>
+                    <td className="py-3 px-4">
+                      {formatDateIndo(r.start_date)} s/d {formatDateIndo(r.end_date)}
+                    </td>
+                    <td className="py-3 px-4 font-bold">{r.total_days} Hari</td>
+                    <td className="py-3 px-4 italic max-w-xs">{r.reason}</td>
+                    <td className="py-3 px-4">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        r.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : r.status === 'rejected' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
+                      }`}>
+                        {r.status}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4 text-right">
+                      {r.status === 'pending' && (
+                        <div className="flex justify-end gap-1.5">
+                          <button
+                            onClick={() => handleReview(r.id, 'approved')}
+                            className="bg-emerald-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-emerald-700"
+                          >
+                            Setujui
+                          </button>
+                          <button
+                            onClick={() => handleReview(r.id, 'rejected')}
+                            className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-rose-700"
+                          >
+                            Tolak
+                          </button>
+                        </div>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 2: BALANCES */}
+      {activeTab === 'balances' && (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-600">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4 font-bold">Karyawan</th>
+                  <th className="py-3 px-4 font-bold">Departemen</th>
+                  <th className="py-3 px-4 font-bold">Jenis Cuti</th>
+                  <th className="py-3 px-4 font-bold">Hak Cuti</th>
+                  <th className="py-3 px-4 font-bold">Terpakai</th>
+                  <th className="py-3 px-4 font-bold">Sisa Cuti</th>
+                  <th className="py-3 px-4 font-bold text-right">Aksi</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {balances.map((b, i) => (
+                  <tr key={i}>
+                    <td className="py-3 px-4 font-bold text-slate-900">{b.full_name} ({b.nik})</td>
+                    <td className="py-3 px-4">{b.department_name}</td>
+                    <td className="py-3 px-4">{b.leave_type_name}</td>
+                    <td className="py-3 px-4 font-medium">{b.total_entitled} Hari</td>
+                    <td className="py-3 px-4 font-medium text-rose-600">{b.used_days} Hari</td>
+                    <td className="py-3 px-4 font-black text-emerald-600 text-sm">{b.remaining_days} Hari</td>
+                    <td className="py-3 px-4 text-right">
+                      <button
+                        onClick={() => {
+                          setSelectedBalance(b);
+                          setShowAdjustModal(true);
+                        }}
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-bold"
+                      >
+                        <Edit size={14} />
+                        <span>Sesuaikan</span>
+                      </button>
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 3: HOLIDAYS */}
+      {activeTab === 'holidays' && (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-600">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4 font-bold">Tanggal</th>
+                  <th className="py-3 px-4 font-bold">Nama Hari Libur</th>
+                  <th className="py-3 px-4 font-bold">Kategori</th>
+                  <th className="py-3 px-4 font-bold">Potong Cuti Tahunan?</th>
+                </tr>
+              </thead>
+              <tbody className="divide-y divide-slate-100">
+                {holidays.map((h) => (
+                  <tr key={h.id}>
+                    <td className="py-3 px-4 font-bold text-slate-900">{formatDateIndo(h.date)}</td>
+                    <td className="py-3 px-4 font-medium">{h.name}</td>
+                    <td className="py-3 px-4">
+                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
+                        h.type === 'cuti_bersama' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
+                      }`}>
+                        {h.type === 'cuti_bersama' ? 'Cuti Bersama' : 'Libur Nasional'}
+                      </span>
+                    </td>
+                    <td className="py-3 px-4">
+                      {h.is_cuti_bersama_deducts_leave === 1 ? (
+                        <span className="text-rose-600 font-semibold">Ya (Memotong Saldo Cuti)</span>
+                      ) : (
+                        <span className="text-slate-400">Tidak</span>
+                      )}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ADJUST BALANCE MODAL */}
+      {showAdjustModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-slate-900">Penyesuaian Saldo Cuti (HR Adjustment)</h3>
+            <p className="text-xs text-slate-500">
+              Karyawan: <strong>{selectedBalance?.full_name}</strong>
+            </p>
+            <form onSubmit={handleAdjustBalance} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">
+                  Jumlah Hari Penyesuaian (+ untuk tambah, - untuk kurangi)
+                </label>
+                <input
+                  type="number"
+                  step="0.5"
+                  required
+                  value={adjustDays}
+                  onChange={(e) => setAdjustDays(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Alasan Penyesuaian *</label>
+                <textarea
+                  required
+                  rows={3}
+                  value={adjustReason}
+                  onChange={(e) => setAdjustReason(e.target.value)}
+                  placeholder="Kompensasi lembur akhir pekan / penyesuaian carry-over..."
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowAdjustModal(false)}
+                  className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md text-xs hover:bg-blue-700"
+                >
+                  Simpan Penyesuaian
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* ADD HOLIDAY MODAL */}
+      {showHolidayModal && (
+        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+          <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
+            <h3 className="font-bold text-base text-slate-900">Tambah Hari Libur Perusahaan / Nasional</h3>
+            <form onSubmit={handleAddHoliday} className="space-y-3 text-xs">
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Nama Hari Libur *</label>
+                <input
+                  type="text"
+                  required
+                  value={holidayName}
+                  onChange={(e) => setHolidayName(e.target.value)}
+                  placeholder="HUT Perusahaan..."
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Tanggal *</label>
+                <input
+                  type="date"
+                  required
+                  value={holidayDate}
+                  onChange={(e) => setHolidayDate(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-medium mb-1">Jenis Hari Libur</label>
+                <select
+                  value={holidayType}
+                  onChange={(e) => setHolidayType(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                >
+                  <option value="national">Libur Nasional Resmi</option>
+                  <option value="cuti_bersama">Cuti Bersama Pemerintah</option>
+                  <option value="company">Libur Khusus Perusahaan</option>
+                </select>
+              </div>
+
+              <div className="flex items-center gap-2 pt-1">
+                <input
+                  type="checkbox"
+                  id="hDeduct"
+                  checked={holidayDeduct}
+                  onChange={(e) => setHolidayDeduct(e.target.checked)}
+                  className="rounded text-blue-600"
+                />
+                <label htmlFor="hDeduct" className="text-slate-700 font-medium">
+                  Memotong saldo cuti tahunan karyawan
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-2">
+                <button
+                  type="button"
+                  onClick={() => setShowHolidayModal(false)}
+                  className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 text-xs"
+                >
+                  Batal
+                </button>
+                <button
+                  type="submit"
+                  className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md text-xs hover:bg-blue-700"
+                >
+                  Tambah Libur
+                </button>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+};
