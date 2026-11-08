@@ -13,7 +13,7 @@
     {
       "binding": "DB",
       "database_name": "openhr-db",
-      "database_id": "local-openhr-db",
+      "database_id": "30175d18-9552-4e70-8210-bd1f83f4ae14",
       "migrations_dir": "migrations"
     }
   ],
@@ -24,11 +24,11 @@
     }
   ],
   "vars": {
-    "ENVIRONMENT": "development",
+    "ENVIRONMENT": "production",
     "PURELYMAIL_DOMAIN": "company.id",
     "PURELYMAIL_FROM_ADDRESS": "hr@company.id",
     "PURELYMAIL_API_BASE_URL": "https://purelymail.com",
-    "APP_URL": "http://localhost:8787",
-    "JWT_SECRET": "openhr-secret-key-change-in-production-min-32-chars-long"
+    "APP_URL": "https://openhr.madadigital.workers.dev",
+    "JWT_SECRET": "openhr-prod-jwt-secret-key-30175d18-9552-4e70-8210-bd1f83f4ae14-secure"
   }
 }
