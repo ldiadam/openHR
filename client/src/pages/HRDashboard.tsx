@@ -12,6 +12,7 @@ import {
   ArrowRight,
   ShieldCheck,
   CheckCircle,
+  Globe,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -20,7 +21,7 @@ import { apiFetch } from '../api';
 
 export const HRDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { t, formatDate } = useLanguage();
+  const { t, formatDate, language, setLanguage } = useLanguage();
   const { companyName } = useCompany();
   const [todaySummary, setTodaySummary] = useState<any>({ total: 0, present: 0, late: 0, on_leave: 0, absent: 0 });
   const [contractAlerts, setContractAlerts] = useState<any[]>([]);
@@ -91,7 +92,16 @@ export const HRDashboard: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2">
+        <div className="flex flex-wrap items-center gap-2">
+          <button
+            type="button"
+            onClick={() => setLanguage(language === 'id' ? 'en' : 'id')}
+            className="flex items-center gap-1.5 px-3 py-2.5 bg-slate-800/90 hover:bg-slate-700 text-white rounded-xl text-xs font-bold border border-slate-700/80 transition cursor-pointer shadow-xs"
+            title="Ganti Bahasa / Switch Language"
+          >
+            <Globe size={15} className="text-blue-400" />
+            <span>{language === 'id' ? 'English (EN)' : 'Bahasa (ID)'}</span>
+          </button>
           <Link
             to="/employees"
             className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-500 text-white rounded-xl text-xs font-bold shadow-md transition"

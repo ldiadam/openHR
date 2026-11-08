@@ -57,11 +57,6 @@ export const Login: React.FC = () => {
 
   return (
     <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative">
-      {/* Language Switcher in top right */}
-      <div className="absolute top-4 right-4 z-10">
-        <LanguageSwitcher />
-      </div>
-
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white font-black text-2xl flex items-center justify-center mx-auto shadow-xl">
           {initials}
@@ -126,6 +121,12 @@ export const Login: React.FC = () => {
               <span>{loading ? t.auth.loggingIn : t.auth.signIn}</span>
             </button>
           </form>
+
+          {/* Language Switcher at bottom of card */}
+          <div className="mt-5 pt-4 border-t border-slate-100 flex items-center justify-between text-xs text-slate-500">
+            <span>Pilihan Bahasa / Language:</span>
+            <LanguageSwitcher compact />
+          </div>
 
           {/* Quick Demo Access ONLY in local development mode; completely removed in production */}
           {import.meta.env.DEV && (

@@ -16,6 +16,7 @@ import {
   ShieldAlert,
   ChevronRight,
   ArrowRight,
+  Globe,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -30,7 +31,7 @@ import { PayslipModal } from '../components/PayslipModal';
 
 export const EmployeeHome: React.FC = () => {
   const { user } = useAuth();
-  const { t, lang, formatCurrency, formatDate } = useLanguage();
+  const { t, lang, formatCurrency, formatDate, language, setLanguage } = useLanguage();
   const navigate = useNavigate();
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -244,14 +245,25 @@ export const EmployeeHome: React.FC = () => {
             <h2 className="text-base font-bold text-slate-900 mt-0.5">{user?.name}</h2>
             <p className="text-xs text-slate-500">{user?.jobTitle || 'Staff'}</p>
           </div>
-          <button
-            type="button"
-            onClick={() => navigate('/app/attendance')}
-            className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium transition cursor-pointer"
-          >
-            <History size={13} />
-            <span>{t.attendance.historyTitle}</span>
-          </button>
+          <div className="flex items-center gap-1.5">
+            <button
+              type="button"
+              onClick={() => setLanguage(language === 'id' ? 'en' : 'id')}
+              className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-semibold transition cursor-pointer"
+              title="Ganti Bahasa / Switch Language"
+            >
+              <Globe size={13} className="text-blue-600" />
+              <span>{language === 'id' ? 'EN' : 'ID'}</span>
+            </button>
+            <button
+              type="button"
+              onClick={() => navigate('/app/attendance')}
+              className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium transition cursor-pointer"
+            >
+              <History size={13} />
+              <span>{t.attendance.historyTitle}</span>
+            </button>
+          </div>
         </div>
 
         {/* GPS Verification Badge */}

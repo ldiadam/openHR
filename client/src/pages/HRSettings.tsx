@@ -12,6 +12,9 @@ import {
   FileText,
   Clock,
   Camera,
+  Plus,
+  Trash2,
+  Navigation,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useLanguage } from '../context/LanguageContext';
@@ -35,6 +38,20 @@ export const HRSettings: React.FC = () => {
 
   // Edit branch modal state
   const [selectedBranch, setSelectedBranch] = useState<any>(null);
+  const [showAddBranchModal, setShowAddBranchModal] = useState(false);
+  const [creatingBranch, setCreatingBranch] = useState(false);
+  const [deletingBranchId, setDeletingBranchId] = useState<string | null>(null);
+  const [gettingGps, setGettingGps] = useState(false);
+
+  const [newBranch, setNewBranch] = useState({
+    name: '',
+    address: '',
+    latitude: -6.2088,
+    longitude: 106.8456,
+    radius_meters: 100,
+    umk_amount: 5067381,
+    timezone: 'Asia/Jakarta',
+  });
 
   const loadData = async () => {
     setLoading(true);
@@ -125,6 +142,78 @@ export const HRSettings: React.FC = () => {
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
     }
+  };
+
+  const handleCreateBranch = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setCreatingBranch(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch('/settings/branches', {
+        method: 'POST',
+        body: JSON.stringify(newBranch),
+      });
+      setMsg({ type: 'success', text: res.message || 'Cabang baru berhasil ditambahkan' });
+      setShowAddBranchModal(false);
+      setNewBranch({
+        name: '',
+        address: '',
+        latitude: -6.2088,
+        longitude: 106.8456,
+        radius_meters: 100,
+        umk_amount: 5067381,
+        timezone: 'Asia/Jakarta',
+      });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message || 'Gagal menambahkan cabang baru' });
+    } finally {
+      setCreatingBranch(false);
+    }
+  };
+
+  const handleDeleteBranch = async (branchId: string, branchName: string) => {
+    if (!window.confirm(`Apakah Anda yakin ingin menghapus cabang "${branchName}"?`)) {
+      return;
+    }
+    setDeletingBranchId(branchId);
+    setMsg(null);
+    try {
+      const res = await apiFetch(`/settings/branches/${branchId}`, {
+        method: 'DELETE',
+      });
+      setMsg({ type: 'success', text: res.message || `Cabang "${branchName}" berhasil dihapus` });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message || 'Gagal menghapus cabang' });
+    } finally {
+      setDeletingBranchId(null);
+    }
+  };
+
+  const handleGetGps = (target: 'new' | 'edit') => {
+    if (!navigator.geolocation) {
+      alert('Geolokasi tidak didukung oleh peramban Anda.');
+      return;
+    }
+    setGettingGps(true);
+    navigator.geolocation.getCurrentPosition(
+      (pos) => {
+        const lat = parseFloat(pos.coords.latitude.toFixed(6));
+        const lng = parseFloat(pos.coords.longitude.toFixed(6));
+        if (target === 'new') {
+          setNewBranch((prev) => ({ ...prev, latitude: lat, longitude: lng }));
+        } else if (selectedBranch) {
+          setSelectedBranch((prev: any) => ({ ...prev, latitude: lat, longitude: lng }));
+        }
+        setGettingGps(false);
+      },
+      (err) => {
+        alert(`Gagal mengambil koordinat GPS: ${err.message}`);
+        setGettingGps(false);
+      },
+      { enableHighAccuracy: true, timeout: 10000 }
+    );
   };
 
   return (
@@ -472,31 +561,65 @@ export const HRSettings: React.FC = () => {
         </form>
       )}
 
-      {/* TAB 2: BRANCHES & GEOFENCE */}
+      {/* TAB 2: BRANCHES & GEOFENCE (FULL CRUD) */}
       {activeTab === 'branches' && (
         <div className="space-y-4">
+          <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-2xs flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3">
+            <div>
+              <h3 className="font-extrabold text-slate-900 text-sm">Kelola Kantor Cabang & Geofence</h3>
+              <p className="text-xs text-slate-400">
+                Atur titik koordinat GPS presensi, radius validasi geofence, dan standar UMK/UMP per cabang.
+              </p>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowAddBranchModal(true)}
+              className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer shrink-0"
+            >
+              <Plus size={15} />
+              <span>Tambah Cabang Baru</span>
+            </button>
+          </div>
+
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             {branches.map((b) => (
               <div key={b.id} className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-2xs space-y-3">
                 <div className="flex items-center justify-between">
                   <div className="flex items-center gap-2">
-                    <MapPin size={18} className="text-blue-600" />
-                    <h3 className="font-extrabold text-slate-900 text-sm">{b.name}</h3>
+                    <MapPin size={18} className="text-blue-600 shrink-0" />
+                    <div>
+                      <h3 className="font-extrabold text-slate-900 text-sm">{b.name}</h3>
+                      <span className="text-[10px] bg-slate-100 text-slate-600 px-2 py-0.5 rounded-full font-mono font-semibold">
+                        {b.timezone || 'Asia/Jakarta'}
+                      </span>
+                    </div>
                   </div>
-                  <button
-                    onClick={() => setSelectedBranch(b)}
-                    className="text-xs text-blue-600 font-bold hover:underline"
-                  >
-                    Ubah Geofence
-                  </button>
+                  <div className="flex items-center gap-1">
+                    <button
+                      onClick={() => setSelectedBranch({ ...b })}
+                      className="px-2.5 py-1 text-xs text-blue-600 font-bold hover:bg-blue-50 rounded-lg transition flex items-center gap-1 cursor-pointer"
+                    >
+                      <Edit2 size={13} />
+                      <span>Ubah</span>
+                    </button>
+                    <button
+                      onClick={() => handleDeleteBranch(b.id, b.name)}
+                      disabled={deletingBranchId === b.id}
+                      className="px-2 py-1 text-xs text-rose-600 font-bold hover:bg-rose-50 rounded-lg transition flex items-center gap-1 cursor-pointer disabled:opacity-40"
+                    >
+                      <Trash2 size={13} />
+                      <span>{deletingBranchId === b.id ? '...' : 'Hapus'}</span>
+                    </button>
+                  </div>
                 </div>
-                <p className="text-xs text-slate-500">{b.address || 'Alamat Cabang'}</p>
+                <p className="text-xs text-slate-500">{b.address || 'Alamat Cabang belum diatur'}</p>
 
                 <div className="bg-slate-50 p-3 rounded-2xl grid grid-cols-3 gap-2 text-xs">
                   <div>
                     <span className="text-slate-400 block text-[10px]">Koordinat GPS</span>
-                    <span className="font-mono font-bold text-slate-800 text-[11px]">
-                      {b.latitude.toFixed(4)}, {b.longitude.toFixed(4)}
+                    <span className="font-mono font-bold text-slate-800 text-[11px] block truncate">
+                      {typeof b.latitude === 'number' ? b.latitude.toFixed(4) : b.latitude},{' '}
+                      {typeof b.longitude === 'number' ? b.longitude.toFixed(4) : b.longitude}
                     </span>
                   </div>
                   <div>
@@ -504,7 +627,7 @@ export const HRSettings: React.FC = () => {
                     <span className="font-bold text-slate-800">{b.radius_meters} Meter</span>
                   </div>
                   <div>
-                    <span className="text-slate-400 block text-[10px]">UMK / UMP Wilayah</span>
+                    <span className="text-slate-400 block text-[10px]">UMK Wilayah</span>
                     <span className="font-bold text-slate-800">{formatCurrency(b.umk_amount)}</span>
                   </div>
                 </div>
@@ -512,80 +635,272 @@ export const HRSettings: React.FC = () => {
             ))}
           </div>
 
-          {/* EDIT BRANCH MODAL */}
-          {selectedBranch && (
-            <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
-              <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
-                <h3 className="font-bold text-base text-slate-900">Ubah Lokasi & Geofence Cabang</h3>
-                <form onSubmit={handleUpdateBranch} className="space-y-3 text-xs">
+          {/* CREATE BRANCH MODAL */}
+          {showAddBranchModal && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-base text-slate-900">Tambah Cabang Baru</h3>
+                  <button
+                    onClick={() => setShowAddBranchModal(false)}
+                    className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleCreateBranch} className="space-y-3 text-xs">
                   <div>
-                    <label className="block text-slate-700 font-medium mb-1">Nama Cabang</label>
+                    <label className="block text-slate-700 font-semibold mb-1">Nama Cabang *</label>
                     <input
                       type="text"
                       required
-                      value={selectedBranch.name}
-                      onChange={(e) => setSelectedBranch({ ...selectedBranch, name: e.target.value })}
-                      className="w-full p-2 border border-slate-300 rounded-xl"
-                    />
-                  </div>
-                  <div className="grid grid-cols-2 gap-2">
-                    <div>
-                      <label className="block text-slate-700 font-medium mb-1">Latitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        required
-                        value={selectedBranch.latitude}
-                        onChange={(e) => setSelectedBranch({ ...selectedBranch, latitude: e.target.value })}
-                        className="w-full p-2 border border-slate-300 rounded-xl font-mono"
-                      />
-                    </div>
-                    <div>
-                      <label className="block text-slate-700 font-medium mb-1">Longitude</label>
-                      <input
-                        type="number"
-                        step="0.0001"
-                        required
-                        value={selectedBranch.longitude}
-                        onChange={(e) => setSelectedBranch({ ...selectedBranch, longitude: e.target.value })}
-                        className="w-full p-2 border border-slate-300 rounded-xl font-mono"
-                      />
-                    </div>
-                  </div>
-                  <div>
-                    <label className="block text-slate-700 font-medium mb-1">Radius Presensi Valid (Meter)</label>
-                    <input
-                      type="number"
-                      required
-                      value={selectedBranch.radius_meters}
-                      onChange={(e) => setSelectedBranch({ ...selectedBranch, radius_meters: e.target.value })}
-                      className="w-full p-2 border border-slate-300 rounded-xl font-bold"
-                    />
-                  </div>
-                  <div>
-                    <label className="block text-slate-700 font-medium mb-1">Standar UMK / UMP (Rp)</label>
-                    <input
-                      type="number"
-                      required
-                      value={selectedBranch.umk_amount}
-                      onChange={(e) => setSelectedBranch({ ...selectedBranch, umk_amount: e.target.value })}
-                      className="w-full p-2 border border-slate-300 rounded-xl font-bold"
+                      placeholder="Contoh: Kantor Cabang Bandung"
+                      value={newBranch.name}
+                      onChange={(e) => setNewBranch({ ...newBranch, name: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl"
                     />
                   </div>
 
-                  <div className="flex justify-end gap-2 pt-2">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Alamat Lengkap</label>
+                    <input
+                      type="text"
+                      placeholder="Contoh: Jl. Dago Atas No. 88, Bandung"
+                      value={newBranch.address}
+                      onChange={(e) => setNewBranch({ ...newBranch, address: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800 text-[11px]">Koordinat Titik Presensi</span>
+                      <button
+                        type="button"
+                        onClick={() => handleGetGps('new')}
+                        disabled={gettingGps}
+                        className="flex items-center gap-1 text-[11px] text-blue-600 font-bold hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        <Navigation size={12} />
+                        <span>{gettingGps ? 'Mendeteksi...' : 'Ambil Lokasi Saat Ini (GPS)'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-slate-600 text-[10px] mb-0.5">Latitude</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          value={newBranch.latitude}
+                          onChange={(e) => setNewBranch({ ...newBranch, latitude: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-600 text-[10px] mb-0.5">Longitude</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          value={newBranch.longitude}
+                          onChange={(e) => setNewBranch({ ...newBranch, longitude: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Radius Geofence (Meter)</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="5000"
+                        required
+                        value={newBranch.radius_meters}
+                        onChange={(e) => setNewBranch({ ...newBranch, radius_meters: parseInt(e.target.value, 10) || 100 })}
+                        className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Zona Waktu (Timezone)</label>
+                      <select
+                        value={newBranch.timezone}
+                        onChange={(e) => setNewBranch({ ...newBranch, timezone: e.target.value })}
+                        className="w-full p-2.5 border border-slate-300 rounded-xl"
+                      >
+                        <option value="Asia/Jakarta">WIB (Asia/Jakarta)</option>
+                        <option value="Asia/Makassar">WITA (Asia/Makassar)</option>
+                        <option value="Asia/Jayapura">WIT (Asia/Jayapura)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Standar UMK / UMP Wilayah (Rp)</label>
+                    <input
+                      type="number"
+                      step="50000"
+                      required
+                      value={newBranch.umk_amount}
+                      onChange={(e) => setNewBranch({ ...newBranch, umk_amount: parseFloat(e.target.value) || 0 })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                     <button
                       type="button"
-                      onClick={() => setSelectedBranch(null)}
-                      className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100"
+                      onClick={() => setShowAddBranchModal(false)}
+                      className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 cursor-pointer"
                     >
                       Batal
                     </button>
                     <button
                       type="submit"
-                      className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700"
+                      disabled={creatingBranch}
+                      className="px-5 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 cursor-pointer disabled:opacity-50"
                     >
-                      Simpan Cabang
+                      {creatingBranch ? 'Menyimpan...' : 'Simpan Cabang Baru'}
+                    </button>
+                  </div>
+                </form>
+              </div>
+            </div>
+          )}
+
+          {/* EDIT BRANCH MODAL */}
+          {selectedBranch && (
+            <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4">
+              <div className="bg-white rounded-3xl max-w-md w-full p-6 shadow-2xl space-y-4">
+                <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+                  <h3 className="font-bold text-base text-slate-900">Ubah Lokasi & Geofence Cabang</h3>
+                  <button
+                    onClick={() => setSelectedBranch(null)}
+                    className="text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+                  >
+                    ✕
+                  </button>
+                </div>
+
+                <form onSubmit={handleUpdateBranch} className="space-y-3 text-xs">
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Nama Cabang</label>
+                    <input
+                      type="text"
+                      required
+                      value={selectedBranch.name}
+                      onChange={(e) => setSelectedBranch({ ...selectedBranch, name: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Alamat Lengkap</label>
+                    <input
+                      type="text"
+                      value={selectedBranch.address || ''}
+                      onChange={(e) => setSelectedBranch({ ...selectedBranch, address: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl"
+                    />
+                  </div>
+
+                  <div className="bg-slate-50 p-3 rounded-2xl border border-slate-200 space-y-2">
+                    <div className="flex items-center justify-between">
+                      <span className="font-bold text-slate-800 text-[11px]">Koordinat Titik Presensi</span>
+                      <button
+                        type="button"
+                        onClick={() => handleGetGps('edit')}
+                        disabled={gettingGps}
+                        className="flex items-center gap-1 text-[11px] text-blue-600 font-bold hover:underline cursor-pointer disabled:opacity-50"
+                      >
+                        <Navigation size={12} />
+                        <span>{gettingGps ? 'Mendeteksi...' : 'Ambil Lokasi Saat Ini (GPS)'}</span>
+                      </button>
+                    </div>
+
+                    <div className="grid grid-cols-2 gap-2">
+                      <div>
+                        <label className="block text-slate-600 text-[10px] mb-0.5">Latitude</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          value={selectedBranch.latitude}
+                          onChange={(e) => setSelectedBranch({ ...selectedBranch, latitude: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                        />
+                      </div>
+                      <div>
+                        <label className="block text-slate-600 text-[10px] mb-0.5">Longitude</label>
+                        <input
+                          type="number"
+                          step="0.000001"
+                          required
+                          value={selectedBranch.longitude}
+                          onChange={(e) => setSelectedBranch({ ...selectedBranch, longitude: parseFloat(e.target.value) || 0 })}
+                          className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                        />
+                      </div>
+                    </div>
+                  </div>
+
+                  <div className="grid grid-cols-2 gap-2">
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Radius Geofence (Meter)</label>
+                      <input
+                        type="number"
+                        min="10"
+                        max="5000"
+                        required
+                        value={selectedBranch.radius_meters}
+                        onChange={(e) => setSelectedBranch({ ...selectedBranch, radius_meters: parseInt(e.target.value, 10) || 100 })}
+                        className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                      />
+                    </div>
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">Zona Waktu</label>
+                      <select
+                        value={selectedBranch.timezone || 'Asia/Jakarta'}
+                        onChange={(e) => setSelectedBranch({ ...selectedBranch, timezone: e.target.value })}
+                        className="w-full p-2.5 border border-slate-300 rounded-xl"
+                      >
+                        <option value="Asia/Jakarta">WIB (Asia/Jakarta)</option>
+                        <option value="Asia/Makassar">WITA (Asia/Makassar)</option>
+                        <option value="Asia/Jayapura">WIT (Asia/Jayapura)</option>
+                      </select>
+                    </div>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">Standar UMK / UMP Wilayah (Rp)</label>
+                    <input
+                      type="number"
+                      step="50000"
+                      required
+                      value={selectedBranch.umk_amount}
+                      onChange={(e) => setSelectedBranch({ ...selectedBranch, umk_amount: parseFloat(e.target.value) || 0 })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                    />
+                  </div>
+
+                  <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                    <button
+                      type="button"
+                      onClick={() => setSelectedBranch(null)}
+                      className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 cursor-pointer"
+                    >
+                      Batal
+                    </button>
+                    <button
+                      type="submit"
+                      className="px-5 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700 cursor-pointer"
+                    >
+                      Simpan Perubahan
                     </button>
                   </div>
                 </form>

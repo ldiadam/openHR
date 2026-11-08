@@ -110,6 +110,27 @@ settingsRoutes.put('/branches/:id', requireRole(['owner_admin']), async (c) => {
   return c.json({ message: 'Cabang berhasil diperbarui' });
 });
 
+settingsRoutes.delete('/branches/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+
+  // Prevent deleting the last remaining branch
+  const countRes = await c.env.DB.prepare(`SELECT COUNT(*) as total FROM branches`).first<any>();
+  if ((countRes?.total || 0) <= 1) {
+    return c.json({ error: 'Tidak dapat menghapus cabang terakhir. Sistem memerlukan minimal satu cabang aktif.' }, 400);
+  }
+
+  // Check if any employees are assigned to this branch
+  const empCount = await c.env.DB.prepare(`SELECT COUNT(*) as count FROM employees WHERE branch_id = ?`).bind(id).first<any>();
+  if (empCount && empCount.count > 0) {
+    return c.json({
+      error: `Cabang tidak dapat dihapus karena masih digunakan oleh ${empCount.count} karyawan. Pindahkan karyawan ke cabang lain terlebih dahulu.`,
+    }, 400);
+  }
+
+  await c.env.DB.prepare(`DELETE FROM branches WHERE id = ?`).bind(id).run();
+  return c.json({ message: 'Cabang berhasil dihapus' });
+});
+
 // 3. Departments
 settingsRoutes.get('/departments', async (c) => {
   const rows = await c.env.DB.prepare(`SELECT * FROM departments ORDER BY name ASC`).all<any>();

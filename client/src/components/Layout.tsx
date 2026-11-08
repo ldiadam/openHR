@@ -137,7 +137,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
                 <p className="text-[10px] text-slate-400 truncate">{isCustomCompany ? (legalName !== companyName ? legalName : 'HR & Payroll') : 'SME HR & Payroll'}</p>
               </div>
             </div>
-            <LanguageSwitcher />
           </div>
 
           {/* User info */}
@@ -194,7 +193,6 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         </div>
 
         <div className="flex items-center gap-2">
-          <LanguageSwitcher compact />
           {!isEmployee && (
             <button
               onClick={() => setMobileMenuOpen(!mobileMenuOpen)}
