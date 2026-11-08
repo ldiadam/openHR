@@ -69,6 +69,10 @@ export const HREmployees: React.FC = () => {
     bpjs_kesehatan_number: '',
     bpjs_tk_number: '',
     bpjs_wage_basis: '',
+    has_bpjs_tk: false,
+    has_bpjs_kes: true,
+    pays_own_tax: false,
+    tax_scheme: 'company_withheld',
     // Foreign Worker Fields
     is_foreign_worker: false,
     nationality: 'Indonesia',
@@ -521,11 +525,27 @@ export const HREmployees: React.FC = () => {
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase">{t.employees.bpjsKes}</span>
-                <span className="font-semibold text-slate-800">{selectedEmp.bpjs_kesehatan_number || '-'}</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedEmp.has_bpjs_kes === 0
+                    ? 'Tidak Ikut BPJS Kes'
+                    : selectedEmp.bpjs_kesehatan_number || 'Terdaftar'}
+                </span>
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase">{t.employees.bpjsTk}</span>
-                <span className="font-semibold text-slate-800">{selectedEmp.bpjs_tk_number || '-'}</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedEmp.has_bpjs_tk === 0 || !selectedEmp.has_bpjs_tk
+                    ? 'Tidak Ikut BPJS TK (Opsional)'
+                    : selectedEmp.bpjs_tk_number || 'Terdaftar'}
+                </span>
+              </div>
+              <div>
+                <span className="text-slate-400 block text-[10px] uppercase">Skema PPh 21</span>
+                <span className="font-semibold text-slate-800">
+                  {selectedEmp.pays_own_tax || selectedEmp.tax_scheme === 'self_paid'
+                    ? 'Pajak Disetor Sendiri (Mandiri)'
+                    : 'Dipotong Perusahaan (TER)'}
+                </span>
               </div>
               {selectedEmp.base_salary !== undefined && (
                 <>
@@ -813,6 +833,105 @@ export const HREmployees: React.FC = () => {
                     onChange={(e) => setFormData({ ...formData, phone: e.target.value })}
                     className="w-full p-2.5 border border-slate-300 rounded-xl"
                   />
+                </div>
+              </div>
+
+              {/* BPJS & TAX CONFIGURATION (OPTIONAL BPJS TK & SELF TAX) */}
+              <div className="bg-slate-50 border border-slate-200 p-4 rounded-2xl space-y-4 text-xs">
+                <div className="font-bold text-slate-900 border-b border-slate-200 pb-2 flex items-center justify-between">
+                  <span>Kebijakan BPJS & Pajak Karyawan</span>
+                  <span className="text-[11px] text-slate-500 font-normal">Dapat disesuaikan per karyawan</span>
+                </div>
+
+                {/* 1. BPJS Ketenagakerjaan (Optional) */}
+                <div className="space-y-2">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="hasBpjsTkCheck"
+                      checked={formData.has_bpjs_tk}
+                      onChange={(e) => setFormData({ ...formData, has_bpjs_tk: e.target.checked })}
+                      className="rounded text-blue-600 cursor-pointer"
+                    />
+                    <label htmlFor="hasBpjsTkCheck" className="text-slate-800 font-bold cursor-pointer">
+                      Ikut Program BPJS Ketenagakerjaan (JHT, JP, JKK, JKM)
+                    </label>
+                    <span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-medium">Opsional</span>
+                  </div>
+                  {formData.has_bpjs_tk ? (
+                    <div className="pl-6">
+                      <label className="block text-slate-600 text-[11px] mb-1">Nomor KPJ BPJS Ketenagakerjaan (Opsional)</label>
+                      <input
+                        type="text"
+                        value={formData.bpjs_tk_number}
+                        onChange={(e) => setFormData({ ...formData, bpjs_tk_number: e.target.value })}
+                        placeholder="Contoh: 12345678901 (11 Digit)"
+                        className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                      />
+                    </div>
+                  ) : (
+                    <p className="pl-6 text-[11px] text-slate-500 italic">
+                      Karyawan tidak memiliki BPJS Ketenagakerjaan. Iuran JHT, JP, JKK, & JKM tidak akan dipotong atau dibebankan.
+                    </p>
+                  )}
+                </div>
+
+                {/* 2. BPJS Kesehatan (Optional) */}
+                <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                  <div className="flex items-center gap-2">
+                    <input
+                      type="checkbox"
+                      id="hasBpjsKesCheck"
+                      checked={formData.has_bpjs_kes}
+                      onChange={(e) => setFormData({ ...formData, has_bpjs_kes: e.target.checked })}
+                      className="rounded text-blue-600 cursor-pointer"
+                    />
+                    <label htmlFor="hasBpjsKesCheck" className="text-slate-800 font-bold cursor-pointer">
+                      Ikut Program BPJS Kesehatan
+                    </label>
+                    <span className="bg-slate-200 text-slate-600 text-[10px] px-2 py-0.5 rounded-full font-medium">Opsional</span>
+                  </div>
+                  {formData.has_bpjs_kes && (
+                    <div className="pl-6">
+                      <label className="block text-slate-600 text-[11px] mb-1">Nomor Kartu BPJS Kesehatan (Opsional)</label>
+                      <input
+                        type="text"
+                        value={formData.bpjs_kesehatan_number}
+                        onChange={(e) => setFormData({ ...formData, bpjs_kesehatan_number: e.target.value })}
+                        placeholder="Contoh: 0001234567890 (13 Digit)"
+                        className="w-full p-2 border border-slate-300 rounded-lg bg-white font-mono"
+                      />
+                    </div>
+                  )}
+                </div>
+
+                {/* 3. Tax Scheme / Employee Pays Own Tax */}
+                <div className="space-y-2 pt-2 border-t border-slate-200/60">
+                  <label className="block text-slate-800 font-bold">Skema Pembayaran PPh 21 (Pajak Penghasilan)</label>
+                  <select
+                    value={formData.tax_scheme}
+                    onChange={(e) => {
+                      const scheme = e.target.value;
+                      setFormData({
+                        ...formData,
+                        tax_scheme: scheme,
+                        pays_own_tax: scheme === 'self_paid',
+                      });
+                    }}
+                    className="w-full p-2.5 border border-slate-300 rounded-xl bg-white font-semibold text-slate-800"
+                  >
+                    <option value="company_withheld">Dipotong oleh Perusahaan via Slip Gaji (Standar TER / DJP)</option>
+                    <option value="self_paid">Karyawan Bayar Pajak Sendiri (PPh 21 Mandiri - Tanpa Potongan Slip Gaji)</option>
+                  </select>
+                  {formData.tax_scheme === 'self_paid' ? (
+                    <p className="text-[11px] text-amber-700 bg-amber-50 p-2 rounded-lg border border-amber-200">
+                      PPh 21 tidak akan dipotong dari gaji take home pay karyawan. Karyawan menyetor pajaknya secara mandiri.
+                    </p>
+                  ) : (
+                    <p className="text-[11px] text-slate-500">
+                      PPh 21 dihitung otomatis menggunakan formula TER berdasarkan penghasilan bruto bulanan & status PTKP.
+                    </p>
+                  )}
                 </div>
               </div>
 

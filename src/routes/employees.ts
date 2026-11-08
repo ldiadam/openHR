@@ -223,7 +223,8 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       job_title, shift_pattern_id,
       base_salary, fixed_allowances, fixed_allowances_detail, bank_name, bank_account_number, bank_account_holder,
       bpjs_kesehatan_number, bpjs_tk_number, bpjs_wage_basis,
-      is_foreign_worker, nationality, passport_number, passport_expiry_date, kitas_kitap_number, tax_id_type
+      is_foreign_worker, nationality, passport_number, passport_expiry_date, kitas_kitap_number, tax_id_type,
+      has_bpjs_tk, has_bpjs_kes, pays_own_tax, tax_scheme
     ) VALUES (
       ?, 'default', ?, ?, ?, ?,
       ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
@@ -232,7 +233,8 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       ?, ?,
       ?, ?, ?, ?, ?, ?,
       ?, ?, ?,
-      ?, ?, ?, ?, ?, ?
+      ?, ?, ?, ?, ?, ?,
+      ?, ?, ?, ?
     )`
   )
     .bind(
@@ -276,7 +278,11 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
       passportNumber,
       passportExpiry,
       kitasKitapNumber,
-      taxIdType
+      taxIdType,
+      body.has_bpjs_tk !== undefined ? (body.has_bpjs_tk ? 1 : 0) : 1,
+      body.has_bpjs_kes !== undefined ? (body.has_bpjs_kes ? 1 : 0) : 1,
+      body.pays_own_tax !== undefined ? (body.pays_own_tax ? 1 : 0) : 0,
+      body.tax_scheme || 'company_withheld'
     )
     .run();
 
@@ -417,6 +423,10 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
       passport_expiry_date = COALESCE(?, passport_expiry_date),
       kitas_kitap_number = COALESCE(?, kitas_kitap_number),
       tax_id_type = COALESCE(?, tax_id_type),
+      has_bpjs_tk = COALESCE(?, has_bpjs_tk),
+      has_bpjs_kes = COALESCE(?, has_bpjs_kes),
+      pays_own_tax = COALESCE(?, pays_own_tax),
+      tax_scheme = COALESCE(?, tax_scheme),
       updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   )
@@ -459,6 +469,10 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
       body.passport_expiry_date !== undefined ? body.passport_expiry_date : null,
       body.kitas_kitap_number !== undefined ? body.kitas_kitap_number : null,
       body.tax_id_type !== undefined ? body.tax_id_type : null,
+      body.has_bpjs_tk !== undefined ? (body.has_bpjs_tk ? 1 : 0) : null,
+      body.has_bpjs_kes !== undefined ? (body.has_bpjs_kes ? 1 : 0) : null,
+      body.pays_own_tax !== undefined ? (body.pays_own_tax ? 1 : 0) : null,
+      body.tax_scheme !== undefined ? body.tax_scheme : null,
       empId
     )
     .run();

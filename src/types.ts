@@ -112,4 +112,8 @@ export interface EmployeeModel {
   passport_expiry_date?: string | null;
   kitas_kitap_number?: string | null;
   tax_id_type?: string | null;
+  has_bpjs_tk?: number;
+  has_bpjs_kes?: number;
+  pays_own_tax?: number;
+  tax_scheme?: string;
 }

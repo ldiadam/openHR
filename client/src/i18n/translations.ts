@@ -54,7 +54,7 @@ export const translations = {
 
     // Auth / Login
     auth: {
-      signIn: 'Masuk ke openHR',
+      signIn: 'Masuk ke Portal',
       tagline: 'Sistem HR & Penggajian Lengkap UKM Indonesia',
       email: 'Email',
       password: 'Kata Sandi',
@@ -67,7 +67,7 @@ export const translations = {
 
     // Dashboard
     dashboard: {
-      badge: 'openHR Portal Manajemen',
+      badge: 'Portal Manajemen HR',
       companyDefault: 'PT Nusantara Digital Kreasi',
       welcome: 'Selamat Datang',
       subtitle: 'Ringkasan operasional HR, presensi real-time, dan persetujuan hari ini.',
@@ -406,7 +406,7 @@ export const translations = {
 
     // Auth / Login
     auth: {
-      signIn: 'Sign in to openHR',
+      signIn: 'Sign in to Portal',
       tagline: 'Complete HR & Payroll System for Indonesian SMEs',
       email: 'Email',
       password: 'Password',
@@ -419,7 +419,7 @@ export const translations = {
 
     // Dashboard
     dashboard: {
-      badge: 'openHR Management Portal',
+      badge: 'HR Management Portal',
       companyDefault: 'PT Nusantara Digital Kreasi',
       welcome: 'Welcome',
       subtitle: 'Overview of HR operations, real-time attendance, and pending approvals today.',

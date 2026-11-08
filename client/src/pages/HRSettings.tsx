@@ -15,9 +15,11 @@ import {
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
 
 export const HRSettings: React.FC = () => {
   const { t, formatCurrency, formatDate } = useLanguage();
+  const { refreshCompany, updateCompanyLocal } = useCompany();
   const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'audit'>('payroll');
   const [payrollSettings, setPayrollSettings] = useState<any>(null);
   const [attendancePolicy, setAttendancePolicy] = useState<{ require_selfie: boolean; require_location: boolean }>({
@@ -28,6 +30,7 @@ export const HRSettings: React.FC = () => {
   const [company, setCompany] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
+  const [savingCompany, setSavingCompany] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Edit branch modal state
@@ -86,6 +89,25 @@ export const HRSettings: React.FC = () => {
       loadData();
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleSaveCompany = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingCompany(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch('/settings/company', {
+        method: 'PUT',
+        body: JSON.stringify(company),
+      });
+      updateCompanyLocal(company);
+      await refreshCompany();
+      setMsg({ type: 'success', text: res.message || 'Profil perusahaan & branding berhasil disimpan!' });
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message || 'Gagal menyimpan profil perusahaan' });
+    } finally {
+      setSavingCompany(false);
     }
   };
 
@@ -655,31 +677,129 @@ export const HRSettings: React.FC = () => {
 
       {/* TAB 3: COMPANY & PURELYMAIL */}
       {activeTab === 'company' && company && (
-        <div className="space-y-4">
+        <form onSubmit={handleSaveCompany} className="space-y-4">
           <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-4">
-            <h3 className="font-bold text-sm text-slate-900 border-b border-slate-100 pb-3">
-              Identitas Badan Usaha
-            </h3>
+            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+              <div>
+                <h3 className="font-bold text-sm text-slate-900">Identitas & Branding Badan Usaha</h3>
+                <p className="text-xs text-slate-400">
+                  Nama perusahaan di bawah ini akan menggantikan branding openHR pada seluruh antarmuka aplikasi.
+                </p>
+              </div>
+              <button
+                type="submit"
+                disabled={savingCompany}
+                className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
+              >
+                <Save size={14} />
+                <span>{savingCompany ? 'Menyimpan...' : 'Simpan Profil Perusahaan'}</span>
+              </button>
+            </div>
+
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Nama Perusahaan</span>
-                <span className="font-bold text-slate-900 text-sm">{company.name}</span>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Nama Brand Perusahaan (Tampil di Aplikasi / Navbar / Login) *
+                </label>
+                <input
+                  type="text"
+                  required
+                  value={company.name || ''}
+                  onChange={(e) => setCompany({ ...company, name: e.target.value })}
+                  placeholder="Contoh: PT Maju Jaya Sentosa"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-bold text-slate-900"
+                />
               </div>
+
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">NPWP Perusahaan</span>
-                <span className="font-mono font-bold text-slate-800">{company.npwp}</span>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Nama Legal Badan Usaha (PT / CV / Firma)
+                </label>
+                <input
+                  type="text"
+                  value={company.legal_name || ''}
+                  onChange={(e) => setCompany({ ...company, legal_name: e.target.value })}
+                  placeholder="Contoh: PT Maju Jaya Sentosa Tbk"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
               </div>
+
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Kode BPJS Kesehatan</span>
-                <span className="font-mono font-bold text-slate-800">{company.bpjs_kesehatan_code}</span>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  NPWP Perusahaan (16 Digit)
+                </label>
+                <input
+                  type="text"
+                  value={company.npwp || ''}
+                  onChange={(e) => setCompany({ ...company, npwp: e.target.value })}
+                  placeholder="01.234.567.8-012.000"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
+                />
               </div>
+
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Kode BPJS Ketenagakerjaan</span>
-                <span className="font-mono font-bold text-slate-800">{company.bpjs_tk_code}</span>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Email Resmi Perusahaan
+                </label>
+                <input
+                  type="email"
+                  value={company.email || ''}
+                  onChange={(e) => setCompany({ ...company, email: e.target.value })}
+                  placeholder="hr@perusahaan.co.id"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
               </div>
-              <div className="md:col-span-2">
-                <span className="text-slate-400 block text-[10px] uppercase">Alamat Kantor Pusat</span>
-                <span className="font-medium text-slate-800">{company.address}</span>
+
+              <div>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Kode Badan Usaha BPJS Kesehatan
+                </label>
+                <input
+                  type="text"
+                  value={company.bpjs_kesehatan_code || ''}
+                  onChange={(e) => setCompany({ ...company, bpjs_kesehatan_code: e.target.value })}
+                  placeholder="00012345"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Kode Pendaftaran BPJS Ketenagakerjaan
+                </label>
+                <input
+                  type="text"
+                  value={company.bpjs_tk_code || ''}
+                  onChange={(e) => setCompany({ ...company, bpjs_tk_code: e.target.value })}
+                  placeholder="99887766"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Nomor Telepon Kantor
+                </label>
+                <input
+                  type="text"
+                  value={company.phone || ''}
+                  onChange={(e) => setCompany({ ...company, phone: e.target.value })}
+                  placeholder="+62 21 555 1234"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-600 block text-xs font-semibold mb-1">
+                  Alamat Kantor Pusat
+                </label>
+                <input
+                  type="text"
+                  value={company.address || ''}
+                  onChange={(e) => setCompany({ ...company, address: e.target.value })}
+                  placeholder="Jl. Jend. Sudirman Kav. 52, Jakarta"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
               </div>
             </div>
           </div>
@@ -691,7 +811,7 @@ export const HRSettings: React.FC = () => {
               <span>Integrasi Onboarding Purelymail API v0 & SMTP</span>
             </div>
             <p className="text-xs text-blue-800 leading-relaxed">
-              openHR terintegrasi langsung dengan API resmi Purelymail untuk membuat akun kotak surat (mailbox) karyawan secara otomatis, dan mengirimkan email undangan aktivasi melalui Purelymail SMTP (<code>smtp.purelymail.com:587</code>).
+              Sistem HR terintegrasi langsung dengan API resmi Purelymail untuk membuat akun kotak surat (mailbox) karyawan secara otomatis, dan mengirimkan email undangan aktivasi melalui Purelymail SMTP (<code>smtp.purelymail.com:587</code>).
             </p>
             <div className="bg-white p-4 rounded-2xl border border-blue-200 text-xs font-mono text-slate-700 space-y-1">
               <div>API Endpoint: <code>POST https://purelymail.com/api/v0/createUser</code></div>
@@ -700,7 +820,7 @@ export const HRSettings: React.FC = () => {
               <div>Cloudflare Secret: <code>wrangler secret put PURELYMAIL_SMTP_PASS</code></div>
             </div>
           </div>
-        </div>
+        </form>
       )}
 
       {/* TAB 4: AUDIT LOGS */}

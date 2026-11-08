@@ -20,12 +20,14 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
 import { LanguageSwitcher } from './LanguageSwitcher';
 import { getOfflineQueue, syncOfflineQueue } from '../api';
 
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, isOwnerAdmin, isManager, isFinance, isEmployee } = useAuth();
   const { t } = useLanguage();
+  const { companyName, isCustomCompany, initials, legalName } = useCompany();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -126,13 +128,13 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       {!isEmployee && (
         <aside className="hidden md:flex flex-col w-64 bg-slate-900 text-slate-100 shrink-0 border-r border-slate-800">
           <div className="p-5 border-b border-slate-800 flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white text-sm shadow">
-                HR
+            <div className="flex items-center gap-3 overflow-hidden">
+              <div className="w-8 h-8 rounded-lg bg-blue-600 flex items-center justify-center font-bold text-white text-xs shadow shrink-0">
+                {initials}
               </div>
-              <div>
-                <h1 className="font-bold text-sm tracking-tight text-white">openHR</h1>
-                <p className="text-[10px] text-slate-400">SME HR & Payroll</p>
+              <div className="overflow-hidden">
+                <h1 className="font-bold text-sm tracking-tight text-white truncate">{companyName}</h1>
+                <p className="text-[10px] text-slate-400 truncate">{isCustomCompany ? (legalName !== companyName ? legalName : 'HR & Payroll') : 'SME HR & Payroll'}</p>
               </div>
             </div>
             <LanguageSwitcher />
@@ -182,12 +184,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
       {/* Mobile Top Header */}
       <header className="md:hidden bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between sticky top-0 z-40">
-        <div className="flex items-center gap-2">
-          <div className="w-7 h-7 rounded bg-slate-900 text-white font-bold flex items-center justify-center text-xs shadow">
-            HR
+        <div className="flex items-center gap-2 overflow-hidden">
+          <div className="w-7 h-7 rounded bg-slate-900 text-white font-bold flex items-center justify-center text-[10px] shadow shrink-0">
+            {initials}
           </div>
-          <div>
-            <span className="font-bold text-xs text-slate-900">openHR</span>
+          <div className="overflow-hidden">
+            <span className="font-bold text-xs text-slate-900 truncate block">{companyName}</span>
           </div>
         </div>
 
@@ -217,11 +219,11 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
         <div className="md:hidden fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-xs flex">
           <div className="w-72 bg-slate-900 text-slate-100 h-full flex flex-col p-4 shadow-2xl">
             <div className="flex items-center justify-between pb-4 border-b border-slate-800">
-              <div className="flex items-center gap-2">
-                <div className="w-7 h-7 rounded bg-blue-600 text-white font-bold flex items-center justify-center text-xs">
-                  HR
+              <div className="flex items-center gap-2 overflow-hidden">
+                <div className="w-7 h-7 rounded bg-blue-600 text-white font-bold flex items-center justify-center text-[10px] shrink-0">
+                  {initials}
                 </div>
-                <span className="font-bold text-white text-sm">openHR</span>
+                <span className="font-bold text-white text-sm truncate">{companyName}</span>
               </div>
               <button onClick={() => setMobileMenuOpen(false)} className="text-slate-400">
                 <X size={18} />

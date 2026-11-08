@@ -2,6 +2,7 @@ import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider, useLanguage } from './context/LanguageContext';
+import { CompanyProvider } from './context/CompanyContext';
 import { Layout } from './components/Layout';
 import { Login } from './pages/Login';
 import { ResetPassword } from './pages/ResetPassword';
@@ -56,9 +57,10 @@ const RootRedirect: React.FC = () => {
 export const App: React.FC = () => {
   return (
     <LanguageProvider>
-      <AuthProvider>
-        <BrowserRouter>
-          <Routes>
+      <CompanyProvider>
+        <AuthProvider>
+          <BrowserRouter>
+            <Routes>
           {/* Public Authentication */}
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
@@ -187,6 +189,7 @@ export const App: React.FC = () => {
         </Routes>
       </BrowserRouter>
     </AuthProvider>
+    </CompanyProvider>
   </LanguageProvider>
   );
 };

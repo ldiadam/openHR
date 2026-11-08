@@ -84,7 +84,7 @@ export const ResetPassword: React.FC = () => {
         </h2>
         <p className="text-xs text-slate-400 mt-1">
           {token
-            ? 'Masukkan kata sandi baru untuk akun openHR Anda'
+            ? 'Masukkan kata sandi baru untuk akun portal Anda'
             : 'Masukkan email akun Anda untuk menerima instruksi reset'}
         </p>
       </div>

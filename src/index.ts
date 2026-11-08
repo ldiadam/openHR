@@ -33,6 +33,18 @@ app.get('/api/health', (c) => {
   });
 });
 
+// Public Company Profile endpoint (for branding on login & unauthenticated views)
+app.get('/api/public/company', async (c) => {
+  try {
+    const comp = await c.env.DB.prepare(
+      `SELECT name, legal_name, logo_url, address, phone, email FROM companies LIMIT 1`
+    ).first<any>();
+    return c.json({ company: comp || null });
+  } catch (err: any) {
+    return c.json({ company: null });
+  }
+});
+
 // Mount Routes
 app.route('/api/auth', authRoutes);
 app.route('/api/employees', employeeRoutes);

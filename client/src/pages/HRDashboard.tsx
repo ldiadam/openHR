@@ -15,11 +15,13 @@ import {
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
 import { apiFetch } from '../api';
 
 export const HRDashboard: React.FC = () => {
   const { user } = useAuth();
   const { t, formatDate } = useLanguage();
+  const { companyName } = useCompany();
   const [todaySummary, setTodaySummary] = useState<any>({ total: 0, present: 0, late: 0, on_leave: 0, absent: 0 });
   const [contractAlerts, setContractAlerts] = useState<any[]>([]);
   const [pendingCounts, setPendingCounts] = useState({
@@ -79,7 +81,7 @@ export const HRDashboard: React.FC = () => {
             <span className="bg-blue-600/60 text-blue-200 text-xs px-2.5 py-0.5 rounded-full font-semibold border border-blue-400/30">
               {t.dashboard.badge}
             </span>
-            <span className="text-xs text-slate-300">{t.dashboard.companyDefault}</span>
+            <span className="text-xs text-slate-300 font-semibold">{companyName}</span>
           </div>
           <h1 className="text-2xl md:text-3xl font-extrabold tracking-tight">
             {t.dashboard.welcome}, {user?.name}

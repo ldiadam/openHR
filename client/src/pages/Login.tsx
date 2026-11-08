@@ -3,11 +3,13 @@ import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, AlertCircle, ShieldCheck, UserCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
 import { LanguageSwitcher } from '../components/LanguageSwitcher';
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
   const { t } = useLanguage();
+  const { companyName, isCustomCompany, initials, legalName } = useCompany();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -62,11 +64,13 @@ export const Login: React.FC = () => {
 
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white font-black text-2xl flex items-center justify-center mx-auto shadow-xl">
-          HR
+          {initials}
         </div>
-        <h2 className="mt-4 text-3xl font-extrabold text-white tracking-tight">openHR</h2>
+        <h2 className="mt-4 text-3xl font-extrabold text-white tracking-tight">
+          {companyName}
+        </h2>
         <p className="mt-1 text-sm text-slate-400">
-          {t.auth.tagline}
+          {isCustomCompany ? (legalName !== companyName ? legalName : t.auth.tagline) : t.auth.tagline}
         </p>
       </div>
 
@@ -123,20 +127,19 @@ export const Login: React.FC = () => {
             </button>
           </form>
 
-          {/* Quick Admin Login for Fast Access */}
-          <div className="mt-8 border-t border-slate-200 pt-5 text-center">
-            <button
-              type="button"
-              onClick={() => handleQuickLogin('admin@openhr.id')}
-              className="w-full py-2.5 px-4 border border-blue-200 bg-blue-50 text-blue-900 rounded-xl hover:bg-blue-100 font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-2xs"
-            >
-              <ShieldCheck size={16} className="text-blue-600" />
-              <span>Login Admin (1-Click) &bull; <strong className="font-mono">admin@openhr.id</strong></span>
-            </button>
-            <p className="text-[11px] text-slate-400 mt-2">
-              {t.auth.defaultPassword} <code className="bg-slate-100 px-1.5 py-0.5 rounded font-mono">Password123!</code>
-            </p>
-          </div>
+          {/* Quick Demo Access ONLY in local development mode; completely removed in production */}
+          {import.meta.env.DEV && (
+            <div className="mt-8 border-t border-slate-200 pt-5 text-center">
+              <button
+                type="button"
+                onClick={() => handleQuickLogin('admin@openhr.id')}
+                className="w-full py-2.5 px-4 border border-blue-200 bg-blue-50 text-blue-900 rounded-xl hover:bg-blue-100 font-semibold text-xs flex items-center justify-center gap-2 cursor-pointer transition shadow-2xs"
+              >
+                <ShieldCheck size={16} className="text-blue-600" />
+                <span>Dev Login &bull; <strong className="font-mono">admin@openhr.id</strong></span>
+              </button>
+            </div>
+          )}
         </div>
       </div>
     </div>

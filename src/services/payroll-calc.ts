@@ -112,7 +112,13 @@ export interface EmployeePayrollInput {
   // Join / Leave in month
   is_new_joiner_mid_month?: boolean;
   is_leaver_mid_month?: boolean;
-  
+
+  // BPJS & Tax Preferences
+  has_bpjs_tk?: boolean | number;
+  has_bpjs_kes?: boolean | number;
+  pays_own_tax?: boolean | number;
+  tax_scheme?: string;
+
   // December / Final recalculation
   is_december_recalc?: boolean;
   prior_months_gross?: number;
@@ -233,29 +239,38 @@ export function calculateEmployeePayroll(
     ? input.bpjs_wage_basis
     : input.base_salary + input.fixed_allowances;
 
-  // BPJS Kesehatan (Cap Rp 12M)
+  // BPJS Kesehatan (Cap Rp 12M) - Optional per employee
+  const hasBpjsKes = input.has_bpjs_kes !== false && input.has_bpjs_kes !== 0;
   const bpjsKesBase = Math.min(bpjsWageBase, settings.bpjs_kesehatan_wage_cap || 12000000);
-  const bpjsKesEmployee = Math.round(bpjsKesBase * settings.bpjs_kesehatan_employee_rate);
-  const bpjsKesEmployer = Math.round(bpjsKesBase * settings.bpjs_kesehatan_employer_rate);
+  const bpjsKesEmployee = hasBpjsKes ? Math.round(bpjsKesBase * settings.bpjs_kesehatan_employee_rate) : 0;
+  const bpjsKesEmployer = hasBpjsKes ? Math.round(bpjsKesBase * settings.bpjs_kesehatan_employer_rate) : 0;
+
+  // BPJS TK (JHT, JP, JKK, JKM) - Optional per employee
+  const hasBpjsTk = input.has_bpjs_tk !== false && input.has_bpjs_tk !== 0;
 
   // BPJS TK - JHT (No wage cap)
-  const bpjsJhtEmployee = Math.round(bpjsWageBase * settings.bpjs_tk_jht_employee_rate);
-  const bpjsJhtEmployer = Math.round(bpjsWageBase * settings.bpjs_tk_jht_employer_rate);
+  const bpjsJhtEmployee = hasBpjsTk ? Math.round(bpjsWageBase * settings.bpjs_tk_jht_employee_rate) : 0;
+  const bpjsJhtEmployer = hasBpjsTk ? Math.round(bpjsWageBase * settings.bpjs_tk_jht_employer_rate) : 0;
 
   // BPJS TK - JP (Cap Rp 10,042,300)
   const bpjsJpBase = Math.min(bpjsWageBase, settings.bpjs_tk_jp_wage_cap || 10042300);
-  const bpjsJpEmployee = Math.round(bpjsJpBase * settings.bpjs_tk_jp_employee_rate);
-  const bpjsJpEmployer = Math.round(bpjsJpBase * settings.bpjs_tk_jp_employer_rate);
+  const bpjsJpEmployee = hasBpjsTk ? Math.round(bpjsJpBase * settings.bpjs_tk_jp_employee_rate) : 0;
+  const bpjsJpEmployer = hasBpjsTk ? Math.round(bpjsJpBase * settings.bpjs_tk_jp_employer_rate) : 0;
 
   // BPJS TK - JKK & JKM (Employer only)
-  const bpjsJkkEmployer = Math.round(bpjsWageBase * settings.bpjs_tk_jkk_rate);
-  const bpjsJkmEmployer = Math.round(bpjsWageBase * settings.bpjs_tk_jkm_rate);
+  const bpjsJkkEmployer = hasBpjsTk ? Math.round(bpjsWageBase * settings.bpjs_tk_jkk_rate) : 0;
+  const bpjsJkmEmployer = hasBpjsTk ? Math.round(bpjsWageBase * settings.bpjs_tk_jkm_rate) : 0;
 
-  // PPh 21 Calculation
+  // PPh 21 Calculation (Supports Employee Paying Tax on Their Own)
   let pph21Amount = 0;
   let pph21Method = 'TER';
 
-  if (input.is_december_recalc) {
+  const paysOwnTax = input.pays_own_tax === true || input.pays_own_tax === 1 || input.tax_scheme === 'self_paid';
+
+  if (paysOwnTax) {
+    pph21Amount = 0;
+    pph21Method = 'Pajak Mandiri (Disetor Sendiri oleh Karyawan)';
+  } else if (input.is_december_recalc) {
     pph21Method = 'PASAL_17_DECEMBER';
     const totalAnnualGross = (input.prior_months_gross || 0) + grossEarnings;
     const biayaJabatan = Math.min(totalAnnualGross * 0.05, 6000000);
