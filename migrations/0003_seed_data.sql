@@ -65,7 +65,7 @@ INSERT OR REPLACE INTO holidays (id, tenant_id, name, date, type, branch_id, yea
 
 -- 7. Seed 5 Employees
 -- Password for all seed users is: Password123!
--- SHA-256 hash: 785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480
+-- SHA-256 hash: a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea
 
 -- Employee 1: Budi Santoso (Owner / Admin HR)
 INSERT OR REPLACE INTO employees (
@@ -87,7 +87,7 @@ INSERT OR REPLACE INTO employees (
 INSERT OR REPLACE INTO users (
     id, tenant_id, email, password_hash, role, employee_id, is_active
 ) VALUES (
-    'usr-001', 'default', 'budi.santoso@nusantara.id', '785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480', 'owner_admin', 'emp-001', 1
+    'usr-001', 'default', 'budi.santoso@nusantara.id', 'a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea', 'owner_admin', 'emp-001', 1
 );
 
 -- Employee 2: Siti Rahmawati (Manager)
@@ -110,7 +110,7 @@ INSERT OR REPLACE INTO employees (
 INSERT OR REPLACE INTO users (
     id, tenant_id, email, password_hash, role, employee_id, is_active
 ) VALUES (
-    'usr-002', 'default', 'siti.rahma@nusantara.id', '785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480', 'manager', 'emp-002', 1
+    'usr-002', 'default', 'siti.rahma@nusantara.id', 'a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea', 'manager', 'emp-002', 1
 );
 
 -- Employee 3: Dewi Lestari (Finance)
@@ -133,7 +133,7 @@ INSERT OR REPLACE INTO employees (
 INSERT OR REPLACE INTO users (
     id, tenant_id, email, password_hash, role, employee_id, is_active
 ) VALUES (
-    'usr-003', 'default', 'dewi.lestari@nusantara.id', '785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480', 'finance', 'emp-003', 1
+    'usr-003', 'default', 'dewi.lestari@nusantara.id', 'a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea', 'finance', 'emp-003', 1
 );
 
 -- Employee 4: Agus Setiawan (Employee - Senior Software Engineer, K/2)
@@ -156,7 +156,7 @@ INSERT OR REPLACE INTO employees (
 INSERT OR REPLACE INTO users (
     id, tenant_id, email, password_hash, role, employee_id, is_active
 ) VALUES (
-    'usr-004', 'default', 'agus.setiawan@nusantara.id', '785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480', 'employee', 'emp-004', 1
+    'usr-004', 'default', 'agus.setiawan@nusantara.id', 'a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea', 'employee', 'emp-004', 1
 );
 
 -- Employee 5: Rina Wijaya (Employee - Operations Bandung, TK/0, PKWT with expiry alert test)
@@ -179,7 +179,7 @@ INSERT OR REPLACE INTO employees (
 INSERT OR REPLACE INTO users (
     id, tenant_id, email, password_hash, role, employee_id, is_active
 ) VALUES (
-    'usr-005', 'default', 'rina.wijaya@nusantara.id', '785b376b32fed585a9df6f152d0b57112c3fbe567a1098deccbdf8be94f48480', 'employee', 'emp-005', 1
+    'usr-005', 'default', 'rina.wijaya@nusantara.id', 'a109e36947ad56de1dca1cc49f0ef8ac9ad9a7b1aa0df41fb3c4cb73c1ff01ea', 'employee', 'emp-005', 1
 );
 
 -- Seed Leave Balances for all 5 employees
