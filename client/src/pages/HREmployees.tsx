@@ -464,19 +464,23 @@ export const HREmployees: React.FC = () => {
 
       {/* DETAIL MODAL */}
       {selectedEmp && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-xl w-full p-6 shadow-2xl space-y-4 my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-xl w-full shadow-2xl flex flex-col max-h-[90vh] overflow-hidden">
+            <div className="flex items-center justify-between p-5 pb-4 border-b border-slate-200 shrink-0">
               <div>
                 <h3 className="font-bold text-base text-slate-900">{selectedEmp.full_name}</h3>
                 <p className="text-xs text-slate-500">NIK: {selectedEmp.nik} • {selectedEmp.job_title}</p>
               </div>
-              <button onClick={() => setSelectedEmp(null)} className="p-1 text-slate-400 hover:text-slate-700 font-bold">
+              <button
+                onClick={() => setSelectedEmp(null)}
+                className="p-1 text-slate-400 hover:text-slate-700 font-bold cursor-pointer"
+              >
                 ✕
               </button>
             </div>
 
-            <div className="grid grid-cols-2 gap-3 text-xs">
+            <div className="overflow-y-auto p-5 space-y-4 flex-1">
+              <div className="grid grid-cols-2 gap-3 text-xs">
               <div>
                 <span className="text-slate-400 block text-[10px] uppercase">Kewarganegaraan</span>
                 <span className="font-semibold text-slate-800">
@@ -563,12 +567,14 @@ export const HREmployees: React.FC = () => {
                   </div>
                 </>
               )}
+              </div>
             </div>
 
-            <div className="flex justify-end pt-4 border-t border-slate-100">
+            <div className="flex justify-end p-4 border-t border-slate-200 bg-slate-50/80 rounded-b-3xl shrink-0">
               <button
+                type="button"
                 onClick={() => setSelectedEmp(null)}
-                className="px-4 py-2 bg-slate-900 text-white rounded-xl text-xs font-bold"
+                className="px-5 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold cursor-pointer transition shadow-xs"
               >
                 Tutup
               </button>
@@ -579,17 +585,22 @@ export const HREmployees: React.FC = () => {
 
       {/* ADD EMPLOYEE MODAL */}
       {showAddModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4 overflow-y-auto">
-          <div className="bg-white rounded-3xl max-w-2xl w-full p-6 shadow-2xl space-y-4 my-8">
-            <div className="flex items-center justify-between pb-3 border-b border-slate-200">
+        <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-3 sm:p-4">
+          <div className="bg-white rounded-3xl max-w-2xl w-full shadow-2xl flex flex-col max-h-[92vh] overflow-hidden">
+            <div className="flex items-center justify-between p-5 pb-4 border-b border-slate-200 shrink-0">
               <h3 className="font-bold text-base text-slate-900">Formulir Pendaftaran Karyawan Baru</h3>
-              <button onClick={() => setShowAddModal(false)} className="text-slate-400 hover:text-slate-700 font-bold">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="text-slate-400 hover:text-slate-700 font-bold p-1 cursor-pointer"
+              >
                 ✕
               </button>
             </div>
 
-            <form onSubmit={handleCreateEmployee} className="space-y-4 text-xs">
-              {/* Kewarganegaraan: WNI vs WNA (Foreign Worker) */}
+            <form onSubmit={handleCreateEmployee} className="flex flex-col flex-1 overflow-hidden">
+              <div className="overflow-y-auto p-5 sm:p-6 space-y-4 text-xs flex-1">
+                {/* Kewarganegaraan: WNI vs WNA (Foreign Worker) */}
               <div className="bg-slate-50 p-3 rounded-xl border border-slate-200">
                 <span className="block font-semibold text-slate-700 mb-1.5">Status Kewarganegaraan:</span>
                 <div className="flex items-center gap-6">
@@ -965,26 +976,27 @@ export const HREmployees: React.FC = () => {
                   </div>
                 )}
               </div>
+            </div>
 
-              <div className="flex justify-end gap-2 pt-2 border-t border-slate-100">
-                <button
-                  type="button"
-                  onClick={() => setShowAddModal(false)}
-                  className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100"
-                >
-                  Batal
-                </button>
-                <button
-                  type="submit"
-                  className="px-5 py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-md hover:bg-blue-700"
-                >
-                  Daftarkan Karyawan & Kirim Undangan
-                </button>
-              </div>
-            </form>
-          </div>
+            <div className="flex justify-end gap-2 p-4 border-t border-slate-200 bg-slate-50/80 rounded-b-3xl shrink-0">
+              <button
+                type="button"
+                onClick={() => setShowAddModal(false)}
+                className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-200 cursor-pointer"
+              >
+                Batal
+              </button>
+              <button
+                type="submit"
+                className="px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white font-bold rounded-xl shadow-md cursor-pointer transition"
+              >
+                Daftarkan Karyawan & Kirim Undangan
+              </button>
+            </div>
+          </form>
         </div>
-      )}
+      </div>
+    )}
 
       {/* BULK IMPORT MODAL */}
       {showImportModal && (

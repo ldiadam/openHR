@@ -14,6 +14,7 @@ import {
   Camera,
   Plus,
   Trash2,
+  Edit2,
   Navigation,
 } from 'lucide-react';
 import { apiFetch } from '../api';
