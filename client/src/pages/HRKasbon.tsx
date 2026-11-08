@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { CreditCard, Receipt, CheckCircle2, XCircle, AlertCircle, Eye } from 'lucide-react';
-import { apiFetch, formatRupiah, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRKasbon: React.FC = () => {
+  const { t, formatDate, formatCurrency } = useLanguage();
   const [activeTab, setActiveTab] = useState<'kasbon' | 'reimbursements'>('kasbon');
   const [kasbonList, setKasbonList] = useState<any[]>([]);
   const [reimbursements, setReimbursements] = useState<any[]>([]);
@@ -61,9 +63,9 @@ export const HRKasbon: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">Kasbon & Reimbursement</h1>
+        <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.kasbon.title}</h1>
         <p className="text-xs text-slate-500">
-          Kelola pinjaman karyawan (otomatis potong gaji) dan klaim pengeluaran operasional
+          {t.kasbon.subtitle}
         </p>
       </div>
 
@@ -83,11 +85,11 @@ export const HRKasbon: React.FC = () => {
       <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
         <button
           onClick={() => setActiveTab('kasbon')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'kasbon' ? 'border-purple-600 text-purple-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          <span>Pengajuan Kasbon (Pinjaman)</span>
+          <span>{t.dashboard.kasbonRequests}</span>
           {kasbonList.filter((k) => k.status === 'pending').length > 0 && (
             <span className="bg-purple-600 text-white text-[10px] px-1.5 py-0.2 rounded-full">
               {kasbonList.filter((k) => k.status === 'pending').length}
@@ -96,11 +98,11 @@ export const HRKasbon: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('reimbursements')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'reimbursements' ? 'border-emerald-600 text-emerald-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          <span>Klaim Biaya (Reimbursement)</span>
+          <span>{t.dashboard.reimbursements}</span>
           {reimbursements.filter((r) => r.status === 'pending').length > 0 && (
             <span className="bg-emerald-600 text-white text-[10px] px-1.5 py-0.2 rounded-full">
               {reimbursements.filter((r) => r.status === 'pending').length}
@@ -130,10 +132,10 @@ export const HRKasbon: React.FC = () => {
                 {kasbonList.map((k) => (
                   <tr key={k.id}>
                     <td className="py-3 px-4 font-bold text-slate-900">{k.full_name}</td>
-                    <td className="py-3 px-4">{formatDateIndo(k.created_at)}</td>
-                    <td className="py-3 px-4 font-extrabold text-purple-700">{formatRupiah(k.amount)}</td>
-                    <td className="py-3 px-4">{k.total_instalments}x ({formatRupiah(k.instalment_amount)}/bln)</td>
-                    <td className="py-3 px-4 font-bold text-slate-800">{formatRupiah(k.remaining_amount)}</td>
+                    <td className="py-3 px-4">{formatDate(k.created_at)}</td>
+                    <td className="py-3 px-4 font-extrabold text-purple-700">{formatCurrency(k.amount)}</td>
+                    <td className="py-3 px-4">{k.total_instalments}x ({formatCurrency(k.instalment_amount)}/bln)</td>
+                    <td className="py-3 px-4 font-bold text-slate-800">{formatCurrency(k.remaining_amount)}</td>
                     <td className="py-3 px-4 italic max-w-xs">{k.reason}</td>
                     <td className="py-3 px-4">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
@@ -195,7 +197,7 @@ export const HRKasbon: React.FC = () => {
                   <tr key={r.id}>
                     <td className="py-3 px-4 font-bold text-slate-900">{r.full_name}</td>
                     <td className="py-3 px-4 font-medium text-slate-800">{r.category}</td>
-                    <td className="py-3 px-4 font-extrabold text-emerald-600">{formatRupiah(r.amount)}</td>
+                    <td className="py-3 px-4 font-extrabold text-emerald-600">{formatCurrency(r.amount)}</td>
                     <td className="py-3 px-4 italic max-w-xs">{r.description}</td>
                     <td className="py-3 px-4">
                       <span className="text-[10px] bg-slate-100 font-semibold px-2 py-0.5 rounded">

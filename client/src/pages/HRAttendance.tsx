@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { useNavigate } from 'react-router-dom';
 import { Clock, CheckCircle2, XCircle, AlertCircle, Upload, Calendar, ArrowLeft } from 'lucide-react';
-import { apiFetch, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRAttendance: React.FC = () => {
   const navigate = useNavigate();
+  const { t, formatDate } = useLanguage();
   const [activeTab, setActiveTab] = useState<'today' | 'recap' | 'corrections'>('today');
   const [selectedDate, setSelectedDate] = useState(new Date().toISOString().split('T')[0]);
   const [todayData, setTodayData] = useState<any>({ summary: {}, records: [] });
@@ -88,15 +90,15 @@ export const HRAttendance: React.FC = () => {
   const statusBadge = (status: string, lateMins: number) => {
     switch (status) {
       case 'present':
-        return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">Hadir</span>;
+        return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.attendance.presentOnTime}</span>;
       case 'late':
-        return <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">Telat {lateMins}m</span>;
+        return <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.attendance.late} {lateMins}m</span>;
       case 'on_leave':
-        return <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">Cuti</span>;
+        return <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.attendance.onLeave}</span>;
       case 'sick':
-        return <span className="bg-indigo-100 text-indigo-800 text-[10px] font-bold px-2 py-0.5 rounded">Sakit</span>;
+        return <span className="bg-indigo-100 text-indigo-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.attendance.sick}</span>;
       case 'absent':
-        return <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">Alpha</span>;
+        return <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.attendance.absent}</span>;
       default:
         return <span className="bg-slate-100 text-slate-700 text-[10px] font-bold px-2 py-0.5 rounded">{status}</span>;
     }
@@ -112,27 +114,27 @@ export const HRAttendance: React.FC = () => {
           className="inline-flex items-center gap-1 text-slate-600 hover:text-slate-900 font-medium transition cursor-pointer"
         >
           <ArrowLeft size={13} />
-          <span>Dashboard</span>
+          <span>{t.nav.dashboard}</span>
         </button>
         <span className="text-slate-300">/</span>
-        <span className="font-semibold text-slate-800">Presensi & Kehadiran</span>
+        <span className="font-semibold text-slate-800">{t.attendance.title}</span>
       </div>
 
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Presensi & Kehadiran</h1>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">{t.attendance.title}</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Monitoring kehadiran harian karyawan, koreksi presensi, dan log fingerprint
+            {t.attendance.subtitle}
           </p>
         </div>
 
         <div className="flex items-center gap-2">
           <button
             onClick={() => setShowFpModal(true)}
-            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-2xs"
+            className="flex items-center gap-1.5 px-3 py-2 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-2xs cursor-pointer"
           >
             <Upload size={15} />
-            <span>Import Log Fingerprint (CSV)</span>
+            <span>{t.attendance.importFingerprint}</span>
           </button>
         </div>
       </div>
@@ -242,7 +244,7 @@ export const HRAttendance: React.FC = () => {
                 {corrections.map((c) => (
                   <tr key={c.id}>
                     <td className="py-3 px-4 font-bold text-slate-900">{c.full_name}</td>
-                    <td className="py-3 px-4">{formatDateIndo(c.correction_date)}</td>
+                    <td className="py-3 px-4">{formatDate(c.correction_date)}</td>
                     <td className="py-3 px-4 font-mono">
                       Masuk: {c.requested_clock_in || '-'} | Pulang: {c.requested_clock_out || '-'}
                     </td>

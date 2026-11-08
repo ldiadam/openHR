@@ -12,61 +12,63 @@ import {
   CheckCircle2,
 } from 'lucide-react';
 import { downloadFile } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRReports: React.FC = () => {
+  const { t } = useLanguage();
   const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
   const [downloadingIdx, setDownloadingIdx] = useState<number | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const reportsList = [
     {
-      title: 'Rekap Presensi Bulanan (Excel)',
-      description: 'Laporan kehadiran, keterlambatan, cuti, sakit, dan alpha per karyawan dan departemen.',
+      title: t.reports.repAttendance,
+      description: t.reports.repAttendanceDesc,
       icon: Calendar,
-      tag: 'Presensi',
+      tag: t.nav.attendance,
       color: 'text-blue-700 bg-blue-50 border-blue-200',
       actionUrl: `/reports/attendance-recap?month=${selectedMonth}&export=excel`,
       filename: `Rekap_Presensi_${selectedMonth}.xlsx`,
     },
     {
-      title: 'Rekap Penggajian (Payroll Recap Excel)',
-      description: 'Gaji pokok, tunjangan, lembur, potongan BPJS & PPh 21, gaji bersih, dan total beban perusahaan.',
+      title: t.reports.repPayroll,
+      description: t.reports.repPayrollDesc,
       icon: DollarSign,
-      tag: 'Penggajian',
+      tag: t.nav.payroll,
       color: 'text-emerald-700 bg-emerald-50 border-emerald-200',
       actionUrl: `/reports/payroll-recap?export=excel`,
       filename: `Rekap_Penggajian.xlsx`,
     },
     {
-      title: 'Laporan Headcount & Status Karyawan',
-      description: 'Jumlah karyawan aktif, WNI / WNA (Foreign Workers), PKWT, PKWTT, probation, dan riwayat karyawan keluar.',
+      title: t.reports.repHeadcount,
+      description: t.reports.repHeadcountDesc,
       icon: Users,
-      tag: 'Ketenagakerjaan',
+      tag: t.nav.employees,
       color: 'text-indigo-700 bg-indigo-50 border-indigo-200',
       actionUrl: `/reports/headcount?export=excel`,
       filename: `Laporan_Headcount.xlsx`,
     },
     {
-      title: 'Ekspor Pajak & BPJS (Form 1721 Disnaker)',
-      description: 'Data pelaporan PPh 21 TER, iuran BPJS Kesehatan dan BPJS Ketenagakerjaan untuk pelaporan resmi.',
+      title: t.reports.repTaxBpjs,
+      description: t.reports.repTaxBpjsDesc,
       icon: HeartPulse,
-      tag: 'Kepatuhan',
+      tag: 'Statutory',
       color: 'text-rose-700 bg-rose-50 border-rose-200',
       actionUrl: `/reports/bpjs-tax-export?export=excel`,
       filename: `Export_BPJS_PPh21.xlsx`,
     },
     {
-      title: 'Laporan Hak & Sisa Cuti Karyawan',
-      description: 'Daftar hak cuti tahunan, cuti terpakai, penyesuaian HR, dan sisa cuti per departemen.',
+      title: t.reports.repLeave,
+      description: t.reports.repLeaveDesc,
       icon: FileSpreadsheet,
-      tag: 'Cuti',
+      tag: t.nav.leave,
       color: 'text-amber-700 bg-amber-50 border-amber-200',
       actionUrl: `/reports/leave-balances?export=excel`,
       filename: `Laporan_Sisa_Cuti.xlsx`,
     },
     {
-      title: 'Cadangan Seluruh Data Perusahaan (Backup JSON)',
-      description: 'Ekspor lengkap database perusahaan (karyawan, presensi, cuti, penggajian, dan pengaturan) untuk cadangan.',
+      title: t.reports.repBackup,
+      description: t.reports.repBackupDesc,
       icon: Database,
       tag: 'Database',
       color: 'text-slate-800 bg-slate-100 border-slate-300',
@@ -80,9 +82,9 @@ export const HRReports: React.FC = () => {
     setStatusMsg(null);
     try {
       await downloadFile(url, filename);
-      setStatusMsg({ type: 'success', text: `Berhasil mengunduh "${filename}"` });
+      setStatusMsg({ type: 'success', text: `Downloaded "${filename}"` });
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message || 'Gagal mengunduh file laporan' });
+      setStatusMsg({ type: 'error', text: err.message || 'Download failed' });
     } finally {
       setDownloadingIdx(null);
     }
@@ -92,14 +94,14 @@ export const HRReports: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-4 border-b border-slate-200 pb-5">
         <div>
-          <h1 className="text-xl font-bold text-slate-900 tracking-tight">Pusat Laporan & Ekspor Data</h1>
+          <h1 className="text-xl font-bold text-slate-900 tracking-tight">{t.reports.title}</h1>
           <p className="text-xs text-slate-500 mt-0.5">
-            Unduh rekapan terverifikasi format Excel (.xlsx) dan cadangan data resmi siap audit.
+            {t.reports.subtitle}
           </p>
         </div>
 
         <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-xs font-medium text-slate-600">Periode Presensi:</span>
+          <span className="text-xs font-medium text-slate-600">{t.reports.attendanceMonth}</span>
           <input
             type="month"
             value={selectedMonth}
@@ -125,7 +127,7 @@ export const HRReports: React.FC = () => {
             onClick={() => setStatusMsg(null)}
             className="text-xs font-medium underline opacity-80 hover:opacity-100"
           >
-            Tutup
+            {t.common.close}
           </button>
         </div>
       )}
@@ -166,12 +168,12 @@ export const HRReports: React.FC = () => {
                   {isDownloading ? (
                     <>
                       <Loader2 size={13} className="animate-spin" />
-                      <span>Mengunduh...</span>
+                      <span>{t.common.downloading}</span>
                     </>
                   ) : (
                     <>
                       <ArrowDownToLine size={13} />
-                      <span>Unduh File</span>
+                      <span>{t.reports.downloadFile}</span>
                     </>
                   )}
                 </button>

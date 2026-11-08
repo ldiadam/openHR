@@ -13,9 +13,11 @@ import {
   Clock,
   Camera,
 } from 'lucide-react';
-import { apiFetch, formatRupiah, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRSettings: React.FC = () => {
+  const { t, formatCurrency, formatDate } = useLanguage();
   const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'audit'>('payroll');
   const [payrollSettings, setPayrollSettings] = useState<any>(null);
   const [attendancePolicy, setAttendancePolicy] = useState<{ require_selfie: boolean; require_location: boolean }>({
@@ -106,9 +108,9 @@ export const HRSettings: React.FC = () => {
   return (
     <div className="space-y-6">
       <div>
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">Pengaturan Sistem (Settings)</h1>
+        <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.settings.title}</h1>
         <p className="text-xs text-slate-500">
-          Aturan Payroll Indonesia (BPJS & Pajak TER), Geofence Cabang, Purelymail, dan Audit Log
+          {t.settings.subtitle}
         </p>
       </div>
 
@@ -128,48 +130,48 @@ export const HRSettings: React.FC = () => {
       <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
         <button
           onClick={() => setActiveTab('payroll')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'payroll' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
           <DollarSign size={15} />
-          <span>Aturan Penggajian Indonesia</span>
+          <span>{t.settings.tabPayroll}</span>
         </button>
         <button
           onClick={() => setActiveTab('branches')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'branches' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
           <MapPin size={15} />
-          <span>Cabang & Geofence (Presensi)</span>
+          <span>{t.settings.tabBranches}</span>
         </button>
         <button
           onClick={() => setActiveTab('attendance')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'attendance' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
           <Clock size={15} />
-          <span>Kebijakan Presensi & Selfie</span>
+          <span>{t.settings.tabAttendance}</span>
         </button>
         <button
           onClick={() => setActiveTab('company')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'company' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
           <Building size={15} />
-          <span>Profil Perusahaan</span>
+          <span>{t.settings.tabCompany}</span>
         </button>
         <button
           onClick={() => setActiveTab('audit')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'audit' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
           <ShieldAlert size={15} />
-          <span>Audit Log</span>
+          <span>{t.settings.tabAudit}</span>
         </button>
       </div>
 
@@ -481,7 +483,7 @@ export const HRSettings: React.FC = () => {
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px]">UMK / UMP Wilayah</span>
-                    <span className="font-bold text-slate-800">{formatRupiah(b.umk_amount)}</span>
+                    <span className="font-bold text-slate-800">{formatCurrency(b.umk_amount)}</span>
                   </div>
                 </div>
               </div>
@@ -576,9 +578,9 @@ export const HRSettings: React.FC = () => {
         <form onSubmit={handleSaveAttendancePolicy} className="space-y-6">
           <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-6">
             <div>
-              <h3 className="font-bold text-base text-slate-900">Kebijakan Presensi Masuk & Verifikasi</h3>
+              <h3 className="font-bold text-base text-slate-900">{t.settings.selfiePolicyTitle}</h3>
               <p className="text-xs text-slate-500 mt-1">
-                Atur apakah pengambilan foto selfie bersifat wajib atau opsional bagi karyawan saat melakukan presensi masuk di ponsel.
+                {t.settings.selfiePolicySubtitle}
               </p>
             </div>
 
@@ -591,7 +593,7 @@ export const HRSettings: React.FC = () => {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <label htmlFor="selfie_toggle" className="font-bold text-sm text-slate-900 cursor-pointer">
-                      Wajibkan Foto Selfie Saat Presensi Masuk
+                      {t.settings.requireSelfieLabel}
                     </label>
                     <input
                       id="selfie_toggle"
@@ -606,11 +608,11 @@ export const HRSettings: React.FC = () => {
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed">
                     {attendancePolicy.require_selfie ? (
                       <span className="text-emerald-700 font-medium">
-                        Aktif: Karyawan wajib menyalakan kamera depan dan mengambil foto selfie setiap kali melakukan presensi masuk (Clock In).
+                        {t.settings.requireSelfieActive}
                       </span>
                     ) : (
                       <span className="text-slate-600">
-                        Opsional (Nonaktif): Karyawan dapat langsung melakukan presensi masuk hanya dengan verifikasi lokasi GPS tanpa harus mengambil foto. Opsi selfie tetap disediakan sebagai fitur opsional.
+                        {t.settings.requireSelfieOptional}
                       </span>
                     )}
                   </p>
@@ -625,14 +627,14 @@ export const HRSettings: React.FC = () => {
                 <div className="flex-1">
                   <div className="flex items-center justify-between">
                     <span className="font-bold text-sm text-slate-900">
-                      Verifikasi Lokasi GPS (Wajib & Mengikat)
+                      {t.settings.gpsPolicyTitle}
                     </span>
                     <span className="text-[11px] font-bold text-emerald-800 bg-emerald-100 px-2 py-0.5 rounded">
-                      Selalu Wajib
+                      {t.settings.gpsAlwaysMandatory}
                     </span>
                   </div>
                   <p className="text-xs text-slate-500 mt-1 leading-relaxed">
-                    Presensi wajib menyertakan koordinat GPS nyata. Jika karyawan memblokir izin lokasi browser atau GPS perangkat nonaktif, tombol presensi otomatis terkunci dan karyawan tidak dapat melakukan clock in/out.
+                    {t.settings.gpsPolicyDesc}
                   </p>
                 </div>
               </div>
@@ -644,7 +646,7 @@ export const HRSettings: React.FC = () => {
                 className="flex items-center gap-2 px-6 py-2.5 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer"
               >
                 <Save size={15} />
-                <span>Simpan Pengaturan Presensi</span>
+                <span>{t.settings.saveAttendancePolicy}</span>
               </button>
             </div>
           </div>

@@ -11,10 +11,12 @@ import {
   FileCheck,
   Camera,
 } from 'lucide-react';
-import { apiFetch, formatRupiah, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 import { CameraModal } from '../components/CameraModal';
 
 export const EmployeeRequests: React.FC = () => {
+  const { t, formatDate, formatCurrency } = useLanguage();
   const [searchParams] = useSearchParams();
   const initialTab = searchParams.get('type') || 'leave';
   const [activeTab, setActiveTab] = useState<'leave' | 'overtime' | 'kasbon' | 'reimbursement'>(
@@ -190,19 +192,19 @@ export const EmployeeRequests: React.FC = () => {
   const statusBadge = (status: string) => {
     switch (status) {
       case 'approved':
-        return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">Disetujui</span>;
+        return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.leave.approved}</span>;
       case 'rejected':
-        return <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">Ditolak</span>;
+        return <span className="bg-rose-100 text-rose-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.leave.rejected}</span>;
       default:
-        return <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">Menunggu</span>;
+        return <span className="bg-amber-100 text-amber-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.leave.pending}</span>;
     }
   };
 
   return (
     <div className="max-w-md mx-auto space-y-4">
       <div>
-        <h2 className="text-xl font-bold text-slate-900">Pengajuan Mandiri</h2>
-        <p className="text-xs text-slate-500">Ajukan cuti, lembur, kasbon, dan klaim biaya</p>
+        <h2 className="text-xl font-bold text-slate-900">{t.nav.requests}</h2>
+        <p className="text-xs text-slate-500">{t.leave.requestLeave}, {t.shifts.requestOvertime}, {t.kasbon.requestKasbon}</p>
       </div>
 
       {msg && (
@@ -222,25 +224,25 @@ export const EmployeeRequests: React.FC = () => {
           onClick={() => setActiveTab('leave')}
           className={`py-2 rounded-xl transition ${activeTab === 'leave' ? 'bg-white text-blue-700 shadow-xs' : ''}`}
         >
-          Cuti/Izin
+          {t.nav.leave}
         </button>
         <button
           onClick={() => setActiveTab('overtime')}
           className={`py-2 rounded-xl transition ${activeTab === 'overtime' ? 'bg-white text-amber-700 shadow-xs' : ''}`}
         >
-          Lembur
+          {t.shifts.requestOvertime}
         </button>
         <button
           onClick={() => setActiveTab('kasbon')}
           className={`py-2 rounded-xl transition ${activeTab === 'kasbon' ? 'bg-white text-purple-700 shadow-xs' : ''}`}
         >
-          Kasbon
+          {t.kasbon.requestKasbon}
         </button>
         <button
           onClick={() => setActiveTab('reimbursement')}
           className={`py-2 rounded-xl transition ${activeTab === 'reimbursement' ? 'bg-white text-emerald-700 shadow-xs' : ''}`}
         >
-          Klaim
+          {t.kasbon.requestClaim}
         </button>
       </div>
 
@@ -248,15 +250,15 @@ export const EmployeeRequests: React.FC = () => {
       {activeTab === 'leave' && (
         <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
           <div className="flex items-center justify-between pb-3 border-b border-slate-100">
-            <h3 className="font-bold text-xs uppercase text-slate-900">Form Pengajuan Cuti / Izin</h3>
+            <h3 className="font-bold text-xs uppercase text-slate-900">{t.leave.requestLeave}</h3>
             <div className="text-xs text-blue-600 font-semibold">
-              Sisa Cuti: {leaveBalances.find((b) => b.leave_type_code === 'annual')?.remaining_days || 12} Hari
+              {t.leave.annualLeaveBalance}: {leaveBalances.find((b) => b.leave_type_code === 'annual')?.remaining_days || 12} {t.leave.remainingDays}
             </div>
           </div>
 
           <form onSubmit={handleSubmitLeave} className="space-y-3 text-xs">
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Jenis Cuti / Izin</label>
+              <label className="block text-slate-600 font-medium mb-1">{t.leave.leaveType}</label>
               <select
                 value={leaveTypeId}
                 onChange={(e) => setLeaveTypeId(e.target.value)}
@@ -555,8 +557,8 @@ export const EmployeeRequests: React.FC = () => {
       {/* REQUEST HISTORY LIST */}
       <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3">
         <h3 className="font-bold text-xs uppercase text-slate-900 flex items-center justify-between">
-          <span>Riwayat Pengajuan</span>
-          <span className="text-[10px] text-slate-400">Terakhir</span>
+          <span>{t.dashboard.pendingApprovals} / History</span>
+          <span className="text-[10px] text-slate-400">{t.common.all}</span>
         </h3>
 
         {history.length === 0 ? (
@@ -567,10 +569,10 @@ export const EmployeeRequests: React.FC = () => {
               <div key={h.id} className="p-3 rounded-xl border border-slate-100 bg-slate-50 flex justify-between items-start text-xs">
                 <div>
                   <div className="font-bold text-slate-900">
-                    {h.leave_type_name || (h.amount ? formatRupiah(h.amount) : `${h.actual_hours || h.planned_hours} Jam Lembur`)}
+                    {h.leave_type_name || (h.amount ? formatCurrency(h.amount) : `${h.actual_hours || h.planned_hours} ${t.common.hours}`)}
                   </div>
                   <div className="text-[11px] text-slate-500 mt-0.5">
-                    {h.start_date ? `${formatDateIndo(h.start_date)} - ${formatDateIndo(h.end_date)} (${h.total_days} hari)` : formatDateIndo(h.date || h.created_at)}
+                    {h.start_date ? `${formatDate(h.start_date)} - ${formatDate(h.end_date)} (${h.total_days} ${t.common.days})` : formatDate(h.date || h.created_at)}
                   </div>
                   {h.reason && <p className="text-[10px] text-slate-600 italic mt-1">"{h.reason}"</p>}
                   {h.rejection_note && <p className="text-[10px] text-rose-600 font-medium mt-1">Catatan: {h.rejection_note}</p>}

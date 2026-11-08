@@ -17,10 +17,12 @@ import {
   FileText,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { apiFetch, formatRupiah, formatDateIndo } from '../api';
+import { useLanguage } from '../context/LanguageContext';
+import { apiFetch } from '../api';
 
 export const HREmployees: React.FC = () => {
   const { user, isOwnerAdmin, isManager } = useAuth();
+  const { t, formatCurrency, formatDate } = useLanguage();
   const [employees, setEmployees] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -267,11 +269,11 @@ export const HREmployees: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Data Karyawan</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.employees.title}</h1>
           <p className="text-xs text-slate-500">
             {isManager
               ? 'Menampilkan anggota tim yang berada di bawah supervisi Anda'
-              : 'Master data kepegawaian, kontrak, jaminan sosial (BPJS), dan penggajian'}
+              : t.employees.subtitle}
           </p>
         </div>
 
@@ -279,17 +281,17 @@ export const HREmployees: React.FC = () => {
           <div className="flex items-center gap-2">
             <button
               onClick={() => setShowImportModal(true)}
-              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-2xs transition"
+              className="flex items-center gap-2 px-3.5 py-2.5 bg-white border border-slate-300 hover:bg-slate-50 text-slate-700 rounded-xl text-xs font-semibold shadow-2xs transition cursor-pointer"
             >
               <FileSpreadsheet size={16} className="text-emerald-600" />
-              <span>Import Excel / CSV</span>
+              <span>{t.employees.importExcel}</span>
             </button>
             <button
               onClick={() => setShowAddModal(true)}
-              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+              className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
             >
               <UserPlus size={16} />
-              <span>Tambah Karyawan Baru</span>
+              <span>{t.employees.addEmployee}</span>
             </button>
           </div>
         )}
@@ -355,7 +357,7 @@ export const HREmployees: React.FC = () => {
           <Search size={16} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-slate-400" />
           <input
             type="text"
-            placeholder="Cari nama, NIK, atau jabatan..."
+            placeholder="Cari nama, NIK, paspor..."
             value={search}
             onChange={(e) => setSearch(e.target.value)}
             className="w-full pl-9 pr-4 py-2 text-xs border border-slate-300 rounded-xl focus:ring-2 focus:ring-blue-500 focus:outline-hidden"
@@ -369,7 +371,7 @@ export const HREmployees: React.FC = () => {
             onChange={(e) => setDeptFilter(e.target.value)}
             className="text-xs border border-slate-300 rounded-xl px-3 py-2 bg-white"
           >
-            <option value="">Semua Departemen</option>
+            <option value="">{t.common.all} {t.employees.department}</option>
             {departments.map((d) => (
               <option key={d.id} value={d.id}>
                 {d.name}
@@ -385,20 +387,20 @@ export const HREmployees: React.FC = () => {
           <table className="w-full text-left text-xs text-slate-600">
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
               <tr>
-                <th className="py-3.5 px-4 font-bold">NIK & Nama</th>
-                <th className="py-3.5 px-4 font-bold">Jabatan & Dept</th>
-                <th className="py-3.5 px-4 font-bold">Cabang</th>
-                <th className="py-3.5 px-4 font-bold">Status Kerja</th>
-                <th className="py-3.5 px-4 font-bold">PTKP</th>
-                {isOwnerAdmin && <th className="py-3.5 px-4 font-bold">Gaji Pokok</th>}
-                <th className="py-3.5 px-4 font-bold text-right">Aksi</th>
+                <th className="py-3.5 px-4 font-bold">{t.employees.nik} & {t.employees.fullName}</th>
+                <th className="py-3.5 px-4 font-bold">{t.employees.jobTitle} & {t.employees.department}</th>
+                <th className="py-3.5 px-4 font-bold">{t.employees.branch}</th>
+                <th className="py-3.5 px-4 font-bold">{t.employees.employmentStatus}</th>
+                <th className="py-3.5 px-4 font-bold">{t.employees.ptkpStatus}</th>
+                {isOwnerAdmin && <th className="py-3.5 px-4 font-bold">{t.employees.baseSalary}</th>}
+                <th className="py-3.5 px-4 font-bold text-right">{t.common.action}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
               {loading ? (
                 <tr>
                   <td colSpan={7} className="py-8 text-center text-slate-400">
-                    Memuat data karyawan...
+                    {t.common.loading}
                   </td>
                 </tr>
               ) : filtered.length === 0 ? (
@@ -420,7 +422,7 @@ export const HREmployees: React.FC = () => {
                         )}
                       </div>
                       <div className="text-[11px] text-slate-400 font-mono">
-                        {emp.nik} {emp.passport_number ? `• Paspor: ${emp.passport_number}` : ''}
+                        {emp.nik} {emp.passport_number ? `• ${t.employees.passportNumber}: ${emp.passport_number}` : ''}
                       </div>
                     </td>
                     <td className="py-3 px-4">
@@ -436,16 +438,16 @@ export const HREmployees: React.FC = () => {
                     <td className="py-3 px-4 font-semibold text-slate-700">{emp.ptkp_status}</td>
                     {isOwnerAdmin && (
                       <td className="py-3 px-4 font-bold text-slate-900">
-                        {formatRupiah(emp.base_salary)}
+                        {formatCurrency(emp.base_salary)}
                       </td>
                     )}
                     <td className="py-3 px-4 text-right">
                       <button
                         onClick={() => setSelectedEmp(emp)}
-                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold text-xs px-2.5 py-1 rounded-lg hover:bg-blue-50"
+                        className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 font-semibold text-xs px-2.5 py-1 rounded-lg hover:bg-blue-50 cursor-pointer"
                       >
                         <Eye size={14} />
-                        <span>Detail</span>
+                        <span>{t.common.detail}</span>
                       </button>
                     </td>
                   </tr>
@@ -510,30 +512,30 @@ export const HREmployees: React.FC = () => {
                 <span className="font-semibold text-slate-800">{selectedEmp.employment_status} ({selectedEmp.lifecycle_status})</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Tanggal Masuk</span>
-                <span className="font-semibold text-slate-800">{formatDateIndo(selectedEmp.join_date)}</span>
+                <span className="text-slate-400 block text-[10px] uppercase">{t.employees.joinDate}</span>
+                <span className="font-semibold text-slate-800">{formatDate(selectedEmp.join_date)}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">Akhir Kontrak</span>
-                <span className="font-semibold text-slate-800">{formatDateIndo(selectedEmp.contract_end_date) || '-'}</span>
+                <span className="text-slate-400 block text-[10px] uppercase">{t.employees.contractEnd}</span>
+                <span className="font-semibold text-slate-800">{formatDate(selectedEmp.contract_end_date) || '-'}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">BPJS Kesehatan</span>
+                <span className="text-slate-400 block text-[10px] uppercase">{t.employees.bpjsKes}</span>
                 <span className="font-semibold text-slate-800">{selectedEmp.bpjs_kesehatan_number || '-'}</span>
               </div>
               <div>
-                <span className="text-slate-400 block text-[10px] uppercase">BPJS Ketenagakerjaan</span>
+                <span className="text-slate-400 block text-[10px] uppercase">{t.employees.bpjsTk}</span>
                 <span className="font-semibold text-slate-800">{selectedEmp.bpjs_tk_number || '-'}</span>
               </div>
               {selectedEmp.base_salary !== undefined && (
                 <>
                   <div>
-                    <span className="text-slate-400 block text-[10px] uppercase">Gaji Pokok</span>
-                    <span className="font-bold text-emerald-600">{formatRupiah(selectedEmp.base_salary)}</span>
+                    <span className="text-slate-400 block text-[10px] uppercase">{t.employees.baseSalary}</span>
+                    <span className="font-bold text-emerald-600">{formatCurrency(selectedEmp.base_salary)}</span>
                   </div>
                   <div>
-                    <span className="text-slate-400 block text-[10px] uppercase">Tunjangan Tetap</span>
-                    <span className="font-bold text-slate-800">{formatRupiah(selectedEmp.fixed_allowances)}</span>
+                    <span className="text-slate-400 block text-[10px] uppercase">{t.employees.fixedAllowances}</span>
+                    <span className="font-bold text-slate-800">{formatCurrency(selectedEmp.fixed_allowances)}</span>
                   </div>
                   <div>
                     <span className="text-slate-400 block text-[10px] uppercase">Rekening Payroll</span>

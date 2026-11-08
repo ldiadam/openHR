@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Layers, Clock, Plus, CheckCircle2, AlertCircle } from 'lucide-react';
-import { apiFetch, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRShifts: React.FC = () => {
+  const { t, formatDate } = useLanguage();
   const [activeTab, setActiveTab] = useState<'roster' | 'patterns' | 'overtime'>('overtime');
   const [patterns, setPatterns] = useState<any[]>([]);
   const [overtimes, setOvertimes] = useState<any[]>([]);
@@ -83,16 +85,16 @@ export const HRShifts: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Shift & Lembur (Overtime)</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.shifts.title}</h1>
           <p className="text-xs text-slate-500">
-            Pengaturan jadwal shift kerja dan verifikasi jam lembur karyawan sebelum masuk ke payroll
+            {t.shifts.subtitle}
           </p>
         </div>
 
         {activeTab === 'patterns' && (
           <button
             onClick={() => setShowPatternModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
           >
             <Plus size={16} />
             <span>Tambah Pola Shift</span>
@@ -116,11 +118,11 @@ export const HRShifts: React.FC = () => {
       <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
         <button
           onClick={() => setActiveTab('overtime')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'overtime' ? 'border-amber-600 text-amber-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          <span>Persetujuan Lembur (Overtime)</span>
+          <span>{t.dashboard.overtimeRequests}</span>
           {overtimes.filter((o) => o.status === 'pending').length > 0 && (
             <span className="bg-amber-500 text-white text-[10px] px-1.5 py-0.2 rounded-full">
               {overtimes.filter((o) => o.status === 'pending').length}
@@ -129,11 +131,11 @@ export const HRShifts: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('patterns')}
-          className={`pb-3 transition border-b-2 -mb-px ${
+          className={`pb-3 transition border-b-2 -mb-px cursor-pointer ${
             activeTab === 'patterns' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          Pola Shift Kerja
+          {t.shifts.shiftPatterns}
         </button>
       </div>
 
@@ -158,7 +160,7 @@ export const HRShifts: React.FC = () => {
                 {overtimes.map((ot) => (
                   <tr key={ot.id}>
                     <td className="py-3 px-4 font-bold text-slate-900">{ot.full_name}</td>
-                    <td className="py-3 px-4">{formatDateIndo(ot.date)}</td>
+                    <td className="py-3 px-4">{formatDate(ot.date)}</td>
                     <td className="py-3 px-4 font-mono font-medium">
                       {ot.start_time} - {ot.end_time}
                     </td>

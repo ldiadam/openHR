@@ -2,9 +2,12 @@ import React, { useState } from 'react';
 import { useNavigate, Link } from 'react-router-dom';
 import { LogIn, AlertCircle, ShieldCheck, UserCheck } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
+import { LanguageSwitcher } from '../components/LanguageSwitcher';
 
 export const Login: React.FC = () => {
   const { login } = useAuth();
+  const { t } = useLanguage();
   const navigate = useNavigate();
 
   const [email, setEmail] = useState('');
@@ -25,7 +28,7 @@ export const Login: React.FC = () => {
         navigate('/');
       }
     } catch (err: any) {
-      setError(err.message || 'Login gagal. Periksa kembali email dan kata sandi Anda.');
+      setError(err.message || t.auth.loginError);
     } finally {
       setLoading(false);
     }
@@ -44,21 +47,26 @@ export const Login: React.FC = () => {
         navigate('/');
       }
     } catch (err: any) {
-      setError(err.message || 'Quick login gagal');
+      setError(err.message || 'Login gagal / Failed');
     } finally {
       setLoading(false);
     }
   };
 
   return (
-    <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8">
+    <div className="min-h-screen bg-slate-900 flex flex-col justify-center py-12 px-4 sm:px-6 lg:px-8 relative">
+      {/* Language Switcher in top right */}
+      <div className="absolute top-4 right-4 z-10">
+        <LanguageSwitcher />
+      </div>
+
       <div className="sm:mx-auto sm:w-full sm:max-w-md text-center">
         <div className="w-14 h-14 rounded-2xl bg-blue-600 text-white font-black text-2xl flex items-center justify-center mx-auto shadow-xl">
           HR
         </div>
         <h2 className="mt-4 text-3xl font-extrabold text-white tracking-tight">openHR</h2>
         <p className="mt-1 text-sm text-slate-400">
-          Sistem HR & Penggajian Lengkap UKM Indonesia
+          {t.auth.tagline}
         </p>
       </div>
 
@@ -74,7 +82,7 @@ export const Login: React.FC = () => {
           <form className="space-y-4" onSubmit={handleSubmit}>
             <div>
               <label className="block text-xs font-semibold text-slate-700 uppercase mb-1">
-                Email
+                {t.auth.email}
               </label>
               <input
                 type="email"
@@ -89,10 +97,10 @@ export const Login: React.FC = () => {
             <div>
               <div className="flex items-center justify-between mb-1">
                 <label className="block text-xs font-semibold text-slate-700 uppercase">
-                  Kata Sandi
+                  {t.auth.password}
                 </label>
                 <Link to="/reset-password" className="text-xs text-blue-600 hover:underline">
-                  Lupa kata sandi?
+                  {t.auth.forgotPassword}
                 </Link>
               </div>
               <input
@@ -108,26 +116,26 @@ export const Login: React.FC = () => {
             <button
               type="submit"
               disabled={loading}
-              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-hidden disabled:opacity-50 transition"
+              className="w-full flex justify-center items-center gap-2 py-3 px-4 border border-transparent rounded-xl shadow-md text-sm font-semibold text-white bg-blue-600 hover:bg-blue-700 focus:outline-hidden disabled:opacity-50 transition cursor-pointer"
             >
               <LogIn size={18} />
-              <span>{loading ? 'Memproses...' : 'Masuk ke openHR'}</span>
+              <span>{loading ? t.auth.loggingIn : t.auth.signIn}</span>
             </button>
           </form>
 
           {/* Quick Demo Logins for Pair Programming Review */}
           <div className="mt-8 border-t border-slate-200 pt-5">
             <p className="text-xs font-semibold text-slate-500 uppercase tracking-wider mb-2 text-center">
-              Pilihan Akun Demo (1-Click Login):
+              {t.auth.quickDemo}
             </p>
             <div className="grid grid-cols-2 gap-2 text-xs">
               <button
                 type="button"
                 onClick={() => handleQuickLogin('budi.santoso@nusantara.id')}
-                className="p-2 border border-purple-200 bg-purple-50 text-purple-900 rounded-lg hover:bg-purple-100 text-left font-medium"
+                className="p-2 border border-purple-200 bg-purple-50 text-purple-900 rounded-lg hover:bg-purple-100 text-left font-medium cursor-pointer"
               >
                 <div className="font-bold flex items-center gap-1">
-                  <ShieldCheck size={14} /> Owner/Admin
+                  <ShieldCheck size={14} /> {t.nav.roleAdmin}
                 </div>
                 <div className="text-[10px] text-purple-700">budi.santoso@</div>
               </button>
@@ -135,10 +143,10 @@ export const Login: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handleQuickLogin('siti.rahma@nusantara.id')}
-                className="p-2 border border-blue-200 bg-blue-50 text-blue-900 rounded-lg hover:bg-blue-100 text-left font-medium"
+                className="p-2 border border-blue-200 bg-blue-50 text-blue-900 rounded-lg hover:bg-blue-100 text-left font-medium cursor-pointer"
               >
                 <div className="font-bold flex items-center gap-1">
-                  <UserCheck size={14} /> HR Manager
+                  <UserCheck size={14} /> {t.nav.roleManager}
                 </div>
                 <div className="text-[10px] text-blue-700">siti.rahma@</div>
               </button>
@@ -146,23 +154,23 @@ export const Login: React.FC = () => {
               <button
                 type="button"
                 onClick={() => handleQuickLogin('dewi.lestari@nusantara.id')}
-                className="p-2 border border-emerald-200 bg-emerald-50 text-emerald-900 rounded-lg hover:bg-emerald-100 text-left font-medium"
+                className="p-2 border border-emerald-200 bg-emerald-50 text-emerald-900 rounded-lg hover:bg-emerald-100 text-left font-medium cursor-pointer"
               >
-                <div className="font-bold">💰 Finance</div>
+                <div className="font-bold">💰 {t.nav.roleFinance}</div>
                 <div className="text-[10px] text-emerald-700">dewi.lestari@</div>
               </button>
 
               <button
                 type="button"
                 onClick={() => handleQuickLogin('agus.setiawan@nusantara.id')}
-                className="p-2 border border-slate-200 bg-slate-50 text-slate-900 rounded-lg hover:bg-slate-100 text-left font-medium"
+                className="p-2 border border-slate-200 bg-slate-50 text-slate-900 rounded-lg hover:bg-slate-100 text-left font-medium cursor-pointer"
               >
-                <div className="font-bold">📱 Karyawan</div>
+                <div className="font-bold">📱 {t.nav.roleEmployee}</div>
                 <div className="text-[10px] text-slate-600">agus.setiawan@</div>
               </button>
             </div>
             <p className="text-[11px] text-slate-400 text-center mt-2">
-              Kata sandi default semua akun: <code className="bg-slate-100 px-1 py-0.5 rounded">Password123!</code>
+              {t.auth.defaultPassword} <code className="bg-slate-100 px-1 py-0.5 rounded">Password123!</code>
             </p>
           </div>
         </div>

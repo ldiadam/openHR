@@ -1,10 +1,12 @@
 import React, { useState, useEffect } from 'react';
 import { User, Shield, CreditCard, HeartPulse, Building, Mail, Phone, MapPin, Send } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { apiFetch, formatDateIndo, formatRupiah } from '../api';
+import { useLanguage } from '../context/LanguageContext';
+import { apiFetch } from '../api';
 
 export const EmployeeProfile: React.FC = () => {
   const { user } = useAuth();
+  const { t, formatDate } = useLanguage();
   const [profile, setProfile] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showEditRequestModal, setShowEditRequestModal] = useState(false);
@@ -37,7 +39,7 @@ export const EmployeeProfile: React.FC = () => {
   };
 
   if (loading) {
-    return <div className="text-center text-xs text-slate-400 py-8">Memuat profil...</div>;
+    return <div className="text-center text-xs text-slate-400 py-8">{t.common.loading}</div>;
   }
 
   return (
@@ -50,7 +52,7 @@ export const EmployeeProfile: React.FC = () => {
         <h2 className="text-lg font-bold text-slate-900">{profile?.full_name}</h2>
         <p className="text-xs text-slate-500">{profile?.job_title}</p>
         <div className="mt-2 inline-flex items-center gap-1.5 px-3 py-1 bg-slate-100 rounded-full text-xs font-semibold text-slate-700">
-          <span>NIK: {profile?.nik}</span>
+          <span>{t.employees.nik}: {profile?.nik}</span>
           <span>•</span>
           <span className="text-blue-600 font-bold">{profile?.employment_status}</span>
         </div>
@@ -60,24 +62,24 @@ export const EmployeeProfile: React.FC = () => {
       <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3 text-xs">
         <h3 className="font-bold uppercase text-slate-900 text-[11px] border-b border-slate-100 pb-2 flex items-center gap-1.5">
           <Shield size={14} className="text-blue-600" />
-          <span>Data Identitas & Pajak</span>
+          <span>{profile?.is_foreign_worker ? `${t.employees.tka} (${t.employees.passportNumber})` : t.employees.ktpNumber}</span>
         </h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <span className="text-slate-400 block text-[10px]">No. KTP / NIK Kependudukan</span>
-            <span className="font-semibold text-slate-800">{profile?.ktp_number || '-'}</span>
+            <span className="text-slate-400 block text-[10px]">{profile?.is_foreign_worker ? t.employees.passportNumber : t.employees.ktpNumber}</span>
+            <span className="font-semibold text-slate-800">{profile?.is_foreign_worker ? profile?.passport_number : (profile?.ktp_number || '-')}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">NPWP</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.npwp}</span>
             <span className="font-semibold text-slate-800">{profile?.npwp_number || '-'}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">Kategori PTKP</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.ptkpStatus}</span>
             <span className="font-semibold text-slate-800">{profile?.ptkp_status || 'TK/0'}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">Tanggal Bergabung</span>
-            <span className="font-semibold text-slate-800">{formatDateIndo(profile?.join_date)}</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.joinDate}</span>
+            <span className="font-semibold text-slate-800">{formatDate(profile?.join_date)}</span>
           </div>
         </div>
       </div>
@@ -86,23 +88,23 @@ export const EmployeeProfile: React.FC = () => {
       <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3 text-xs">
         <h3 className="font-bold uppercase text-slate-900 text-[11px] border-b border-slate-100 pb-2 flex items-center gap-1.5">
           <HeartPulse size={14} className="text-emerald-600" />
-          <span>Jaminan Sosial & Rekening Payroll</span>
+          <span>{t.employees.bpjsKes} & {t.employees.bankName}</span>
         </h3>
         <div className="grid grid-cols-2 gap-3">
           <div>
-            <span className="text-slate-400 block text-[10px]">BPJS Kesehatan</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.bpjsKes}</span>
             <span className="font-semibold text-slate-800">{profile?.bpjs_kesehatan_number || '-'}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">BPJS Ketenagakerjaan</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.bpjsTk}</span>
             <span className="font-semibold text-slate-800">{profile?.bpjs_tk_number || '-'}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">Bank Penyalur</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.bankName}</span>
             <span className="font-semibold text-slate-800">{profile?.bank_name || '-'}</span>
           </div>
           <div>
-            <span className="text-slate-400 block text-[10px]">Nomor Rekening</span>
+            <span className="text-slate-400 block text-[10px]">{t.employees.bankAccount}</span>
             <span className="font-semibold text-slate-800">{profile?.bank_account_number || '-'}</span>
           </div>
         </div>
@@ -112,7 +114,7 @@ export const EmployeeProfile: React.FC = () => {
       <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3 text-xs">
         <h3 className="font-bold uppercase text-slate-900 text-[11px] border-b border-slate-100 pb-2 flex items-center gap-1.5">
           <Mail size={14} className="text-purple-600" />
-          <span>Kontak & Alamat</span>
+          <span>{t.employees.phone} & {t.employees.address}</span>
         </h3>
         <div className="space-y-2">
           <div className="flex items-center gap-2">
@@ -133,10 +135,10 @@ export const EmployeeProfile: React.FC = () => {
       {/* Button Request Edit to HR */}
       <button
         onClick={() => setShowEditRequestModal(true)}
-        className="w-full py-3 px-4 bg-slate-900 text-white rounded-2xl font-bold text-xs shadow-md hover:bg-slate-800 transition flex items-center justify-center gap-2"
+        className="w-full py-3 px-4 bg-slate-900 text-white rounded-2xl font-bold text-xs shadow-md hover:bg-slate-800 transition flex items-center justify-center gap-2 cursor-pointer"
       >
         <Send size={15} />
-        <span>Ajukan Perubahan Data / Profil ke HR</span>
+        <span>{t.common.edit} / Request Profile Update</span>
       </button>
 
       {/* Modal Request Edit */}

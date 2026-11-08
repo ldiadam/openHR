@@ -1,8 +1,10 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit } from 'lucide-react';
-import { apiFetch, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const HRLeave: React.FC = () => {
+  const { t, formatDate } = useLanguage();
   const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays'>('requests');
   const [requests, setRequests] = useState<any[]>([]);
   const [balances, setBalances] = useState<any[]>([]);
@@ -107,16 +109,16 @@ export const HRLeave: React.FC = () => {
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Cuti & Perizinan</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.leave.title}</h1>
           <p className="text-xs text-slate-500">
-            Persetujuan cuti/izin, penyesuaian saldo cuti tahunan, dan kalender libur nasional
+            {t.leave.subtitle}
           </p>
         </div>
 
         {activeTab === 'holidays' && (
           <button
             onClick={() => setShowHolidayModal(true)}
-            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
           >
             <Plus size={16} />
             <span>Tambah Hari Libur</span>
@@ -140,11 +142,11 @@ export const HRLeave: React.FC = () => {
       <div className="flex border-b border-slate-200 gap-6 text-xs font-bold text-slate-500">
         <button
           onClick={() => setActiveTab('requests')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
             activeTab === 'requests' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          <span>Pengajuan Masuk</span>
+          <span>{t.dashboard.leaveRequests}</span>
           {requests.filter((r) => r.status === 'pending').length > 0 && (
             <span className="bg-blue-600 text-white text-[10px] px-1.5 py-0.2 rounded-full">
               {requests.filter((r) => r.status === 'pending').length}
@@ -153,19 +155,19 @@ export const HRLeave: React.FC = () => {
         </button>
         <button
           onClick={() => setActiveTab('balances')}
-          className={`pb-3 transition border-b-2 -mb-px ${
+          className={`pb-3 transition border-b-2 -mb-px cursor-pointer ${
             activeTab === 'balances' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          Saldo Cuti Karyawan
+          {t.leave.annualLeaveBalance}
         </button>
         <button
           onClick={() => setActiveTab('holidays')}
-          className={`pb-3 transition border-b-2 -mb-px ${
+          className={`pb-3 transition border-b-2 -mb-px cursor-pointer ${
             activeTab === 'holidays' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
           }`}
         >
-          Kalender Libur & Cuti Bersama 2026
+          {t.leave.holidaysCalendar}
         </button>
       </div>
 
@@ -191,7 +193,7 @@ export const HRLeave: React.FC = () => {
                     <td className="py-3 px-4 font-bold text-slate-900">{r.full_name}</td>
                     <td className="py-3 px-4 font-medium text-slate-800">{r.leave_type_name}</td>
                     <td className="py-3 px-4">
-                      {formatDateIndo(r.start_date)} s/d {formatDateIndo(r.end_date)}
+                      {formatDate(r.start_date)} - {formatDate(r.end_date)}
                     </td>
                     <td className="py-3 px-4 font-bold">{r.total_days} Hari</td>
                     <td className="py-3 px-4 italic max-w-xs">{r.reason}</td>
@@ -289,7 +291,7 @@ export const HRLeave: React.FC = () => {
               <tbody className="divide-y divide-slate-100">
                 {holidays.map((h) => (
                   <tr key={h.id}>
-                    <td className="py-3 px-4 font-bold text-slate-900">{formatDateIndo(h.date)}</td>
+                    <td className="py-3 px-4 font-bold text-slate-900">{formatDate(h.date)}</td>
                     <td className="py-3 px-4 font-medium">{h.name}</td>
                     <td className="py-3 px-4">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${

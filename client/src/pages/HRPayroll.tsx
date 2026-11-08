@@ -16,11 +16,13 @@ import {
   ShieldAlert,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
-import { apiFetch, formatRupiah, formatDateIndo, downloadFile } from '../api';
+import { useLanguage } from '../context/LanguageContext';
+import { apiFetch, downloadFile } from '../api';
 import { PayslipModal } from '../components/PayslipModal';
 
 export const HRPayroll: React.FC = () => {
   const { user, isOwnerAdmin, isFinance } = useAuth();
+  const { t, formatCurrency, formatDate } = useLanguage();
 
   const [runs, setRuns] = useState<any[]>([]);
   const [selectedRun, setSelectedRun] = useState<any>(null);
@@ -209,19 +211,19 @@ export const HRPayroll: React.FC = () => {
       {/* Header */}
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
         <div>
-          <h1 className="text-2xl font-black text-slate-900 tracking-tight">Penggajian (Payroll Run)</h1>
+          <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.payroll.title}</h1>
           <p className="text-xs text-slate-500">
-            Alur 6 langkah penguncian penggajian bulanan sesuai regulasi BPJS dan PPh 21 TER Indonesia
+            {t.payroll.subtitle}
           </p>
         </div>
 
         {isOwnerAdmin && (
           <button
             onClick={() => setShowOpenModal(true)}
-            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition"
+            className="flex items-center gap-2 px-4 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
           >
             <Plus size={16} />
-            <span>Buka Periode Payroll Baru (Langkah 1)</span>
+            <span>{t.payroll.openPeriod}</span>
           </button>
         )}
       </div>
@@ -500,25 +502,25 @@ export const HRPayroll: React.FC = () => {
       {selectedRun && (
         <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
           <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
-            <span className="text-[11px] text-slate-400 font-semibold block">Total Karyawan</span>
-            <div className="text-2xl font-black text-slate-900 mt-1">{items.length} Orang</div>
+            <span className="text-[11px] text-slate-400 font-semibold block">{t.dashboard.totalHeadcount}</span>
+            <div className="text-2xl font-black text-slate-900 mt-1">{items.length}</div>
           </div>
           <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
-            <span className="text-[11px] text-slate-400 font-semibold block">Total Penghasilan Bruto</span>
+            <span className="text-[11px] text-slate-400 font-semibold block">{t.payroll.grossEarnings}</span>
             <div className="text-xl font-black text-slate-900 mt-1">
-              {formatRupiah(selectedRun.total_gross)}
+              {formatCurrency(selectedRun.total_gross)}
             </div>
           </div>
           <div className="bg-white p-4 rounded-3xl border border-slate-200/80 shadow-2xs">
-            <span className="text-[11px] text-rose-500 font-semibold block">Total Potongan (BPJS + Pajak)</span>
+            <span className="text-[11px] text-rose-500 font-semibold block">{t.payroll.totalDeductions}</span>
             <div className="text-xl font-black text-rose-600 mt-1">
-              {formatRupiah(selectedRun.total_deductions)}
+              {formatCurrency(selectedRun.total_deductions)}
             </div>
           </div>
           <div className="bg-white p-4 rounded-3xl border border-blue-200 bg-blue-50/50 shadow-2xs">
-            <span className="text-[11px] text-blue-700 font-semibold block">Total Gaji Bersih (Take Home)</span>
+            <span className="text-[11px] text-blue-700 font-semibold block">{t.payroll.takeHomePay}</span>
             <div className="text-xl font-black text-blue-700 mt-1">
-              {formatRupiah(selectedRun.total_take_home)}
+              {formatCurrency(selectedRun.total_take_home)}
             </div>
           </div>
         </div>
@@ -528,7 +530,7 @@ export const HRPayroll: React.FC = () => {
       <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
           <h3 className="font-bold text-sm text-slate-900">
-            Daftar Gaji Karyawan ({items.length} Penerima)
+            {t.payroll.title} ({items.length})
           </h3>
           <span className="text-xs text-slate-400 font-medium">Klik nama karyawan untuk melihat slip gaji resmi</span>
         </div>
@@ -537,16 +539,16 @@ export const HRPayroll: React.FC = () => {
           <table className="w-full text-left text-xs text-slate-600">
             <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
               <tr>
-                <th className="py-3 px-4 font-bold">Karyawan</th>
-                <th className="py-3 px-4 font-bold">PTKP</th>
-                <th className="py-3 px-4 font-bold">Gaji Pokok</th>
-                <th className="py-3 px-4 font-bold">Lembur</th>
-                <th className="py-3 px-4 font-bold">Penghasilan Bruto</th>
-                <th className="py-3 px-4 font-bold">BPJS Pegawai</th>
-                <th className="py-3 px-4 font-bold">PPh 21</th>
-                <th className="py-3 px-4 font-bold">Kasbon</th>
-                <th className="py-3 px-4 font-bold text-blue-700">Gaji Bersih (THP)</th>
-                <th className="py-3 px-4 font-bold text-right">Aksi</th>
+                <th className="py-3 px-4 font-bold">{t.employees.fullName}</th>
+                <th className="py-3 px-4 font-bold">{t.employees.ptkpStatus}</th>
+                <th className="py-3 px-4 font-bold">{t.employees.baseSalary}</th>
+                <th className="py-3 px-4 font-bold">{t.nav.shifts}</th>
+                <th className="py-3 px-4 font-bold">{t.payroll.grossEarnings}</th>
+                <th className="py-3 px-4 font-bold">BPJS</th>
+                <th className="py-3 px-4 font-bold">{t.payroll.pph21}</th>
+                <th className="py-3 px-4 font-bold">{t.nav.kasbon}</th>
+                <th className="py-3 px-4 font-bold text-blue-700">{t.payroll.takeHomePay}</th>
+                <th className="py-3 px-4 font-bold text-right">{t.common.action}</th>
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100">
@@ -559,18 +561,18 @@ export const HRPayroll: React.FC = () => {
                       <div className="text-[11px] text-slate-400">{it.job_title}</div>
                     </td>
                     <td className="py-3 px-4 font-semibold text-slate-700">{it.ptkp_status}</td>
-                    <td className="py-3 px-4 font-medium">{formatRupiah(it.base_salary)}</td>
+                    <td className="py-3 px-4 font-medium">{formatCurrency(it.base_salary)}</td>
                     <td className="py-3 px-4 text-emerald-600 font-medium">
-                      {it.overtime_pay > 0 ? formatRupiah(it.overtime_pay) : '-'}
+                      {it.overtime_pay > 0 ? formatCurrency(it.overtime_pay) : '-'}
                     </td>
-                    <td className="py-3 px-4 font-bold text-slate-900">{formatRupiah(it.gross_earnings)}</td>
-                    <td className="py-3 px-4 font-medium text-rose-600">{formatRupiah(totalBpjsEmp)}</td>
-                    <td className="py-3 px-4 font-medium text-rose-600">{formatRupiah(it.pph21_amount)}</td>
+                    <td className="py-3 px-4 font-bold text-slate-900">{formatCurrency(it.gross_earnings)}</td>
+                    <td className="py-3 px-4 font-medium text-rose-600">{formatCurrency(totalBpjsEmp)}</td>
+                    <td className="py-3 px-4 font-medium text-rose-600">{formatCurrency(it.pph21_amount)}</td>
                     <td className="py-3 px-4 font-medium text-rose-600">
-                      {it.kasbon_deduction > 0 ? formatRupiah(it.kasbon_deduction) : '-'}
+                      {it.kasbon_deduction > 0 ? formatCurrency(it.kasbon_deduction) : '-'}
                     </td>
                     <td className="py-3 px-4 font-black text-blue-700 text-sm">
-                      {formatRupiah(it.take_home_pay)}
+                      {formatCurrency(it.take_home_pay)}
                     </td>
                     <td className="py-3 px-4 text-right">
                       <div className="flex items-center justify-end gap-1.5">

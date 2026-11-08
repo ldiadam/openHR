@@ -9,10 +9,12 @@ import {
   ArrowLeft,
   ChevronRight,
 } from 'lucide-react';
-import { apiFetch, formatDateIndo } from '../api';
+import { apiFetch } from '../api';
+import { useLanguage } from '../context/LanguageContext';
 
 export const EmployeeAttendance: React.FC = () => {
   const navigate = useNavigate();
+  const { t, formatDate } = useLanguage();
   const [month, setMonth] = useState(new Date().toISOString().substring(0, 7));
   const [records, setRecords] = useState<any[]>([]);
   const [summary, setSummary] = useState<any>({});
@@ -69,15 +71,15 @@ export const EmployeeAttendance: React.FC = () => {
   const statusBadge = (status: string, lateMins: number) => {
     switch (status) {
       case 'present':
-        return <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Hadir</span>;
+        return <span className="bg-emerald-50 text-emerald-700 border border-emerald-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{t.attendance.presentOnTime}</span>;
       case 'late':
-        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Telat {lateMins}m</span>;
+        return <span className="bg-amber-50 text-amber-800 border border-amber-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{t.attendance.late} {lateMins}m</span>;
       case 'on_leave':
-        return <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Cuti</span>;
+        return <span className="bg-blue-50 text-blue-700 border border-blue-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{t.attendance.onLeave}</span>;
       case 'sick':
-        return <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Sakit</span>;
+        return <span className="bg-indigo-50 text-indigo-700 border border-indigo-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{t.attendance.sick}</span>;
       case 'absent':
-        return <span className="bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">Alpha</span>;
+        return <span className="bg-rose-50 text-rose-700 border border-rose-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{t.attendance.absent}</span>;
       default:
         return <span className="bg-slate-100 text-slate-700 border border-slate-200 text-[10px] font-semibold px-2 py-0.5 rounded-md">{status}</span>;
     }
@@ -93,7 +95,7 @@ export const EmployeeAttendance: React.FC = () => {
           className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-white text-slate-700 hover:bg-slate-50 font-medium text-xs transition cursor-pointer shadow-2xs"
         >
           <ArrowLeft size={14} />
-          <span>Kembali ke Beranda</span>
+          <span>{t.common.backToHome}</span>
         </button>
 
         <button
@@ -102,15 +104,15 @@ export const EmployeeAttendance: React.FC = () => {
           className="inline-flex items-center gap-1 px-3 py-1.5 rounded-lg bg-slate-900 hover:bg-slate-800 text-white font-medium text-xs transition cursor-pointer shadow-2xs"
         >
           <Clock size={13} />
-          <span>Clock In / Out</span>
+          <span>{t.attendance.clockIn} / {t.attendance.clockOut}</span>
         </button>
       </div>
 
       {/* Header & Month Selector */}
       <div className="flex items-center justify-between">
         <div>
-          <h2 className="text-lg font-bold text-slate-900 tracking-tight">Riwayat Presensi</h2>
-          <p className="text-xs text-slate-500">Rekap kehadiran & jam kerja bulanan</p>
+          <h2 className="text-lg font-bold text-slate-900 tracking-tight">{t.attendance.historyTitle}</h2>
+          <p className="text-xs text-slate-500">{t.attendance.historySubtitle}</p>
         </div>
         <div className="bg-white border border-slate-200 rounded-lg px-2.5 py-1 shadow-2xs">
           <input
@@ -135,7 +137,7 @@ export const EmployeeAttendance: React.FC = () => {
             <span>{msg.text}</span>
           </div>
           <button onClick={() => setMsg(null)} className="text-xs underline opacity-80 hover:opacity-100">
-            Tutup
+            {t.common.close}
           </button>
         </div>
       )}
@@ -143,15 +145,15 @@ export const EmployeeAttendance: React.FC = () => {
       {/* Summary Cards */}
       <div className="grid grid-cols-3 gap-2 text-center">
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[10px] text-slate-400 uppercase font-medium">Hadir Tepat</span>
+          <span className="text-[10px] text-slate-400 uppercase font-medium">{t.attendance.presentOnTime}</span>
           <div className="text-base font-bold text-emerald-700 mt-0.5">{summary.present || 0}</div>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[10px] text-slate-400 uppercase font-medium">Terlambat</span>
+          <span className="text-[10px] text-slate-400 uppercase font-medium">{t.attendance.late}</span>
           <div className="text-base font-bold text-amber-700 mt-0.5">{summary.late || 0}</div>
         </div>
         <div className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-[10px] text-slate-400 uppercase font-medium">Total Terlambat</span>
+          <span className="text-[10px] text-slate-400 uppercase font-medium">{t.attendance.totalLate}</span>
           <div className="text-base font-bold text-slate-800 mt-0.5">{summary.totalLateMinutes || 0}m</div>
         </div>
       </div>
@@ -162,16 +164,16 @@ export const EmployeeAttendance: React.FC = () => {
         className="w-full flex items-center justify-center gap-2 py-2.5 px-4 bg-white border border-slate-300 hover:border-slate-400 text-slate-800 rounded-xl font-medium text-xs transition cursor-pointer shadow-2xs"
       >
         <PlusCircle size={15} />
-        <span>Ajukan Koreksi Presensi (Lupa Clock In/Out)</span>
+        <span>{t.attendance.requestCorrection}</span>
       </button>
 
       {/* Daily Records List */}
       <div className="space-y-2">
         {loading ? (
-          <p className="text-center text-xs text-slate-400 py-8">Memuat log presensi...</p>
+          <p className="text-center text-xs text-slate-400 py-8">{t.common.loading}</p>
         ) : records.length === 0 ? (
           <div className="bg-white rounded-xl p-8 text-center text-xs text-slate-400 border border-slate-200">
-            Belum ada catatan presensi pada bulan ini.
+            {records.length === 0 && (summary.present === 0 ? 'Belum ada catatan presensi pada bulan ini.' : 'No attendance records this month.')}
           </div>
         ) : (
           records.map((r) => (
@@ -180,12 +182,12 @@ export const EmployeeAttendance: React.FC = () => {
               className="bg-white p-3 rounded-xl border border-slate-200 shadow-2xs flex items-center justify-between"
             >
               <div>
-                <div className="font-semibold text-xs text-slate-900">{formatDateIndo(r.date)}</div>
+                <div className="font-semibold text-xs text-slate-900">{formatDate(r.date)}</div>
                 <div className="text-[11px] text-slate-500 font-mono mt-0.5">
-                  Masuk: <span className="text-slate-800 font-medium">{r.clock_in_time || '--:--'}</span> | Pulang: <span className="text-slate-800 font-medium">{r.clock_out_time || '--:--'}</span>
+                  {t.attendance.todayMasuk}: <span className="text-slate-800 font-medium">{r.clock_in_time || '--:--'}</span> | {t.attendance.todayPulang}: <span className="text-slate-800 font-medium">{r.clock_out_time || '--:--'}</span>
                 </div>
                 {r.is_offline_sync === 1 && (
-                  <span className="text-[9px] text-amber-600 font-medium">Disinkron dari antrean offline</span>
+                  <span className="text-[9px] text-amber-600 font-medium">{t.common.syncedOffline}</span>
                 )}
               </div>
               <div>{statusBadge(r.status, r.late_minutes)}</div>
@@ -199,7 +201,7 @@ export const EmployeeAttendance: React.FC = () => {
         <div className="fixed inset-0 z-50 bg-black/50 backdrop-blur-xs flex items-center justify-center p-4">
           <div className="bg-white rounded-2xl max-w-sm w-full p-5 shadow-xl space-y-4">
             <div className="flex items-center justify-between pb-2 border-b border-slate-100">
-              <h3 className="font-bold text-slate-900 text-sm">Formulir Koreksi Presensi</h3>
+              <h3 className="font-bold text-slate-900 text-sm">{t.attendance.requestCorrection}</h3>
               <button
                 type="button"
                 onClick={() => setShowCorrectionModal(false)}
@@ -211,7 +213,7 @@ export const EmployeeAttendance: React.FC = () => {
 
             <form onSubmit={handleCorrectionSubmit} className="space-y-3 text-xs">
               <div>
-                <label className="block text-slate-600 font-medium mb-1">Tanggal *</label>
+                <label className="block text-slate-600 font-medium mb-1">{t.common.date} *</label>
                 <input
                   type="date"
                   required
@@ -223,7 +225,7 @@ export const EmployeeAttendance: React.FC = () => {
 
               <div className="grid grid-cols-2 gap-2">
                 <div>
-                  <label className="block text-slate-600 font-medium mb-1">Jam Masuk</label>
+                  <label className="block text-slate-600 font-medium mb-1">{t.attendance.todayMasuk}</label>
                   <input
                     type="time"
                     value={corrIn}
@@ -232,7 +234,7 @@ export const EmployeeAttendance: React.FC = () => {
                   />
                 </div>
                 <div>
-                  <label className="block text-slate-600 font-medium mb-1">Jam Pulang</label>
+                  <label className="block text-slate-600 font-medium mb-1">{t.attendance.todayPulang}</label>
                   <input
                     type="time"
                     value={corrOut}
@@ -243,13 +245,13 @@ export const EmployeeAttendance: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-600 font-medium mb-1">Alasan Koreksi *</label>
+                <label className="block text-slate-600 font-medium mb-1">{t.attendance.correctionReason} *</label>
                 <textarea
                   required
                   rows={3}
                   value={corrReason}
                   onChange={(e) => setCorrReason(e.target.value)}
-                  placeholder="Contoh: Lupa clock in karena ada kendala jaringan..."
+                  placeholder="Contoh: Lupa clock in / Forget to clock in..."
                   className="w-full p-2 border border-slate-300 rounded-lg text-slate-900"
                 />
               </div>
@@ -260,14 +262,14 @@ export const EmployeeAttendance: React.FC = () => {
                   onClick={() => setShowCorrectionModal(false)}
                   className="px-3 py-1.5 text-slate-600 hover:bg-slate-100 rounded-lg font-medium"
                 >
-                  Batal
+                  {t.common.cancel}
                 </button>
                 <button
                   type="submit"
                   disabled={submitting}
                   className="px-4 py-1.5 bg-slate-900 text-white rounded-lg font-medium hover:bg-slate-800 disabled:opacity-50 transition"
                 >
-                  {submitting ? 'Mengirim...' : 'Kirim Pengajuan'}
+                  {submitting ? t.common.submitting : t.common.submit}
                 </button>
               </div>
             </form>

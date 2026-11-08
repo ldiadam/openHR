@@ -18,6 +18,7 @@ import {
   ArrowRight,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
+import { useLanguage } from '../context/LanguageContext';
 import {
   apiFetch,
   formatRupiah,
@@ -29,6 +30,7 @@ import { PayslipModal } from '../components/PayslipModal';
 
 export const EmployeeHome: React.FC = () => {
   const { user } = useAuth();
+  const { t, lang, formatCurrency, formatDate } = useLanguage();
   const navigate = useNavigate();
 
   const [currentTime, setCurrentTime] = useState(new Date());
@@ -217,13 +219,13 @@ export const EmployeeHome: React.FC = () => {
     }
   };
 
-  const timeString = currentTime.toLocaleTimeString('id-ID', {
+  const timeString = currentTime.toLocaleTimeString(lang === 'id' ? 'id-ID' : 'en-US', {
     hour: '2-digit',
     minute: '2-digit',
     second: '2-digit',
   });
 
-  const dateString = currentTime.toLocaleDateString('id-ID', {
+  const dateString = currentTime.toLocaleDateString(lang === 'id' ? 'id-ID' : 'en-US', {
     weekday: 'long',
     day: 'numeric',
     month: 'long',
@@ -237,7 +239,7 @@ export const EmployeeHome: React.FC = () => {
         <div className="flex items-center justify-between">
           <div>
             <span className="text-[10px] font-semibold tracking-wider text-slate-500 uppercase">
-              Portal Karyawan (ESS)
+              {t.attendance.essPortal}
             </span>
             <h2 className="text-base font-bold text-slate-900 mt-0.5">{user?.name}</h2>
             <p className="text-xs text-slate-500">{user?.jobTitle || 'Staff'}</p>
@@ -248,7 +250,7 @@ export const EmployeeHome: React.FC = () => {
             className="flex items-center gap-1.5 px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 text-xs font-medium transition cursor-pointer"
           >
             <History size={13} />
-            <span>Riwayat</span>
+            <span>{t.attendance.historyTitle}</span>
           </button>
         </div>
 
@@ -272,7 +274,7 @@ export const EmployeeHome: React.FC = () => {
             className="text-[11px] font-semibold text-slate-600 hover:text-slate-900 inline-flex items-center gap-1 cursor-pointer disabled:opacity-50"
           >
             <RefreshCw size={11} className={detectingGps ? 'animate-spin' : ''} />
-            <span>Segarkan</span>
+            <span>{t.common.refresh}</span>
           </button>
         </div>
       </div>
@@ -283,9 +285,9 @@ export const EmployeeHome: React.FC = () => {
           <div className="flex items-start gap-2">
             <ShieldAlert size={18} className="text-rose-600 shrink-0 mt-0.5" />
             <div>
-              <p className="font-bold">Akses Lokasi (GPS) Wajib Diaktifkan</p>
+              <p className="font-bold">{t.attendance.gpsBlockedTitle}</p>
               <p className="text-[11px] text-rose-700 mt-0.5 leading-relaxed">
-                Sistem mendeteksi izin lokasi diblokir atau GPS nonaktif. Sesuai kebijakan perusahaan, presensi tidak dapat dilakukan tanpa koordinat GPS yang valid.
+                {t.attendance.gpsBlockedDesc}
               </p>
             </div>
           </div>
@@ -294,7 +296,7 @@ export const EmployeeHome: React.FC = () => {
             onClick={detectLocation}
             className="w-full py-1.5 px-3 bg-rose-600 hover:bg-rose-700 text-white rounded-lg font-medium text-xs transition cursor-pointer"
           >
-            Coba Izinkan & Deteksi Lokasi Sekarang
+            {t.attendance.gpsRetryBtn}
           </button>
         </div>
       )}
@@ -312,7 +314,7 @@ export const EmployeeHome: React.FC = () => {
             <span className="font-medium">{feedback.message}</span>
           </div>
           <button onClick={() => setFeedback(null)} className="text-xs underline opacity-80 hover:opacity-100">
-            Tutup
+            {t.common.close}
           </button>
         </div>
       )}
@@ -341,14 +343,14 @@ export const EmployeeHome: React.FC = () => {
             <Clock size={16} />
             <span>
               {submitting
-                ? 'Memproses Presensi...'
+                ? t.common.submitting
                 : !coords
-                ? 'GPS Belum Diizinkan (Presensi Dikunci)'
+                ? t.attendance.gpsRequiredNotice
                 : clockAction === 'in'
                 ? attendanceConfig.require_selfie
-                  ? 'Presensi Masuk (Buka Kamera Selfie)'
-                  : 'Presensi Masuk Sekarang'
-                : 'Presensi Pulang'}
+                  ? t.attendance.clockInWithSelfie
+                  : t.attendance.clockInNow
+                : t.attendance.clockOut}
             </span>
           </button>
 
@@ -361,7 +363,7 @@ export const EmployeeHome: React.FC = () => {
               className="w-full py-2 px-3 border border-slate-200 hover:bg-slate-50 text-slate-700 rounded-lg text-xs font-medium inline-flex items-center justify-center gap-1.5 transition cursor-pointer"
             >
               <Camera size={13} className="text-slate-500" />
-              <span>Sertakan Foto Selfie (Opsional)</span>
+              <span>{t.attendance.takeSelfieOptional}</span>
             </button>
           )}
         </div>
@@ -370,21 +372,26 @@ export const EmployeeHome: React.FC = () => {
         <div className="text-[11px] text-slate-400 flex items-center justify-center gap-1.5">
           <ShieldCheck size={13} className="text-slate-400" />
           <span>
-            Kebijakan: Lokasi GPS Wajib | Foto Selfie{' '}
-            {attendanceConfig.require_selfie ? 'Wajib' : 'Opsional'}
+            {attendanceConfig.require_selfie
+              ? t.attendance.policyNoticeMandatory
+              : t.attendance.policyNoticeOptional}
           </span>
         </div>
 
         {/* Today's Log Summary */}
         <div className="pt-4 border-t border-slate-100 grid grid-cols-2 gap-4 text-xs">
           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-            <span className="text-[10px] text-slate-500 uppercase block font-medium">Jam Masuk</span>
+            <span className="text-[10px] text-slate-500 uppercase block font-medium">
+              {t.attendance.todayMasuk}
+            </span>
             <span className="font-bold text-slate-900 font-mono text-sm">
               {todayAttendance?.clock_in_time || '--:--'}
             </span>
           </div>
           <div className="bg-slate-50 p-2.5 rounded-xl border border-slate-100">
-            <span className="text-[10px] text-slate-500 uppercase block font-medium">Jam Pulang</span>
+            <span className="text-[10px] text-slate-500 uppercase block font-medium">
+              {t.attendance.todayPulang}
+            </span>
             <span className="font-bold text-slate-900 font-mono text-sm">
               {todayAttendance?.clock_out_time || '--:--'}
             </span>
@@ -399,11 +406,11 @@ export const EmployeeHome: React.FC = () => {
           className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs cursor-pointer hover:border-slate-300 transition"
         >
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="text-[11px] font-medium">Sisa Cuti Tahunan</span>
+            <span className="text-[11px] font-medium">{t.leave.annualLeaveBalance}</span>
             <Calendar size={14} className="text-slate-400" />
           </div>
           <div className="text-lg font-bold text-slate-900">
-            {leaveBalance} <span className="text-xs font-normal text-slate-500">Hari</span>
+            {leaveBalance} <span className="text-xs font-normal text-slate-500">{t.common.days}</span>
           </div>
         </div>
 
@@ -412,11 +419,11 @@ export const EmployeeHome: React.FC = () => {
           className="bg-white p-3.5 rounded-xl border border-slate-200 shadow-2xs cursor-pointer hover:border-slate-300 transition"
         >
           <div className="flex items-center justify-between text-slate-500 text-xs mb-1">
-            <span className="text-[11px] font-medium">Slip Gaji Terakhir</span>
+            <span className="text-[11px] font-medium">{t.payroll.slipGaji}</span>
             <DollarSign size={14} className="text-slate-400" />
           </div>
           <div className="text-sm font-bold text-slate-900 truncate">
-            {latestPayslip ? formatRupiah(latestPayslip.take_home_pay) : 'Belum Ada'}
+            {latestPayslip ? formatCurrency(latestPayslip.take_home_pay) : '-'}
           </div>
         </div>
       </div>
@@ -424,44 +431,44 @@ export const EmployeeHome: React.FC = () => {
       {/* QUICK REQUEST SHORTCUTS (Thumb Optimized) */}
       <div className="bg-white rounded-2xl p-4 border border-slate-200 shadow-2xs space-y-2.5">
         <h3 className="font-bold text-slate-900 text-xs tracking-tight">
-          Layanan Mandiri (Self-Service)
+          {t.nav.requests}
         </h3>
 
         <div className="grid grid-cols-2 gap-2">
           <button
             type="button"
             onClick={() => navigate('/app/requests?type=leave')}
-            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800 cursor-pointer"
           >
             <Calendar size={15} className="text-blue-600 shrink-0" />
-            <span className="truncate">Cuti & Izin</span>
+            <span className="truncate">{t.nav.leave}</span>
           </button>
 
           <button
             type="button"
             onClick={() => navigate('/app/requests?type=overtime')}
-            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800 cursor-pointer"
           >
             <Clock size={15} className="text-amber-600 shrink-0" />
-            <span className="truncate">Lembur</span>
+            <span className="truncate">{t.shifts.requestOvertime}</span>
           </button>
 
           <button
             type="button"
             onClick={() => navigate('/app/requests?type=kasbon')}
-            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800 cursor-pointer"
           >
             <CreditCard size={15} className="text-purple-600 shrink-0" />
-            <span className="truncate">Kasbon</span>
+            <span className="truncate">{t.kasbon.requestKasbon}</span>
           </button>
 
           <button
             type="button"
             onClick={() => navigate('/app/requests?type=reimbursement')}
-            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800"
+            className="flex items-center gap-2 p-2.5 rounded-lg border border-slate-200 hover:bg-slate-50 text-left transition text-xs font-medium text-slate-800 cursor-pointer"
           >
             <Receipt size={15} className="text-emerald-600 shrink-0" />
-            <span className="truncate">Klaim Biaya</span>
+            <span className="truncate">{t.kasbon.requestClaim}</span>
           </button>
         </div>
       </div>
