@@ -31,6 +31,51 @@ shiftRoutes.post('/patterns', requireRole(['owner_admin']), async (c) => {
   return c.json({ message: 'Pola shift berhasil ditambahkan', shiftId: id });
 });
 
+// Update Shift Pattern
+shiftRoutes.put('/patterns/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  const body = await c.req.json();
+  const { name, code, start_time, end_time, break_minutes } = body;
+
+  const existing = await c.env.DB.prepare(`SELECT * FROM shift_patterns WHERE id = ?`).bind(id).first<any>();
+  if (!existing) {
+    return c.json({ error: 'Pola shift tidak ditemukan' }, 404);
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE shift_patterns SET
+      name = COALESCE(?, name),
+      code = COALESCE(?, code),
+      start_time = COALESCE(?, start_time),
+      end_time = COALESCE(?, end_time),
+      break_minutes = COALESCE(?, break_minutes),
+      updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(
+      name || null,
+      code || null,
+      start_time || null,
+      end_time || null,
+      break_minutes !== undefined ? parseInt(break_minutes, 10) : null,
+      id
+    )
+    .run();
+
+  return c.json({ message: 'Pola shift berhasil diperbarui.' });
+});
+
+// Delete Shift Pattern
+shiftRoutes.delete('/patterns/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  if (id === 'shift-reg') {
+    return c.json({ error: 'Pola shift standar perusahaan tidak dapat dihapus.' }, 400);
+  }
+
+  await c.env.DB.prepare(`DELETE FROM shift_patterns WHERE id = ?`).bind(id).run();
+  return c.json({ message: 'Pola shift berhasil dihapus.' });
+});
+
 // 2. Weekly Roster Grid
 shiftRoutes.get('/roster', async (c) => {
   const startDate = c.req.query('start_date'); // YYYY-MM-DD
@@ -119,12 +164,13 @@ shiftRoutes.get('/overtime/requests', async (c) => {
   `;
 
   const params: any[] = [];
-  if (user.role === 'manager') {
-    query += ` WHERE e.manager_id = ? OR e.id = ?`;
-    params.push(user.employeeId, user.employeeId);
-  } else if (user.role === 'employee') {
+  const onlyMine = c.req.query('scope') === 'mine' || user.role === 'employee';
+  if (onlyMine) {
     query += ` WHERE ot.employee_id = ?`;
     params.push(user.employeeId);
+  } else if (user.role === 'manager') {
+    query += ` WHERE (e.manager_id = ? OR e.id = ?)`;
+    params.push(user.employeeId, user.employeeId);
   }
 
   query += ` ORDER BY ot.date DESC, ot.created_at DESC`;

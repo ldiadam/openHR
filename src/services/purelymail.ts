@@ -2,7 +2,8 @@ import { Bindings } from '../types';
 
 export interface CreateMailboxParams {
   userName: string;
-  domainName: string;
+  domainName?: string;
+  apiToken?: string;
   password?: string;
   recoveryEmail?: string;
   recoveryPhone?: string;
@@ -26,9 +27,26 @@ export async function createPurelymailUser(
   env: Bindings,
   params: CreateMailboxParams
 ): Promise<PurelymailResult> {
-  const apiToken = env.PURELYMAIL_API_TOKEN;
+  let apiToken = params.apiToken;
+  let domainName = params.domainName;
+
+  if (!apiToken || !domainName) {
+    try {
+      const comp = await env.DB.prepare(
+        `SELECT purelymail_api_token, purelymail_domain FROM companies LIMIT 1`
+      ).first<any>();
+      if (comp) {
+        apiToken = apiToken || comp.purelymail_api_token;
+        domainName = domainName || comp.purelymail_domain;
+      }
+    } catch {
+      // ignore
+    }
+  }
+
+  apiToken = apiToken || env.PURELYMAIL_API_TOKEN;
+  domainName = domainName || env.PURELYMAIL_DOMAIN || 'company.id';
   const baseUrl = env.PURELYMAIL_API_BASE_URL || 'https://purelymail.com';
-  const domainName = params.domainName || env.PURELYMAIL_DOMAIN || 'company.id';
 
   if (!apiToken) {
     console.log(

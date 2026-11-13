@@ -1,7 +1,10 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
-import { getLeaveStatusEmail, sendEmail } from '../services/smtp';
+import { sendEmailInBackground } from '../services/smtp';
+import { getLeaveStatusEmail } from '../services/email-templates';
+import { getFile, putFile } from '../services/storage';
+import { makeId } from '../utils/id';
 
 export const leaveRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -86,10 +89,17 @@ leaveRoutes.post('/adjust-balance', requireRole(['owner_admin']), async (c) => {
     return c.json({ error: 'Karyawan, jenis cuti, jumlah hari, dan alasan wajib diisi' }, 400);
   }
 
+  // Resolve employee by id or nik
+  let targetEmpId = employee_id;
+  const emp = await c.env.DB.prepare('SELECT id FROM employees WHERE id = ? OR nik = ?').bind(employee_id, employee_id).first<any>();
+  if (emp) {
+    targetEmpId = emp.id;
+  }
+
   const balance = await c.env.DB.prepare(
     `SELECT * FROM leave_balances WHERE employee_id = ? AND leave_type_id = ?`
   )
-    .bind(employee_id, leave_type_id)
+    .bind(targetEmpId, leave_type_id)
     .first<any>();
 
   const currentTotal = balance ? balance.total_entitled : 12;
@@ -119,8 +129,8 @@ leaveRoutes.post('/adjust-balance', requireRole(['owner_admin']), async (c) => {
       )`
     )
       .bind(
-        `bal-${employee_id}-${leave_type_id}`,
-        employee_id,
+        `bal-${targetEmpId}-${leave_type_id}`,
+        targetEmpId,
         leave_type_id,
         currentTotal,
         currentUsed,
@@ -137,7 +147,7 @@ leaveRoutes.post('/adjust-balance', requireRole(['owner_admin']), async (c) => {
      VALUES (?, 'default', ?, 'ADJUST_LEAVE_BALANCE', 'leave_balances', ?, ?)`
   )
     .bind(
-      `aud-${Date.now()}`,
+      makeId('aud'),
       user.userId,
       employee_id,
       JSON.stringify({ leave_type_id, adjustment_days, reason, newRemaining })
@@ -158,6 +168,10 @@ leaveRoutes.post('/requests', async (c) => {
     return c.json({ error: 'Mohon lengkapi semua field formulir pengajuan cuti' }, 400);
   }
 
+  if (end_date < start_date) {
+    return c.json({ error: 'Tanggal selesai tidak boleh sebelum tanggal mulai.' }, 400);
+  }
+
   // Validate balance if annual leave
   const lt = await c.env.DB.prepare(`SELECT * FROM leave_types WHERE id = ?`).bind(leave_type_id).first<any>();
   if (lt && lt.code === 'annual') {
@@ -175,6 +189,22 @@ leaveRoutes.post('/requests', async (c) => {
   }
 
   const reqId = `lvr-${Date.now()}`;
+
+  let savedAttachmentKey = attachment_key || null;
+  if (typeof body.attachment_base64 === 'string' && body.attachment_base64.length > 0) {
+    savedAttachmentKey = `leave/${employeeId}/${reqId}-${Date.now()}`;
+    const raw = body.attachment_base64.includes(',')
+      ? body.attachment_base64.split(',').pop() || ''
+      : body.attachment_base64;
+    const binary = atob(raw);
+    const bytes = Uint8Array.from(binary, (char: string) => char.charCodeAt(0));
+    await putFile(c.env, {
+      key: savedAttachmentKey,
+      data: bytes,
+      contentType: body.attachment_mime || 'image/jpeg',
+    });
+  }
+
   await c.env.DB.prepare(
     `INSERT INTO leave_requests (
       id, tenant_id, employee_id, leave_type_id, start_date, end_date, total_days, reason, attachment_key, status
@@ -190,11 +220,31 @@ leaveRoutes.post('/requests', async (c) => {
       end_date,
       parseFloat(total_days),
       reason,
-      attachment_key || null
+      savedAttachmentKey
     )
     .run();
 
   return c.json({ message: 'Pengajuan cuti berhasil diajukan dan menunggu persetujuan.', requestId: reqId });
+});
+
+// 5b. Serve leave attachment (self or HR/manager/finance)
+leaveRoutes.get('/requests/:id/attachment', async (c) => {
+  const user = c.get('user');
+  const req = await c.env.DB.prepare(`SELECT * FROM leave_requests WHERE id = ?`)
+    .bind(c.req.param('id'))
+    .first<any>();
+
+  if (!req || !req.attachment_key) return c.json({ error: 'Lampiran tidak ditemukan' }, 404);
+  if (user.role === 'employee' && user.employeeId !== req.employee_id) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const stored = await getFile(c.env, req.attachment_key);
+  if (!stored) return c.json({ error: 'File fisik tidak ditemukan' }, 404);
+
+  c.header('Content-Type', stored.contentType || 'application/octet-stream');
+  c.header('Content-Disposition', 'inline');
+  return c.body(stored.data as any);
 });
 
 // 6. List Leave Requests (Approval Inbox)
@@ -210,12 +260,13 @@ leaveRoutes.get('/requests', async (c) => {
   `;
 
   const params: any[] = [];
-  if (user.role === 'manager') {
-    query += ` WHERE e.manager_id = ? OR e.id = ?`;
-    params.push(user.employeeId, user.employeeId);
-  } else if (user.role === 'employee') {
+  const onlyMine = c.req.query('scope') === 'mine' || user.role === 'employee';
+  if (onlyMine) {
     query += ` WHERE lr.employee_id = ?`;
     params.push(user.employeeId);
+  } else if (user.role === 'manager') {
+    query += ` WHERE (e.manager_id = ? OR e.id = ?)`;
+    params.push(user.employeeId, user.employeeId);
   }
 
   query += ` ORDER BY lr.created_at DESC`;
@@ -299,6 +350,12 @@ leaveRoutes.post('/requests/:id/review', requireRole(['owner_admin', 'manager'])
 
   const emailTarget = req.company_email || req.personal_email;
   if (emailTarget) {
+    const comp = await c.env.DB.prepare(
+      `SELECT name, legal_name, custom_domain FROM companies LIMIT 1`
+    ).first<any>();
+    const appUrl = comp?.custom_domain
+      ? (comp.custom_domain.startsWith('http') ? comp.custom_domain : `https://${comp.custom_domain}`)
+      : (c.env.APP_URL || undefined);
     const emailData = getLeaveStatusEmail({
       employeeName: req.full_name,
       leaveType: req.leave_type_name,
@@ -308,10 +365,12 @@ leaveRoutes.post('/requests/:id/review', requireRole(['owner_admin', 'manager'])
       status: status as any,
       reviewerName,
       note,
+      appUrl,
+      companyName: comp?.legal_name || comp?.name,
     });
-    await sendEmail(c.env, {
+    sendEmailInBackground(c, c.env, {
       to: emailTarget,
-      subject: `Status Pengajuan Cuti Anda: ${status === 'approved' ? 'Disetujui' : 'Ditolak'}`,
+      subject: `Pengajuan cuti ${status === 'approved' ? 'disetujui' : 'ditolak'} (Leave ${status === 'approved' ? 'approved' : 'rejected'})`,
       text: emailData.text,
       html: emailData.html,
       type: 'leave_status',

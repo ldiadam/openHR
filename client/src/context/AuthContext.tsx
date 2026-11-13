@@ -1,5 +1,5 @@
 import React, { createContext, useContext, useEffect, useState } from 'react';
-import { apiFetch, clearToken, getStoredUser, setStoredUser, setToken } from '../api';
+import { apiFetch, clearToken, getStoredUser, setStoredUser, setToken, getToken } from '../api';
 
 interface User {
   id: string;
@@ -33,6 +33,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
   const [loading, setLoading] = useState<boolean>(true);
 
   const refreshUser = async () => {
+    const token = getToken();
+    if (!token) {
+      setUser(null);
+      setLoading(false);
+      return;
+    }
     try {
       const res = await apiFetch('/auth/me');
       if (res.user) {
@@ -51,9 +57,17 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
         setUser(u);
         setStoredUser(u);
       }
-    } catch {
-      setUser(null);
-      clearToken();
+    } catch (err: any) {
+      const offline = typeof navigator !== 'undefined' && !navigator.onLine;
+      const isAuthFailure = err?.status === 401 || err?.status === 403;
+
+      if (offline || !isAuthFailure) {
+        // Keep the last known session so the cached app shell stays usable offline.
+        setUser(getStoredUser());
+      } else {
+        setUser(null);
+        clearToken();
+      }
     } finally {
       setLoading(false);
     }
@@ -61,6 +75,12 @@ export const AuthProvider: React.FC<{ children: React.ReactNode }> = ({ children
 
   useEffect(() => {
     refreshUser();
+
+    const handleOnline = () => {
+      if (getToken()) refreshUser();
+    };
+    window.addEventListener('online', handleOnline);
+    return () => window.removeEventListener('online', handleOnline);
   }, []);
 
   const login = async (email: string, pass: string): Promise<User> => {

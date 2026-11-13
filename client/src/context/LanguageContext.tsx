@@ -4,7 +4,10 @@ import { translations, Language } from '../i18n/translations';
 interface LanguageContextType {
   lang: Language;
   setLang: (lang: Language) => void;
+  language: Language;
+  setLanguage: (lang: Language) => void;
   t: typeof translations.id;
+  tr: (id: string, en: string) => string;
   formatDate: (dateStr: string) => string;
   formatCurrency: (amount: number) => string;
 }
@@ -23,6 +26,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   const t = translations[lang] || translations.id;
+  const tr = (id: string, en: string) => (lang === 'en' ? en : id);
 
   const formatDate = (dateStr: string): string => {
     if (!dateStr) return '-';
@@ -48,7 +52,7 @@ export const LanguageProvider: React.FC<{ children: React.ReactNode }> = ({ chil
   };
 
   return (
-    <LanguageContext.Provider value={{ lang, setLang, t, formatDate, formatCurrency }}>
+    <LanguageContext.Provider value={{ lang, setLang, language: lang, setLanguage: setLang, t, tr, formatDate, formatCurrency }}>
       {children}
     </LanguageContext.Provider>
   );

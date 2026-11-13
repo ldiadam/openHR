@@ -2,11 +2,43 @@ import { Hono } from 'hono';
 import { Bindings, PayrollSettingsModel } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
 import { calculateEmployeePayroll } from '../services/payroll-calc';
-import { getPayslipReadyEmail, sendEmail } from '../services/smtp';
+import { sendEmail, runInBackground } from '../services/smtp';
+import { getPayslipReadyEmail } from '../services/email-templates';
+import { makeId } from '../utils/id';
 
 export const payrollRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
 payrollRoutes.use('*', authMiddleware);
+
+function countWorkingDays(start: string, end: string, holidays: Set<string>): number {
+  return listWorkingDays(start, end, holidays).length;
+}
+
+function maxDate(a: string, b: string): string {
+  return a > b ? a : b;
+}
+
+function minDate(a: string, b: string): string {
+  return a < b ? a : b;
+}
+
+/** Every working day (Mon–Fri, excluding holidays) inside an inclusive range. */
+function listWorkingDays(start: string, end: string, holidays: Set<string>): string[] {
+  const startDate = new Date(`${String(start).slice(0, 10)}T00:00:00`);
+  const endDate = new Date(`${String(end).slice(0, 10)}T00:00:00`);
+  if (Number.isNaN(startDate.getTime()) || Number.isNaN(endDate.getTime()) || endDate < startDate) {
+    return [];
+  }
+  const days: string[] = [];
+  for (let day = new Date(startDate); day <= endDate; day.setDate(day.getDate() + 1)) {
+    const weekday = day.getDay();
+    if (weekday === 0 || weekday === 6) continue;
+    const iso = `${day.getFullYear()}-${String(day.getMonth() + 1).padStart(2, '0')}-${String(day.getDate()).padStart(2, '0')}`;
+    if (holidays.has(iso)) continue;
+    days.push(iso);
+  }
+  return days;
+}
 
 // Helper to get active settings
 async function getActivePayrollSettings(db: D1Database): Promise<PayrollSettingsModel> {
@@ -58,6 +90,217 @@ payrollRoutes.post('/runs', requireRole(['owner_admin']), async (c) => {
   return c.json({ message: 'Periode payroll berhasil dibuka (Draft)', runId });
 });
 
+// 2a. Delete an open payroll run (locked/paid periods are immutable)
+payrollRoutes.delete('/runs/:id', requireRole(['owner_admin']), async (c) => {
+  const runId = c.req.param('id');
+  const user = c.get('user');
+  const run = await c.env.DB.prepare(`SELECT * FROM payroll_runs WHERE id = ?`).bind(runId).first<any>();
+
+  if (!run) return c.json({ error: 'Payroll run tidak ditemukan' }, 404);
+  if (run.status === 'locked' || run.status === 'paid') {
+    return c.json({ error: 'Payroll run yang sudah dikunci atau dibayar tidak dapat dihapus' }, 400);
+  }
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(`UPDATE reimbursements SET payroll_run_id = NULL WHERE payroll_run_id = ?`).bind(runId),
+    c.env.DB.prepare(`DELETE FROM payroll_items WHERE payroll_run_id = ?`).bind(runId),
+    c.env.DB.prepare(`DELETE FROM payroll_exceptions WHERE payroll_run_id = ?`).bind(runId),
+    c.env.DB.prepare(`DELETE FROM payroll_runs WHERE id = ?`).bind(runId),
+  ]);
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, old_values)
+     VALUES (?, 'default', ?, 'DELETE_PAYROLL_RUN', 'payroll_runs', ?, ?)`
+  )
+    .bind(makeId('aud'), user.userId, runId, JSON.stringify({ title: run.title, status: run.status }))
+    .run();
+
+  return c.json({ message: 'Periode payroll berhasil dihapus.' });
+});
+
+// 2b. THR run (Tunjangan Hari Raya / 13th-month equivalent)
+payrollRoutes.post('/runs/thr', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const paymentDate = body.payment_date;
+  if (!paymentDate) {
+    return c.json({ error: 'Tanggal pembayaran THR wajib diisi' }, 400);
+  }
+
+  const [yearStr, monthStr] = String(paymentDate).split('-');
+  const year = Number(yearStr);
+  const month = Number(monthStr);
+  if (!year || !month) return c.json({ error: 'Tanggal pembayaran tidak valid' }, 400);
+
+  const periodStart = `${yearStr}-${monthStr}-01`;
+  const lastDay = new Date(year, month, 0).getDate();
+  const periodEnd = `${yearStr}-${monthStr}-${String(lastDay).padStart(2, '0')}`;
+  const runId = `prun-thr-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
+  const title = body.title || `THR ${year}`;
+
+  await c.env.DB.prepare(
+    `INSERT INTO payroll_runs (
+      id, tenant_id, period_start, period_end, payment_date, title, status, run_type, notes
+    ) VALUES (?, 'default', ?, ?, ?, ?, 'draft', 'thr', ?)`
+  )
+    .bind(runId, periodStart, periodEnd, paymentDate, title, body.notes || null)
+    .run();
+
+  const settings = await getActivePayrollSettings(c.env.DB);
+  const employees = await c.env.DB.prepare(
+    `SELECT e.*, d.name as department_name
+     FROM employees e
+     LEFT JOIN departments d ON e.department_id = d.id
+     WHERE e.lifecycle_status IN ('active', 'probation', 'on_leave')
+       AND COALESCE(e.exclude_from_payroll, 0) = 0
+       AND e.join_date <= ?`
+  )
+    .bind(paymentDate)
+    .all<any>();
+
+  let count = 0;
+  for (const emp of employees.results || []) {
+    const join = new Date(`${emp.join_date}T00:00:00`);
+    const pay = new Date(`${paymentDate}T00:00:00`);
+    let months = (pay.getFullYear() - join.getFullYear()) * 12 + (pay.getMonth() - join.getMonth());
+    if (pay.getDate() < join.getDate()) months -= 1;
+    const daysRemainder = pay.getDate() >= join.getDate()
+      ? pay.getDate() - join.getDate()
+      : 30 - join.getDate() + pay.getDate();
+    const totalMonths = Math.max(0, months) + Math.max(0, daysRemainder) / 30;
+    const factor = Math.min(1, totalMonths / 12);
+    const wage = Number(emp.base_salary || 0) + Number(emp.fixed_allowances || 0);
+    const thrAmount = Math.round(wage * factor);
+    if (thrAmount <= 0) continue;
+
+    const calc = calculateEmployeePayroll(
+      {
+        id: emp.id,
+        nik: emp.nik,
+        full_name: emp.full_name,
+        ptkp_status: emp.ptkp_status,
+        base_salary: 0,
+        fixed_allowances: 0,
+        bpjs_wage_basis: emp.bpjs_wage_basis,
+        bank_name: emp.bank_name,
+        bank_account_number: emp.bank_account_number,
+        has_bpjs_tk: false,
+        has_bpjs_kes: false,
+        pays_own_tax: emp.pays_own_tax === 1 || emp.tax_scheme === 'self_paid',
+        tax_scheme: emp.tax_scheme || 'company_withheld',
+        days_worked: 0,
+        expected_working_days: 21,
+        late_minutes: 0,
+        unapproved_absence_days: 0,
+        overtime_weekday_hours: 0,
+        overtime_holiday_hours: 0,
+        kasbon_deduction: 0,
+        reimbursement_amount: 0,
+        thr_amount: thrAmount,
+      },
+      settings
+    );
+
+    await c.env.DB.prepare(
+      `INSERT INTO payroll_items (
+        id, tenant_id, payroll_run_id, employee_id,
+        employee_nik, employee_name, job_title, department_name, ptkp_status, bank_name, bank_account_number,
+        base_salary, fixed_allowance, prorated_salary, days_worked, expected_working_days,
+        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount,
+        gross_earnings, late_deduction, unpaid_leave_deduction, kasbon_deduction, other_deductions,
+        alpha_days, alpha_deduction,
+        bpjs_kes_employee, bpjs_jht_employee, bpjs_jp_employee, pph21_amount, pph21_method,
+        total_deductions, take_home_pay,
+        bpjs_kes_employer, bpjs_jht_employer, bpjs_jp_employer, bpjs_jkk_employer, bpjs_jkm_employer,
+        total_employer_cost
+      ) VALUES (
+        ?, 'default', ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?,
+        ?, ?, ?, ?, ?,
+        ?, ?,
+        ?, ?, ?, ?, ?,
+        ?
+      )`
+    )
+      .bind(
+        `pitem-${runId}-${emp.id}`,
+        runId,
+        emp.id,
+        emp.nik,
+        emp.full_name,
+        emp.job_title,
+        emp.department_name || '',
+        emp.ptkp_status,
+        emp.bank_name,
+        emp.bank_account_number,
+        0,
+        0,
+        0,
+        0,
+        21,
+        0,
+        0,
+        0,
+        0,
+        0,
+        calc.thr_amount,
+        calc.gross_earnings,
+        0, // late_deduction
+        0, // unpaid_leave_deduction
+        0, // kasbon_deduction
+        0, // other_deductions
+        0, // alpha_days
+        0, // alpha_deduction
+        calc.pph21_amount,
+        calc.pph21_method,
+        calc.total_deductions,
+        calc.take_home_pay,
+        calc.bpjs_kes_employer,
+        calc.bpjs_jht_employer,
+        calc.bpjs_jp_employer,
+        calc.bpjs_jkk_employer,
+        calc.bpjs_jkm_employer,
+        calc.total_employer_cost
+      )
+      .run();
+    count++;
+  }
+
+  const totals = await c.env.DB.prepare(
+    `SELECT COUNT(*) as emp_count,
+            COALESCE(SUM(gross_earnings), 0) as total_gross,
+            COALESCE(SUM(total_deductions), 0) as total_deductions,
+            COALESCE(SUM(take_home_pay), 0) as total_take_home,
+            COALESCE(SUM(total_employer_cost), 0) as total_employer_cost
+     FROM payroll_items WHERE payroll_run_id = ?`
+  )
+    .bind(runId)
+    .first<any>();
+
+  await c.env.DB.prepare(
+    `UPDATE payroll_runs SET status = 'calculated', employee_count = ?, total_gross = ?,
+      total_deductions = ?, total_take_home = ?, total_employer_cost = ? WHERE id = ?`
+  )
+    .bind(
+      totals?.emp_count || 0,
+      totals?.total_gross || 0,
+      totals?.total_deductions || 0,
+      totals?.total_take_home || 0,
+      totals?.total_employer_cost || 0,
+      runId
+    )
+    .run();
+
+  return c.json({
+    message: `Run THR berhasil dibuat untuk ${count} karyawan`,
+    runId,
+    employeeCount: count,
+  }, 201);
+});
+
 // 3. Step 2: Pull Inputs Automatically (Attendance, approved OT, leave, kasbon, reimbursements)
 payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async (c) => {
   const runId = c.req.param('id');
@@ -78,6 +321,7 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
      LEFT JOIN branches b ON e.branch_id = b.id
      WHERE (e.lifecycle_status IN ('active', 'probation', 'on_leave')
             OR (e.lifecycle_status IN ('resigned', 'terminated') AND e.last_working_date >= ?))
+       AND COALESCE(e.exclude_from_payroll, 0) = 0
        AND e.join_date <= ?`
   )
     .bind(run.period_start, run.period_end)
@@ -85,43 +329,107 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
 
   const empList = employees.results || [];
 
-  // Clear existing items and exceptions for this run before re-pulling
+  // Clear existing items and exceptions for this run before re-pulling.
+  // Manual/adjustment exceptions are regenerated below; resolved per-day rows are
+  // kept so an HR justification is never silently lost on a re-pull.
   await c.env.DB.batch([
     c.env.DB.prepare(`DELETE FROM payroll_items WHERE payroll_run_id = ?`).bind(runId),
-    c.env.DB.prepare(`DELETE FROM payroll_exceptions WHERE payroll_run_id = ?`).bind(runId),
+    c.env.DB.prepare(`DELETE FROM payroll_exceptions WHERE payroll_run_id = ? AND resolved = 0`).bind(runId),
+    c.env.DB.prepare(`UPDATE reimbursements SET payroll_run_id = NULL WHERE payroll_run_id = ?`).bind(runId),
   ]);
+
+  // Proration divisor is the working days of the payroll month (period end), per README
+  const payrollYear = Number(String(run.period_end).slice(0, 4));
+  const payrollMonth = Number(String(run.period_end).slice(5, 7));
+  const payrollMonthPrefix = String(run.period_end).slice(0, 7);
+  const monthStart = `${payrollMonthPrefix}-01`;
+  const lastDayOfMonth = new Date(payrollYear, payrollMonth, 0).getDate();
+  const monthEnd = `${payrollMonthPrefix}-${String(lastDayOfMonth).padStart(2, '0')}`;
+  const holidayRangeEnd = monthEnd > run.period_end ? monthEnd : run.period_end;
+
+  const holidayRows = await c.env.DB.prepare(
+    `SELECT date FROM holidays WHERE date BETWEEN ? AND ?`
+  )
+    .bind(run.period_start, holidayRangeEnd)
+    .all<any>();
+  const holidaySet = new Set(
+    (holidayRows.results || []).map((h: any) => String(h.date).slice(0, 10))
+  );
+  const expectedWorkingDays = countWorkingDays(monthStart, monthEnd, holidaySet) || 21;
 
   let exceptionCount = 0;
 
   for (const emp of empList) {
     // 1. Attendance Summary
+    // `date` is required below to know which working days are actually logged.
     const attRows = await c.env.DB.prepare(
-      `SELECT status, late_minutes, actual_work_minutes FROM attendance
+      `SELECT date, status, late_minutes, actual_work_minutes FROM attendance
        WHERE employee_id = ? AND date BETWEEN ? AND ?`
     )
       .bind(emp.id, run.period_start, run.period_end)
       .all<any>();
 
     const attList = attRows.results || [];
-    const daysWorked = attList.filter((a) => a.status === 'present' || a.status === 'late' || a.status === 'early_leave').length;
     const lateMinutesTotal = attList.reduce((acc, a) => acc + (a.late_minutes || 0), 0);
     const unapprovedAbsenceDays = attList.filter((a) => a.status === 'absent').length;
 
-    // Check missing attendance (e.g. 0 records for an active employee)
-    if (attList.length === 0) {
+    const isNewJoiner = emp.join_date > run.period_start && emp.join_date <= run.period_end;
+    const isLeaver = emp.last_working_date && emp.last_working_date >= run.period_start && emp.last_working_date < run.period_end;
+    const effectiveStart = isNewJoiner && emp.join_date > run.period_start ? emp.join_date : run.period_start;
+    const effectiveEnd = isLeaver && emp.last_working_date ? emp.last_working_date : run.period_end;
+    const employmentDays = countWorkingDays(effectiveStart, effectiveEnd, holidaySet);
+    const expectedAttendanceDays = isNewJoiner || isLeaver ? employmentDays : expectedWorkingDays;
+
+    // Approved leave already writes an on_leave/sick attendance row, so any working
+    // day WITHOUT a row is an unexplained no-show. One exception row per missing day.
+    //
+    // The audited window is the whole payroll PERIOD (e.g. 25 Oct → 25 Nov), not the
+    // calendar month: the first days of a 25→25 period belong to this run and would
+    // otherwise never be checked. It is still clipped to the employment window and to
+    // period_end so future days are never treated as absences.
+    //
+    // The daily RATE stays base ÷ working days of the payroll month, but the count is
+    // capped at that month's working days (see calculateEmployeePayroll), so a longer
+    // period can never deduct more than one month of salary.
+    const loggedDays = new Set(attList.map((a: any) => String(a.date).slice(0, 10)));
+    const attendanceWindowStart = maxDate(effectiveStart, run.period_start);
+    const attendanceWindowEnd = minDate(effectiveEnd, run.period_end);
+
+    const requiredDays = listWorkingDays(attendanceWindowStart, attendanceWindowEnd, holidaySet);
+    const missingDays = requiredDays.filter((day) => !loggedDays.has(day));
+    for (const missingDate of missingDays) {
       await c.env.DB.prepare(
-        `INSERT INTO payroll_exceptions (id, tenant_id, payroll_run_id, employee_id, exception_type, severity, description)
-         VALUES (?, 'default', ?, ?, 'missing_attendance', 'warning', ?)`
+        `INSERT OR IGNORE INTO payroll_exceptions (
+           id, tenant_id, payroll_run_id, employee_id, exception_type, severity,
+           description, exception_date
+         ) VALUES (?, 'default', ?, ?, 'missing_attendance', 'warning', ?, ?)`
       )
         .bind(
-          `exc-${Date.now()}-${emp.id}`,
+          `exc-miss-${runId}-${emp.id}-${missingDate}`,
           runId,
           emp.id,
-          `Tidak ada log presensi untuk ${emp.full_name} pada periode ${run.period_start} s/d ${run.period_end}`
+          `Tidak ada log presensi untuk ${emp.full_name} pada ${missingDate}. Tandai alpa (potong otomatis) atau lampirkan alasan.`,
+          missingDate
         )
         .run();
       exceptionCount++;
     }
+
+    // A missing day that HR has already resolved (approved leave, manual attendance,
+    // accepted, etc.) is justified and must NOT be deducted as alpha.
+    const resolvedDates = new Set<string>();
+    if (missingDays.length > 0) {
+      const resolvedRows = await c.env.DB.prepare(
+        `SELECT exception_date FROM payroll_exceptions
+         WHERE payroll_run_id = ? AND employee_id = ? AND resolved = 1 AND exception_date IS NOT NULL`
+      )
+        .bind(runId, emp.id)
+        .all<any>();
+      for (const row of resolvedRows.results || []) {
+        resolvedDates.add(String(row.exception_date).slice(0, 10));
+      }
+    }
+    const alphaDays = missingDays.filter((day) => !resolvedDates.has(day)).length;
 
     // 2. Approved Overtime
     const otRows = await c.env.DB.prepare(
@@ -171,13 +479,26 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
       kasbonDeduction = Math.min(kasbon.instalment_amount, kasbon.remaining_amount);
     }
 
-    // 4. Approved Reimbursements
-    const reimbRows = await c.env.DB.prepare(
-      `SELECT amount FROM reimbursements
-       WHERE employee_id = ? AND status = 'approved' AND payment_method = 'payroll'`
-    )
-      .bind(emp.id)
-      .all<any>();
+    // 4. Approved Reimbursements not yet attached to any payroll run (carried forward)
+    let reimbRows: any = { results: [] };
+    if (!run.run_type || run.run_type === 'monthly') {
+      reimbRows = await c.env.DB.prepare(
+        `SELECT id, amount FROM reimbursements
+         WHERE employee_id = ? AND status = 'approved' AND payment_method = 'payroll'
+           AND payroll_run_id IS NULL`
+      )
+        .bind(emp.id)
+        .all<any>();
+
+      const reimbIds = (reimbRows.results || []).map((r: any) => r.id);
+      if (reimbIds.length > 0) {
+        await c.env.DB.prepare(
+          `UPDATE reimbursements SET payroll_run_id = ? WHERE id IN (${reimbIds.map(() => '?').join(', ')})`
+        )
+          .bind(runId, ...reimbIds)
+          .run();
+      }
+    }
 
     const reimbTotal = (reimbRows.results || []).reduce((acc: number, r: any) => acc + (r.amount || 0), 0);
 
@@ -197,12 +518,35 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
       exceptionCount++;
     }
 
-    // 6. Check new joiner or leaver in period (mid-month)
-    const isNewJoiner = emp.join_date > run.period_start && emp.join_date <= run.period_end;
-    const isLeaver = emp.last_working_date && emp.last_working_date >= run.period_start && emp.last_working_date < run.period_end;
+    // Payable days follow the employment window, not raw attendance logs: partial
+    // logging must not understate a full-month salary. Explicit absences and
+    // unresolved alpha days are deducted separately below.
+    const payableDays = isNewJoiner || isLeaver ? employmentDays : expectedWorkingDays;
+    const daysWorked = Math.max(0, Math.min(payableDays, payableDays - unapprovedAbsenceDays));
 
-    // Expected working days in a standard month is ~21-22
-    const expectedWorkingDays = 21;
+    // 7. December PPh 21 annual reconciliation (Jan–Nov totals for this year)
+    const runMonth = Number(String(run.period_end).slice(5, 7));
+    let priorMonthsGross = 0;
+    let priorMonthsTaxPaid = 0;
+    let priorMonthsJhtJp = 0;
+    if (runMonth === 12) {
+      const yearPrefix = String(run.period_end).slice(0, 4);
+      const prior = await c.env.DB.prepare(
+        `SELECT COALESCE(SUM(pi.gross_earnings), 0) as gross,
+                COALESCE(SUM(pi.pph21_amount), 0) as tax,
+                COALESCE(SUM(pi.bpjs_jht_employee + pi.bpjs_jp_employee), 0) as jht_jp
+         FROM payroll_items pi
+         JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
+         WHERE pi.employee_id = ?
+           AND pr.period_end >= ? AND pr.period_end < ?
+           AND pr.status IN ('calculated', 'locked', 'paid')`
+      )
+        .bind(emp.id, `${yearPrefix}-01-01`, `${yearPrefix}-12-01`)
+        .first<any>();
+      priorMonthsGross = Number(prior?.gross || 0);
+      priorMonthsTaxPaid = Number(prior?.tax || 0);
+      priorMonthsJhtJp = Number(prior?.jht_jp || 0);
+    }
 
     // Calculate item using Indonesian rules
     const calc = calculateEmployeePayroll(
@@ -220,16 +564,21 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         has_bpjs_kes: emp.has_bpjs_kes !== undefined ? (emp.has_bpjs_kes === 1 || emp.has_bpjs_kes === true) : Boolean(emp.bpjs_kesehatan_number),
         pays_own_tax: emp.pays_own_tax === 1 || emp.tax_scheme === 'self_paid',
         tax_scheme: emp.tax_scheme || 'company_withheld',
-        days_worked: daysWorked > 0 ? daysWorked : (isNewJoiner || isLeaver ? 15 : expectedWorkingDays),
+        days_worked: daysWorked,
         expected_working_days: expectedWorkingDays,
         late_minutes: lateMinutesTotal,
         unapproved_absence_days: unapprovedAbsenceDays,
+        alpha_days: alphaDays,
         overtime_weekday_hours: otWeekdayHours,
         overtime_holiday_hours: otHolidayHours,
         kasbon_deduction: kasbonDeduction,
         reimbursement_amount: reimbTotal,
         is_new_joiner_mid_month: isNewJoiner,
         is_leaver_mid_month: isLeaver,
+        is_december_recalc: runMonth === 12,
+        prior_months_gross: priorMonthsGross,
+        prior_months_tax_paid: priorMonthsTaxPaid,
+        prior_months_jht_jp: priorMonthsJhtJp,
       },
       settings
     );
@@ -240,8 +589,9 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         id, tenant_id, payroll_run_id, employee_id,
         employee_nik, employee_name, job_title, department_name, ptkp_status, bank_name, bank_account_number,
         base_salary, fixed_allowance, prorated_salary, days_worked, expected_working_days,
-        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount,
+        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount,
         gross_earnings, late_deduction, unpaid_leave_deduction, kasbon_deduction, other_deductions,
+        alpha_days, alpha_deduction,
         bpjs_kes_employee, bpjs_jht_employee, bpjs_jp_employee, pph21_amount, pph21_method,
         total_deductions, take_home_pay,
         bpjs_kes_employer, bpjs_jht_employer, bpjs_jp_employer, bpjs_jkk_employer, bpjs_jkm_employer,
@@ -250,8 +600,9 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         ?, 'default', ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?,
+        ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
@@ -279,11 +630,14 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         calc.attendance_bonus,
         calc.commission_bonus,
         calc.reimbursement_amount,
+        calc.thr_amount,
         calc.gross_earnings,
         calc.late_deduction,
         calc.unpaid_leave_deduction,
         calc.kasbon_deduction,
         calc.other_deductions,
+        calc.alpha_days,
+        calc.alpha_deduction,
         calc.bpjs_kes_employee,
         calc.bpjs_jht_employee,
         calc.bpjs_jp_employee,
@@ -361,13 +715,168 @@ payrollRoutes.post('/runs/:id/exceptions/:excId/resolve', requireRole(['owner_ad
   const excId = c.req.param('excId');
   const user = c.get('user');
 
-  await c.env.DB.prepare(
-    `UPDATE payroll_exceptions SET resolved = 1, resolved_by = ?, resolved_at = CURRENT_TIMESTAMP WHERE id = ?`
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const RESOLUTION_CODES = [
+    'attendance_completed',
+    'approved_leave',
+    'overtime_approved',
+    'salary_adjusted',
+    'accepted_as_is',
+    'alpha',
+    'other',
+  ];
+
+  const code = typeof body.resolution_code === 'string' ? body.resolution_code : null;
+  if (code && !RESOLUTION_CODES.includes(code)) {
+    return c.json({ error: 'Kode penyelesaian tidak valid' }, 400);
+  }
+
+  const note = typeof body.resolution_note === 'string' && body.resolution_note.trim()
+    ? body.resolution_note.trim().slice(0, 500)
+    : null;
+
+  const exception = await c.env.DB.prepare(
+    `SELECT id, payroll_run_id, employee_id, exception_type, exception_date FROM payroll_exceptions WHERE id = ?`
   )
-    .bind(user.userId, excId)
+    .bind(excId)
+    .first<any>();
+  if (!exception) return c.json({ error: 'Pengecualian tidak ditemukan' }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE payroll_exceptions SET
+       resolved = 1,
+       resolved_by = ?,
+       resolved_at = CURRENT_TIMESTAMP,
+       resolution_code = ?,
+       resolution_note = ?
+     WHERE id = ?`
+  )
+    .bind(user.userId, code, note, excId)
+    .run();
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
+     VALUES (?, 'default', ?, 'RESOLVE_PAYROLL_EXCEPTION', 'payroll_exceptions', ?, ?)`
+  )
+    .bind(makeId('aud'), user.userId, excId, JSON.stringify({ resolution_code: code, resolution_note: note }))
     .run();
 
   return c.json({ message: 'Pengecualian berhasil diselesaikan (Resolved).' });
+});
+
+// Bulk-resolve several missing-day exceptions for ONE employee.
+// Deliberately scoped to a single employee so a bulk action can never sweep
+// unrelated people's attendance into one decision.
+payrollRoutes.post('/runs/:id/exceptions/bulk-resolve', requireRole(['owner_admin']), async (c) => {
+  const runId = c.req.param('id');
+  const user = c.get('user');
+
+  let body: any = {};
+  try {
+    body = await c.req.json();
+  } catch {
+    body = {};
+  }
+
+  const RESOLUTION_CODES = [
+    'attendance_completed',
+    'approved_leave',
+    'overtime_approved',
+    'salary_adjusted',
+    'accepted_as_is',
+    'alpha',
+    'other',
+  ];
+
+  const code = typeof body.resolution_code === 'string' ? body.resolution_code : null;
+  if (code && !RESOLUTION_CODES.includes(code)) {
+    return c.json({ error: 'Kode penyelesaian tidak valid' }, 400);
+  }
+
+  const employeeId = typeof body.employee_id === 'string' ? body.employee_id.trim() : '';
+  if (!employeeId) {
+    return c.json({ error: 'employee_id wajib diisi untuk penyelesaian massal' }, 400);
+  }
+
+  const exceptionIds: string[] = Array.isArray(body.exception_ids)
+    ? body.exception_ids.filter((id: unknown) => typeof id === 'string' && id)
+    : [];
+  if (exceptionIds.length === 0) {
+    return c.json({ error: 'Pilih minimal satu tanggal untuk diselesaikan' }, 400);
+  }
+  if (exceptionIds.length > 200) {
+    return c.json({ error: 'Maksimal 200 pengecualian per penyelesaian massal' }, 400);
+  }
+
+  const note = typeof body.resolution_note === 'string' && body.resolution_note.trim()
+    ? body.resolution_note.trim().slice(0, 500)
+    : null;
+
+  const run = await c.env.DB.prepare(`SELECT id, status FROM payroll_runs WHERE id = ?`)
+    .bind(runId)
+    .first<any>();
+  if (!run) return c.json({ error: 'Payroll run tidak ditemukan' }, 404);
+  if (run.status === 'locked' || run.status === 'paid') {
+    return c.json({ error: 'Payroll run yang sudah dikunci atau dibayar tidak dapat diubah' }, 400);
+  }
+
+  // Verify every id belongs to this run AND this employee before touching anything.
+  const placeholders = exceptionIds.map(() => '?').join(', ');
+  const owned = await c.env.DB.prepare(
+    `SELECT id FROM payroll_exceptions
+     WHERE payroll_run_id = ? AND employee_id = ? AND id IN (${placeholders})`
+  )
+    .bind(runId, employeeId, ...exceptionIds)
+    .all<any>();
+
+  const ownedIds = (owned.results || []).map((row: any) => row.id);
+  if (ownedIds.length !== exceptionIds.length) {
+    return c.json(
+      { error: 'Sebagian pengecualian bukan milik karyawan atau payroll run ini' },
+      403
+    );
+  }
+
+  const updatePlaceholders = ownedIds.map(() => '?').join(', ');
+  await c.env.DB.prepare(
+    `UPDATE payroll_exceptions SET
+       resolved = 1,
+       resolved_by = ?,
+       resolved_at = CURRENT_TIMESTAMP,
+       resolution_code = ?,
+       resolution_note = ?
+     WHERE payroll_run_id = ? AND employee_id = ? AND id IN (${updatePlaceholders})`
+  )
+    .bind(user.userId, code, note, runId, employeeId, ...ownedIds)
+    .run();
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
+     VALUES (?, 'default', ?, 'BULK_RESOLVE_PAYROLL_EXCEPTIONS', 'payroll_runs', ?, ?)`
+  )
+    .bind(
+      makeId('aud'),
+      user.userId,
+      runId,
+      JSON.stringify({
+        employee_id: employeeId,
+        count: ownedIds.length,
+        resolution_code: code,
+        resolution_note: note,
+      })
+    )
+    .run();
+
+  return c.json({
+    message: `${ownedIds.length} pengecualian berhasil diselesaikan.`,
+    resolvedCount: ownedIds.length,
+  });
 });
 
 // 5. Step 4: Adjust one-off item with reason (Review per employee)
@@ -432,7 +941,7 @@ payrollRoutes.post('/runs/:id/adjust-item', requireRole(['owner_admin']), async 
      VALUES (?, 'default', ?, 'ADJUST_PAYROLL_ITEM', 'payroll_items', ?, ?)`
   )
     .bind(
-      `aud-${Date.now()}`,
+      makeId('aud'),
       user.userId,
       item_id,
       JSON.stringify({ attBonus, commBonus, otherDed, reason: other_deductions_reason })
@@ -503,7 +1012,7 @@ payrollRoutes.post('/runs/:id/lock', requireRole(['owner_admin']), async (c) => 
     `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
      VALUES (?, 'default', ?, 'LOCK_PAYROLL_RUN', 'payroll_runs', ?, ?)`
   )
-    .bind(`aud-${Date.now()}`, user.userId, runId, JSON.stringify({ locked_at: new Date().toISOString() }))
+    .bind(makeId('aud'), user.userId, runId, JSON.stringify({ locked_at: new Date().toISOString() }))
     .run();
 
   return c.json({ message: 'Payroll run berhasil dikunci secara permanen. Finance sekarang dapat memproses pembayaran.' });
@@ -526,6 +1035,14 @@ payrollRoutes.post('/runs/:id/pay', requireRole(['owner_admin', 'finance']), asy
     .bind(user.userId, runId)
     .run();
 
+  // Mark reimbursements attached to this run as paid so they can never be reimbursed twice
+  await c.env.DB.prepare(
+    `UPDATE reimbursements SET status = 'paid'
+     WHERE payroll_run_id = ? AND status = 'approved'`
+  )
+    .bind(runId)
+    .run();
+
   // Send payslip notification to all employees
   const items = await c.env.DB.prepare(
     `SELECT pi.*, e.personal_email, e.company_email
@@ -536,29 +1053,44 @@ payrollRoutes.post('/runs/:id/pay', requireRole(['owner_admin', 'finance']), asy
     .bind(runId)
     .all<any>();
 
-  const appUrl = c.env.APP_URL || 'http://localhost:8787';
+  const companyRecord = await c.env.DB.prepare(
+    `SELECT name, legal_name, custom_domain FROM companies LIMIT 1`
+  ).first<any>();
+  const appUrl = companyRecord?.custom_domain
+    ? (companyRecord.custom_domain.startsWith('http') ? companyRecord.custom_domain : `https://${companyRecord.custom_domain}`)
+    : (c.env.APP_URL || 'http://localhost:8787');
+  const companyName = companyRecord?.legal_name || companyRecord?.name || 'Finance & Payroll';
 
-  for (const it of items.results || []) {
-    const toEmail = it.company_email || it.personal_email;
-    if (toEmail) {
-      const emailContent = getPayslipReadyEmail({
-        employeeName: it.employee_name,
-        periodTitle: run.title,
-        takeHomePayFormatted: `Rp ${it.take_home_pay.toLocaleString('id-ID')}`,
-        appUrl,
-      });
+  const payslipRecipients = (items.results || []).filter((it: any) => it.company_email || it.personal_email);
 
-      await sendEmail(c.env, {
-        to: toEmail,
-        subject: `Slip Gaji ${run.title} Telah Diterbitkan`,
-        text: emailContent.text,
-        html: emailContent.html,
-        type: 'payslip_ready',
-      });
+  // Fire-and-forget: send in small batches so we stay under the Workers
+  // concurrent outbound socket limit while the response returns immediately.
+  runInBackground(c, (async () => {
+    const batchSize = 4;
+    for (let i = 0; i < payslipRecipients.length; i += batchSize) {
+      await Promise.all(
+        payslipRecipients.slice(i, i + batchSize).map((it: any) => {
+          const emailContent = getPayslipReadyEmail({
+            employeeName: it.employee_name,
+            periodTitle: run.title,
+            takeHomePayFormatted: `Rp ${it.take_home_pay.toLocaleString('id-ID')}`,
+            appUrl,
+            companyName,
+          });
+
+          return sendEmail(c.env, {
+            to: it.company_email || it.personal_email,
+            subject: `Slip gaji ${run.title} tersedia (Payslip ready)`,
+            text: emailContent.text,
+            html: emailContent.html,
+            type: 'payslip_ready',
+          });
+        })
+      );
     }
-  }
+  })());
 
-  return c.json({ message: 'Pembayaran payroll telah dikonfirmasi dan notifikasi slip gaji telah dikirim.' });
+  return c.json({ message: 'Pembayaran payroll telah dikonfirmasi dan notifikasi slip gaji sedang dikirim.' });
 });
 
 // 8. Step 6: Outputs - Payroll Recap Table
@@ -638,10 +1170,14 @@ payrollRoutes.get('/items/:id/payslip', async (c) => {
 
   const item = await c.env.DB.prepare(
     `SELECT pi.*, pr.title as run_title, pr.period_start, pr.period_end, pr.payment_date, pr.status as run_status,
-            c.name as company_name, c.address as company_address, c.npwp as company_npwp
+            COALESCE(NULLIF(c.legal_name, ''), c.name) as company_name,
+            c.address as company_address, c.npwp as company_npwp,
+            m.nik as approver_nik, m.full_name as approver_name, m.job_title as approver_title
      FROM payroll_items pi
      JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
      JOIN companies c ON pr.tenant_id = c.tenant_id
+     LEFT JOIN employees e ON pi.employee_id = e.id
+     LEFT JOIN employees m ON e.manager_id = m.id
      WHERE pi.id = ?`
   )
     .bind(itemId)
@@ -657,7 +1193,51 @@ payrollRoutes.get('/items/:id/payslip', async (c) => {
     return c.json({ error: 'Forbidden: Anda tidak memiliki akses ke slip gaji karyawan lain' }, 403);
   }
 
-  return c.json({ payslip: item });
+  // Authorization is the employee's direct manager: a line employee's payslip is
+  // authorized by their manager, and a manager's own payslip by the director above
+  // them. Only when there is no manager at all does the company sign.
+  const approverName = item.approver_name || item.company_name || 'HR / Finance';
+  const approverTitle = item.approver_name ? item.approver_title || null : null;
+
+  // Detail the alpha deduction so the payslip shows unit rate and exact dates,
+  // not just a lump "n hari" total.
+  const alphaDates: string[] = [];
+  if (Number(item.alpha_days) > 0) {
+    const rows = await c.env.DB.prepare(
+      `SELECT exception_date FROM payroll_exceptions
+       WHERE payroll_run_id = ? AND employee_id = ?
+         AND exception_type = 'missing_attendance'
+         AND resolved = 0 AND exception_date IS NOT NULL
+       ORDER BY exception_date`
+    )
+      .bind(item.payroll_run_id, item.employee_id)
+      .all<any>();
+    for (const row of rows.results || []) alphaDates.push(String(row.exception_date));
+  }
+
+  const dailyRate =
+    Number(item.expected_working_days) > 0
+      ? Math.round(Number(item.base_salary) / Number(item.expected_working_days))
+      : 0;
+
+  // Exact (unrounded) daily rate so the payslip can show the precise formula
+  // base ÷ working days × absences without a rounding mismatch versus the total.
+  const dailyRateExact =
+    Number(item.expected_working_days) > 0
+      ? Number(item.base_salary) / Number(item.expected_working_days)
+      : 0;
+
+  return c.json({
+    payslip: {
+      ...item,
+      approver_name: approverName,
+      approver_title: approverTitle,
+      authorized_by_company: !item.approver_name,
+      alpha_dates: alphaDates,
+      alpha_daily_rate: dailyRate,
+      alpha_daily_rate_exact: Math.round(dailyRateExact * 100) / 100,
+    },
+  });
 });
 
 // 11. Employee Self-Service: My Payslips List

@@ -10,13 +10,17 @@ import {
   Loader2,
   AlertCircle,
   CheckCircle2,
+  ShieldCheck,
+  Activity,
 } from 'lucide-react';
-import { downloadFile } from '../api';
+import { downloadFile, getLocalDateString, getLocalMonthString } from '../api';
 import { useLanguage } from '../context/LanguageContext';
+import { MobileYearPicker } from '../components/pickers/MobileYearPicker';
 
 export const HRReports: React.FC = () => {
-  const { t } = useLanguage();
-  const [selectedMonth, setSelectedMonth] = useState(new Date().toISOString().substring(0, 7));
+  const { t, tr } = useLanguage();
+  const [selectedMonth, setSelectedMonth] = useState(getLocalMonthString());
+  const [selectedYear, setSelectedYear] = useState(String(new Date().getFullYear()));
   const [downloadingIdx, setDownloadingIdx] = useState<number | null>(null);
   const [statusMsg, setStatusMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
@@ -58,6 +62,30 @@ export const HRReports: React.FC = () => {
       filename: `Export_BPJS_PPh21.xlsx`,
     },
     {
+      title: tr('Bukti Potong 1721-A1', '1721-A1 Tax Certificate'),
+      description: tr(
+        'Rekap PPh 21 setahun per karyawan: bruto, biaya jabatan, iuran pensiun, PTKP, PKP, dan pajak terpotong.',
+        'Annual PPh 21 recap per employee: gross, occupational cost, pension, PTKP, taxable income, and tax withheld.'
+      ),
+      icon: ShieldCheck,
+      tag: 'PPh 21',
+      color: 'text-violet-700 bg-violet-50 border-violet-200',
+      actionUrl: `/reports/pph21-1721a1?year=${selectedYear}`,
+      filename: `Bukti_Potong_1721A1_${selectedYear}.xlsx`,
+    },
+    {
+      title: tr('Laporan BPJS per Program', 'BPJS Report by Program'),
+      description: tr(
+        'Iuran Kesehatan, JHT, JP, JKK, dan JKM dipisah per lembar beserta total karyawan dan perusahaan.',
+        'Health, JHT, JP, JKK, and JKM contributions split by sheet with employee and employer totals.'
+      ),
+      icon: Activity,
+      tag: 'BPJS',
+      color: 'text-cyan-700 bg-cyan-50 border-cyan-200',
+      actionUrl: `/reports/bpjs-programs?month=${selectedMonth}`,
+      filename: `Laporan_BPJS_${selectedMonth}.xlsx`,
+    },
+    {
       title: t.reports.repLeave,
       description: t.reports.repLeaveDesc,
       icon: FileSpreadsheet,
@@ -73,7 +101,7 @@ export const HRReports: React.FC = () => {
       tag: 'Database',
       color: 'text-slate-800 bg-slate-100 border-slate-300',
       actionUrl: `/reports/backup-data`,
-      filename: `openhr_backup_${new Date().toISOString().split('T')[0]}.json`,
+      filename: `openhr_backup_${getLocalDateString()}.json`,
     },
   ];
 
@@ -82,9 +110,9 @@ export const HRReports: React.FC = () => {
     setStatusMsg(null);
     try {
       await downloadFile(url, filename);
-      setStatusMsg({ type: 'success', text: `Downloaded "${filename}"` });
+      setStatusMsg({ type: 'success', text: tr(`Berhasil mengunduh "${filename}"`, `Downloaded "${filename}"`) });
     } catch (err: any) {
-      setStatusMsg({ type: 'error', text: err.message || 'Download failed' });
+      setStatusMsg({ type: 'error', text: err.message || tr('Unduhan gagal', 'Download failed') });
     } finally {
       setDownloadingIdx(null);
     }
@@ -100,14 +128,19 @@ export const HRReports: React.FC = () => {
           </p>
         </div>
 
-        <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
-          <span className="text-xs font-medium text-slate-600">{t.reports.attendanceMonth}</span>
-          <input
-            type="month"
-            value={selectedMonth}
-            onChange={(e) => setSelectedMonth(e.target.value)}
-            className="text-xs font-semibold border-0 p-0 text-slate-900 focus:ring-0 bg-transparent"
-          />
+        <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2 bg-white px-3 py-1.5 rounded-xl border border-slate-200 shadow-2xs">
+            <span className="text-xs font-medium text-slate-600">{t.reports.attendanceMonth}</span>
+            <input
+              type="month"
+              value={selectedMonth}
+              onChange={(e) => setSelectedMonth(e.target.value)}
+              className="text-xs font-semibold border-0 p-0 text-slate-900 focus:ring-0 bg-transparent"
+            />
+          </div>
+          <div className="w-28">
+            <MobileYearPicker value={selectedYear} onChange={setSelectedYear} />
+          </div>
         </div>
       </div>
 

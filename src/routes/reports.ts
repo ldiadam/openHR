@@ -2,6 +2,7 @@ import { Hono } from 'hono';
 import * as XLSX from 'xlsx';
 import { Bindings } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
+import { getZonedMonthString } from '../utils/date';
 
 export const reportRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -9,7 +10,7 @@ reportRoutes.use('*', authMiddleware);
 
 // 1. Attendance Recap Report (Monthly per employee and department)
 reportRoutes.get('/attendance-recap', async (c) => {
-  const month = c.req.query('month') || new Date().toISOString().substring(0, 7); // YYYY-MM
+  const month = c.req.query('month') || getZonedMonthString(); // YYYY-MM
   const exportFormat = c.req.query('export'); // 'excel'
 
   const rows = await c.env.DB.prepare(
@@ -229,8 +230,9 @@ reportRoutes.get('/leave-balances', async (c) => {
   const exportFormat = c.req.query('export');
 
   const rows = await c.env.DB.prepare(
-    `SELECT e.nik, e.full_name, d.name as department_name, lt.name as leave_type_name,
-            lb.year, lb.total_entitled, lb.used_days, lb.remaining_days, lb.adjusted_days
+    `SELECT e.id as employee_id, e.nik, e.full_name, d.name as department_name, 
+            lt.id as leave_type_id, lt.name as leave_type_name,
+            lb.id as balance_id, lb.year, lb.total_entitled, lb.used_days, lb.remaining_days, lb.adjusted_days
      FROM leave_balances lb
      JOIN employees e ON lb.employee_id = e.id
      JOIN leave_types lt ON lb.leave_type_id = lt.id
@@ -266,7 +268,149 @@ reportRoutes.get('/leave-balances', async (c) => {
   return c.json({ balances: list });
 });
 
-// 6. Full Company Data Backup Export (JSON)
+// 6b. PPh 21 annual recap / Bukti Potong 1721-A1 (per employee, per year)
+reportRoutes.get('/pph21-1721a1', requireRole(['owner_admin', 'finance']), async (c) => {
+  const year = c.req.query('year') || String(new Date().getFullYear());
+
+  const rows = await c.env.DB.prepare(
+    `SELECT pi.employee_nik as nik, pi.employee_name as full_name, pi.ptkp_status,
+            COUNT(*) as months,
+            COALESCE(SUM(pi.gross_earnings), 0) as gross,
+            COALESCE(SUM(pi.bpjs_jht_employee + pi.bpjs_jp_employee), 0) as pension,
+            COALESCE(SUM(pi.pph21_amount), 0) as tax
+     FROM payroll_items pi
+     JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
+     WHERE pr.period_end LIKE ?
+       AND pr.status IN ('calculated', 'locked', 'paid')
+       AND COALESCE(pr.run_type, 'monthly') = 'monthly'
+     GROUP BY pi.employee_id
+     ORDER BY pi.employee_nik`
+  )
+    .bind(`${year}%`)
+    .all<any>();
+
+  const ptkpMap: Record<string, number> = {
+    'TK/0': 54000000,
+    'TK/1': 58500000,
+    'TK/2': 63000000,
+    'TK/3': 67500000,
+    'K/0': 58500000,
+    'K/1': 63000000,
+    'K/2': 67500000,
+    'K/3': 72000000,
+  };
+  const roundDown = (value: number) => Math.floor(value / 1000) * 1000;
+
+  const data = (rows.results || []).map((row: any) => {
+    const gross = Number(row.gross) || 0;
+    const pension = Number(row.pension) || 0;
+    const biayaJabatan = Math.min(Math.round(gross * 0.05), 6000000);
+    const neto = Math.max(0, gross - biayaJabatan - pension);
+    const ptkp = ptkpMap[row.ptkp_status] || ptkpMap['TK/0'];
+    const pkp = roundDown(Math.max(0, neto - ptkp));
+
+    return {
+      NIK: row.nik,
+      'Nama Karyawan': row.full_name,
+      'Status PTKP': row.ptkp_status,
+      'Jumlah Bulan': row.months,
+      'Penghasilan Bruto': gross,
+      'Biaya Jabatan (5%, maks 6jt)': biayaJabatan,
+      'Iuran Pensiun/JHT': pension,
+      'Penghasilan Neto': neto,
+      'PTKP (Setahun)': ptkp,
+      'PKP (Pembulatan)': pkp,
+      'PPh 21 Terpotong': Number(row.tax) || 0,
+    };
+  });
+
+  const ws = XLSX.utils.json_to_sheet(data);
+  ws['!cols'] = [
+    { wch: 12 },
+    { wch: 26 },
+    { wch: 12 },
+    { wch: 12 },
+    { wch: 18 },
+    { wch: 26 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+    { wch: 18 },
+  ];
+  const wb = XLSX.utils.book_new();
+  XLSX.utils.book_append_sheet(wb, ws, `1721-A1 ${year}`);
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+
+  c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  c.header('Content-Disposition', `attachment; filename="Bukti_Potong_1721A1_${year}.xlsx"`);
+  return c.body(buf as any);
+});
+
+// 6c. BPJS Indonesia per-program contribution report (Kes / JHT / JP / JKK / JKM)
+reportRoutes.get('/bpjs-programs', requireRole(['owner_admin', 'finance']), async (c) => {
+  const month = c.req.query('month') || getZonedMonthString();
+
+  const rows = await c.env.DB.prepare(
+    `SELECT pi.employee_nik as nik, pi.employee_name as full_name,
+            pi.bpjs_kes_employee, pi.bpjs_kes_employer,
+            pi.bpjs_jht_employee, pi.bpjs_jht_employer,
+            pi.bpjs_jp_employee, pi.bpjs_jp_employer,
+            pi.bpjs_jkk_employer, pi.bpjs_jkm_employer
+     FROM payroll_items pi
+     JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
+     WHERE pr.period_end LIKE ?
+       AND pr.status IN ('calculated', 'locked', 'paid')
+       AND COALESCE(pr.run_type, 'monthly') = 'monthly'
+     ORDER BY pi.employee_nik`
+  )
+    .bind(`${month}%`)
+    .all<any>();
+
+  const list = rows.results || [];
+  const programs = [
+    { name: 'BPJS Kesehatan', employee: 'bpjs_kes_employee', employer: 'bpjs_kes_employer' },
+    { name: 'JHT', employee: 'bpjs_jht_employee', employer: 'bpjs_jht_employer' },
+    { name: 'JP', employee: 'bpjs_jp_employee', employer: 'bpjs_jp_employer' },
+    { name: 'JKK', employee: null, employer: 'bpjs_jkk_employer' },
+    { name: 'JKM', employee: null, employer: 'bpjs_jkm_employer' },
+  ];
+
+  const wb = XLSX.utils.book_new();
+  for (const program of programs) {
+    const sheetRows = list.map((row: any) => {
+      const employeeShare = program.employee ? Number(row[program.employee]) || 0 : 0;
+      const employerShare = Number(row[program.employer]) || 0;
+      return {
+        NIK: row.nik,
+        'Nama Karyawan': row.full_name,
+        'Iuran Karyawan': employeeShare,
+        'Iuran Perusahaan': employerShare,
+        Total: employeeShare + employerShare,
+      };
+    });
+    const totalEmployee = sheetRows.reduce((sum, row) => sum + row['Iuran Karyawan'], 0);
+    const totalEmployer = sheetRows.reduce((sum, row) => sum + row['Iuran Perusahaan'], 0);
+    sheetRows.push({
+      NIK: '',
+      'Nama Karyawan': 'TOTAL',
+      'Iuran Karyawan': totalEmployee,
+      'Iuran Perusahaan': totalEmployer,
+      Total: totalEmployee + totalEmployer,
+    });
+
+    const ws = XLSX.utils.json_to_sheet(sheetRows);
+    ws['!cols'] = [{ wch: 12 }, { wch: 26 }, { wch: 18 }, { wch: 18 }, { wch: 18 }];
+    XLSX.utils.book_append_sheet(wb, ws, program.name);
+  }
+
+  const buf = XLSX.write(wb, { type: 'array', bookType: 'xlsx' });
+  c.header('Content-Type', 'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet');
+  c.header('Content-Disposition', `attachment; filename="Laporan_BPJS_${month}.xlsx"`);
+  return c.body(buf as any);
+});
+
+// 7. Full Company Data Backup Export (JSON)
 reportRoutes.get('/backup-data', requireRole(['owner_admin']), async (c) => {
   const companies = await c.env.DB.prepare(`SELECT * FROM companies`).all();
   const branches = await c.env.DB.prepare(`SELECT * FROM branches`).all();

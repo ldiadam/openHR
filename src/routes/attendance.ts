@@ -1,11 +1,30 @@
 import { Hono } from 'hono';
 import { Bindings, AttendanceStatus } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
-import { putFile } from '../services/storage';
+import { putFile, getFile } from '../services/storage';
+import { resolveAttendanceDateTime, getZonedDateString, getZonedMonthString } from '../utils/date';
+import { makeId } from '../utils/id';
 
 export const attendanceRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
 attendanceRoutes.use('*', authMiddleware);
+
+// 0. Branch geofence for the current employee (ESS map)
+attendanceRoutes.get('/branch', async (c) => {
+  const user = c.get('user');
+  if (!user.employeeId) return c.json({ branch: null });
+
+  const branch = await c.env.DB.prepare(
+    `SELECT b.id, b.name, b.latitude, b.longitude, b.radius_meters
+     FROM employees e
+     JOIN branches b ON e.branch_id = b.id
+     WHERE e.id = ?`
+  )
+    .bind(user.employeeId)
+    .first<any>();
+
+  return c.json({ branch: branch || null });
+});
 
 // Haversine distance in meters
 function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2: number): number {
@@ -20,10 +39,30 @@ function calculateDistanceMeters(lat1: number, lon1: number, lat2: number, lon2:
   return Math.round(R * c);
 }
 
-// Helper to parse HH:MM to minutes from midnight
+// Helper to parse HH:MM[:SS] to minutes from midnight (seconds rounded up)
 function timeToMinutes(timeStr: string): number {
   const [h, m] = timeStr.split(':').map(Number);
   return (h || 0) * 60 + (m || 0);
+}
+
+/**
+ * Grace period: a punch that lands within this many seconds after the shift
+ * start is still on time. Phone clocks drift by a few seconds, so 08:30:48
+ * must not be treated as 88 minutes... nor as zero. See lateMinutesFor().
+ */
+const PUNCH_GRACE_SECONDS = 60;
+
+function timeToSeconds(timeStr: string): number {
+  const [h = 0, m = 0, s = 0] = timeStr.split(':').map(Number);
+  return h * 60 * 60 + m * 60 + s;
+}
+
+/** Full lateness in minutes, ignoring seconds drift inside the grace window. */
+function lateMinutesFor(clockTime: string, shiftStart: string, graceSeconds = PUNCH_GRACE_SECONDS): number {
+  const diffSeconds = timeToSeconds(clockTime) - timeToSeconds(shiftStart.slice(0, 5));
+  if (diffSeconds <= 0) return 0;
+  const effective = diffSeconds <= graceSeconds ? 0 : diffSeconds;
+  return Math.floor(effective / 60);
 }
 
 // 1. Clock In / Out (Phone Mobile with GPS + Selfie Photo)
@@ -68,6 +107,7 @@ attendanceRoutes.post('/clock', async (c) => {
   // Get employee and branch info for geofence and shift
   const emp = await c.env.DB.prepare(
     `SELECT e.*, b.latitude as branch_lat, b.longitude as branch_lng, b.radius_meters as branch_radius,
+            b.timezone as branch_timezone,
             sp.start_time, sp.end_time, sp.break_minutes
      FROM employees e
      LEFT JOIN branches b ON e.branch_id = b.id
@@ -81,10 +121,7 @@ attendanceRoutes.post('/clock', async (c) => {
     return c.json({ error: 'Karyawan tidak valid' }, 404);
   }
 
-  const todayDate = device_timestamp ? device_timestamp.split('T')[0] : new Date().toISOString().split('T')[0];
-  const clockTime = device_timestamp
-    ? device_timestamp.split('T')[1].substring(0, 8)
-    : new Date().toTimeString().split(' ')[0];
+  const { todayDate, clockTime } = resolveAttendanceDateTime(body, emp.branch_timezone);
 
   // Geofence calculation
   let distanceMeters = 0;
@@ -99,6 +136,20 @@ attendanceRoutes.post('/clock', async (c) => {
     if (distanceMeters > (emp.branch_radius || 150)) {
       geofenceStatus = 'out_of_geofence';
     }
+  }
+
+  const geofenceReason =
+    typeof body.geofence_reason === 'string' ? body.geofence_reason.trim() : '';
+
+  if (geofenceStatus === 'out_of_geofence' && !geofenceReason) {
+    return c.json(
+      {
+        error: 'Anda berada di luar radius kantor. Mohon isi alasan presensi.',
+        code: 'OUT_OF_GEOFENCE',
+        distanceMeters,
+      },
+      400
+    );
   }
 
   // Save photo to R2 / Storage if present
@@ -123,12 +174,20 @@ attendanceRoutes.post('/clock', async (c) => {
   const shiftEnd = emp.end_time || '17:30';
 
   if (type === 'in') {
-    const clockInMinutes = timeToMinutes(clockTime);
-    const shiftStartMinutes = timeToMinutes(shiftStart);
-    const lateMinutes = Math.max(0, clockInMinutes - shiftStartMinutes);
+    const lateMinutes = lateMinutesFor(clockTime, shiftStart);
     const derivedStatus: AttendanceStatus = lateMinutes > 0 ? 'late' : 'present';
 
     if (record) {
+      if (record.clock_in_time) {
+        return c.json(
+          {
+            error: `Presensi masuk hari ini sudah tercatat pada ${record.clock_in_time}.`,
+            code: 'ALREADY_CLOCKED_IN',
+            clockInTime: record.clock_in_time,
+          },
+          400
+        );
+      }
       // Update existing clock-in
       await c.env.DB.prepare(
         `UPDATE attendance SET
@@ -138,6 +197,7 @@ attendanceRoutes.post('/clock', async (c) => {
           clock_in_photo_key = COALESCE(?, clock_in_photo_key),
           clock_in_distance_meters = ?,
           clock_in_status = ?,
+          clock_in_geofence_reason = ?,
           status = ?,
           late_minutes = ?,
           is_offline_sync = ?,
@@ -151,6 +211,7 @@ attendanceRoutes.post('/clock', async (c) => {
           photoKey,
           distanceMeters,
           geofenceStatus,
+          geofenceReason || null,
           derivedStatus,
           lateMinutes,
           is_offline_sync ? 1 : 0,
@@ -162,11 +223,11 @@ attendanceRoutes.post('/clock', async (c) => {
       await c.env.DB.prepare(
         `INSERT INTO attendance (
           id, tenant_id, employee_id, date, clock_in_time,
-          clock_in_lat, clock_in_lng, clock_in_photo_key, clock_in_distance_meters, clock_in_status,
+          clock_in_lat, clock_in_lng, clock_in_photo_key, clock_in_distance_meters, clock_in_status, clock_in_geofence_reason,
           status, late_minutes, is_offline_sync, source
         ) VALUES (
           ?, 'default', ?, ?, ?,
-          ?, ?, ?, ?, ?,
+          ?, ?, ?, ?, ?, ?,
           ?, ?, ?, 'mobile'
         )`
       )
@@ -180,6 +241,7 @@ attendanceRoutes.post('/clock', async (c) => {
           photoKey,
           distanceMeters,
           geofenceStatus,
+          geofenceReason || null,
           derivedStatus,
           lateMinutes,
           is_offline_sync ? 1 : 0
@@ -211,6 +273,22 @@ attendanceRoutes.post('/clock', async (c) => {
     const finalStatus = earlyMinutes > 0 && currentStatus === 'present' ? 'early_leave' : currentStatus;
 
     if (record) {
+      if (!record.clock_in_time) {
+        return c.json(
+          { error: 'Belum ada presensi masuk hari ini. Silakan presensi masuk terlebih dahulu.', code: 'NOT_CLOCKED_IN' },
+          400
+        );
+      }
+      if (record.clock_out_time) {
+        return c.json(
+          {
+            error: `Presensi pulang hari ini sudah tercatat pada ${record.clock_out_time}.`,
+            code: 'ALREADY_CLOCKED_OUT',
+            clockOutTime: record.clock_out_time,
+          },
+          400
+        );
+      }
       await c.env.DB.prepare(
         `UPDATE attendance SET
           clock_out_time = ?,
@@ -219,6 +297,7 @@ attendanceRoutes.post('/clock', async (c) => {
           clock_out_photo_key = COALESCE(?, clock_out_photo_key),
           clock_out_distance_meters = ?,
           clock_out_status = ?,
+          clock_out_geofence_reason = ?,
           status = ?,
           early_minutes = ?,
           actual_work_minutes = ?,
@@ -233,6 +312,7 @@ attendanceRoutes.post('/clock', async (c) => {
           photoKey,
           distanceMeters,
           geofenceStatus,
+          geofenceReason || null,
           finalStatus,
           earlyMinutes,
           actualWorkMinutes,
@@ -241,33 +321,10 @@ attendanceRoutes.post('/clock', async (c) => {
         )
         .run();
     } else {
-      const attId = `att-${Date.now()}`;
-      await c.env.DB.prepare(
-        `INSERT INTO attendance (
-          id, tenant_id, employee_id, date, clock_out_time,
-          clock_out_lat, clock_out_lng, clock_out_photo_key, clock_out_distance_meters, clock_out_status,
-          status, early_minutes, is_offline_sync, source
-        ) VALUES (
-          ?, 'default', ?, ?, ?,
-          ?, ?, ?, ?, ?,
-          ?, ?, ?, 'mobile'
-        )`
-      )
-        .bind(
-          attId,
-          employeeId,
-          todayDate,
-          clockTime,
-          latitude || null,
-          longitude || null,
-          photoKey,
-          distanceMeters,
-          geofenceStatus,
-          'present',
-          earlyMinutes,
-          is_offline_sync ? 1 : 0
-        )
-        .run();
+      return c.json(
+        { error: 'Belum ada presensi masuk hari ini. Silakan presensi masuk terlebih dahulu.', code: 'NOT_CLOCKED_IN' },
+        400
+      );
     }
 
     return c.json({
@@ -283,7 +340,7 @@ attendanceRoutes.post('/clock', async (c) => {
 // 2. Daily View for HR: Who is in, late, absent, or on leave today
 attendanceRoutes.get('/today', async (c) => {
   const user = c.get('user');
-  const targetDate = c.req.query('date') || new Date().toISOString().split('T')[0];
+  const targetDate = c.req.query('date') || getZonedDateString();
 
   let empFilter = ``;
   const params: any[] = [targetDate];
@@ -296,11 +353,16 @@ attendanceRoutes.get('/today', async (c) => {
   const query = `
     SELECT e.id as employee_id, e.nik, e.full_name, e.job_title,
            d.name as department_name, b.name as branch_name,
+           b.latitude as branch_lat, b.longitude as branch_lng, b.radius_meters as branch_radius,
            a.id as attendance_id, a.clock_in_time, a.clock_out_time,
            COALESCE(a.status, 'absent') as status,
            COALESCE(a.late_minutes, 0) as late_minutes,
            COALESCE(a.early_minutes, 0) as early_minutes,
-           a.clock_in_status, a.is_offline_sync
+           a.clock_in_status, a.is_offline_sync, a.clock_in_photo_key, a.clock_out_photo_key,
+           a.clock_in_lat, a.clock_in_lng, a.clock_in_distance_meters,
+           a.clock_out_lat, a.clock_out_lng, a.clock_out_distance_meters,
+           a.clock_out_status,
+           a.clock_in_geofence_reason, a.clock_out_geofence_reason, a.source
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
     LEFT JOIN branches b ON e.branch_id = b.id
@@ -323,6 +385,30 @@ attendanceRoutes.get('/today', async (c) => {
   return c.json({ date: targetDate, summary, records: list });
 });
 
+// 3b. Serve attendance selfie (HR or the employee themselves)
+attendanceRoutes.get('/:id/photo', async (c) => {
+  const user = c.get('user');
+  const record = await c.env.DB.prepare(`SELECT * FROM attendance WHERE id = ?`)
+    .bind(c.req.param('id'))
+    .first<any>();
+
+  if (!record) return c.json({ error: 'Data presensi tidak ditemukan' }, 404);
+  if (user.role === 'employee' && record.employee_id !== user.employeeId) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const type = c.req.query('type') === 'out' ? 'out' : 'in';
+  const key = type === 'out' ? record.clock_out_photo_key : record.clock_in_photo_key;
+  if (!key) return c.json({ error: 'Foto tidak ditemukan' }, 404);
+
+  const stored = await getFile(c.env, key);
+  if (!stored) return c.json({ error: 'File fisik tidak ditemukan' }, 404);
+
+  c.header('Content-Type', stored.contentType || 'image/jpeg');
+  c.header('Content-Disposition', 'inline');
+  return c.body(stored.data as any);
+});
+
 // 3. Employee Self-Service: My Attendance this month
 attendanceRoutes.get('/my', async (c) => {
   const user = c.get('user');
@@ -330,7 +416,7 @@ attendanceRoutes.get('/my', async (c) => {
     return c.json({ error: 'User tidak terhubung ke karyawan' }, 400);
   }
 
-  const month = c.req.query('month') || new Date().toISOString().substring(0, 7); // YYYY-MM
+  const month = c.req.query('month') || getZonedMonthString(); // YYYY-MM
 
   const records = await c.env.DB.prepare(
     `SELECT * FROM attendance
@@ -428,7 +514,7 @@ attendanceRoutes.post('/corrections/:id/review', requireRole(['owner_admin', 'ma
   }
 
   const corr = await c.env.DB.prepare(
-    `SELECT ac.*, e.shift_pattern_id, sp.start_time, sp.end_time
+    `SELECT ac.*, e.shift_pattern_id, sp.start_time, sp.end_time, sp.break_minutes
      FROM attendance_corrections ac
      JOIN employees e ON ac.employee_id = e.id
      LEFT JOIN shift_patterns sp ON e.shift_pattern_id = sp.id
@@ -455,12 +541,27 @@ attendanceRoutes.post('/corrections/:id/review', requireRole(['owner_admin', 'ma
   // If approved, update or insert attendance record
   if (status === 'approved') {
     const shiftStart = corr.start_time || '08:30';
-    let lateMinutes = 0;
-    if (corr.requested_clock_in) {
-      const inMins = timeToMinutes(corr.requested_clock_in);
-      const startMins = timeToMinutes(shiftStart);
-      lateMinutes = Math.max(0, inMins - startMins);
+    const shiftEnd = corr.end_time || '17:30';
+
+    const existing = corr.attendance_id
+      ? await c.env.DB.prepare(`SELECT * FROM attendance WHERE id = ?`).bind(corr.attendance_id).first<any>()
+      : null;
+
+    const finalIn = corr.requested_clock_in || existing?.clock_in_time || null;
+    const finalOut = corr.requested_clock_out || existing?.clock_out_time || null;
+
+    const lateMinutes = finalIn ? lateMinutesFor(finalIn, shiftStart) : 0;
+    const earlyMinutes = finalOut ? Math.max(0, timeToMinutes(shiftEnd) - timeToMinutes(finalOut)) : 0;
+
+    let actualWorkMinutes = 0;
+    if (finalIn && finalOut) {
+      const breakMinutes = corr.break_minutes ?? 60;
+      actualWorkMinutes = Math.max(0, timeToMinutes(finalOut) - timeToMinutes(finalIn) - breakMinutes);
     }
+
+    let finalStatus: AttendanceStatus = 'present';
+    if (lateMinutes > 0) finalStatus = 'late';
+    else if (earlyMinutes > 0) finalStatus = 'early_leave';
 
     if (corr.attendance_id) {
       await c.env.DB.prepare(
@@ -469,24 +570,28 @@ attendanceRoutes.post('/corrections/:id/review', requireRole(['owner_admin', 'ma
           clock_out_time = COALESCE(?, clock_out_time),
           status = ?,
           late_minutes = ?,
+          early_minutes = ?,
+          actual_work_minutes = ?,
           updated_at = CURRENT_TIMESTAMP
          WHERE id = ?`
       )
-        .bind(corr.requested_clock_in, corr.requested_clock_out, lateMinutes > 0 ? 'late' : 'present', lateMinutes, corr.attendance_id)
+        .bind(finalIn, finalOut, finalStatus, lateMinutes, earlyMinutes, actualWorkMinutes, corr.attendance_id)
         .run();
     } else {
       await c.env.DB.prepare(
-        `INSERT INTO attendance (id, tenant_id, employee_id, date, clock_in_time, clock_out_time, status, late_minutes, source)
-         VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'manual')`
+        `INSERT INTO attendance (id, tenant_id, employee_id, date, clock_in_time, clock_out_time, status, late_minutes, early_minutes, actual_work_minutes, source)
+         VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, 'manual')`
       )
         .bind(
-          `att-${Date.now()}`,
+          `att-correction-${Date.now()}`,
           corr.employee_id,
           corr.correction_date,
-          corr.requested_clock_in,
-          corr.requested_clock_out,
-          lateMinutes > 0 ? 'late' : 'present',
-          lateMinutes
+          finalIn,
+          finalOut,
+          finalStatus,
+          lateMinutes,
+          earlyMinutes,
+          actualWorkMinutes
         )
         .run();
     }
@@ -497,7 +602,7 @@ attendanceRoutes.post('/corrections/:id/review', requireRole(['owner_admin', 'ma
        VALUES (?, 'default', ?, 'APPROVE_ATTENDANCE_CORRECTION', 'attendance_corrections', ?, ?)`
     )
       .bind(
-        `aud-${Date.now()}`,
+        makeId('aud'),
         user.userId,
         corrId,
         JSON.stringify({ in: corr.requested_clock_in, out: corr.requested_clock_out })
@@ -548,4 +653,37 @@ attendanceRoutes.post('/import-fingerprint', requireRole(['owner_admin']), async
   }
 
   return c.json({ message: `Berhasil mengimpor ${importedCount} log presensi fingerprint.` });
+});
+
+// 8. Delete Attendance Record (HR/Manager)
+attendanceRoutes.delete('/:id', requireRole(['owner_admin', 'manager']), async (c) => {
+  const id = c.req.param('id');
+  const user = c.get('user');
+
+  const existing = await c.env.DB.prepare(
+    `SELECT a.*, e.full_name FROM attendance a LEFT JOIN employees e ON a.employee_id = e.id WHERE a.id = ?`
+  )
+    .bind(id)
+    .first<any>();
+
+  if (!existing) {
+    return c.json({ error: 'Data presensi tidak ditemukan' }, 404);
+  }
+
+  await c.env.DB.prepare(`DELETE FROM attendance WHERE id = ?`).bind(id).run();
+
+  try {
+    await c.env.DB.prepare(
+      `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, old_values)
+       VALUES (?, 'default', ?, 'delete', 'attendance', ?, ?)`
+    )
+      .bind(makeId('aud'), user.userId, id, JSON.stringify(existing))
+      .run();
+  } catch (err: any) {
+    console.error('Attendance delete audit log failed:', err.message);
+  }
+
+  return c.json({
+    message: `Data presensi untuk ${existing.full_name || 'karyawan'} tanggal ${existing.date} berhasil dihapus.`,
+  });
 });

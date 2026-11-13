@@ -1,5 +1,6 @@
 import React, { useRef, useState, useEffect } from 'react';
 import { Camera, RefreshCw, X, Check } from 'lucide-react';
+import { useLanguage } from '../context/LanguageContext';
 
 interface CameraModalProps {
   isOpen: boolean;
@@ -13,9 +14,11 @@ export const CameraModal: React.FC<CameraModalProps> = ({
   isOpen,
   onClose,
   onCapture,
-  title = 'Ambil Foto Selfie Presensi',
+  title,
   facingMode = 'user',
 }) => {
+  const { tr } = useLanguage();
+  const resolvedTitle = title ?? tr('Ambil Foto Selfie Presensi', 'Take Attendance Selfie Photo');
   const videoRef = useRef<HTMLVideoElement | null>(null);
   const streamRef = useRef<MediaStream | null>(null);
   const [photo, setPhoto] = useState<string | null>(null);
@@ -40,7 +43,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
     setError(null);
     try {
       if (!navigator.mediaDevices || !navigator.mediaDevices.getUserMedia) {
-        throw new Error('Kamera tidak didukung pada browser ini.');
+        throw new Error(tr('Kamera tidak didukung pada browser ini.', 'Camera is not supported in this browser.'));
       }
 
       const stream = await navigator.mediaDevices.getUserMedia({
@@ -55,7 +58,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
       }
     } catch (err: any) {
       console.warn('Camera access issue:', err);
-      setError('Kamera tidak dapat diakses. Anda dapat mengunggah file foto sebagai gantinya.');
+      setError(tr('Kamera tidak dapat diakses. Anda dapat mengunggah file foto sebagai gantinya.', 'Camera cannot be accessed. You can upload a photo file instead.'));
     }
   };
 
@@ -108,12 +111,22 @@ export const CameraModal: React.FC<CameraModalProps> = ({
   if (!isOpen) return null;
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4">
+    <div
+      className="fixed inset-0 z-50 bg-black/80 flex items-center justify-center p-4"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
       <div className="bg-white rounded-2xl overflow-hidden max-w-md w-full shadow-2xl flex flex-col">
         {/* Header */}
         <div className="p-4 border-b border-slate-100 flex items-center justify-between">
-          <h3 className="font-semibold text-slate-900 text-sm">{title}</h3>
-          <button onClick={onClose} className="p-1 text-slate-400 hover:text-slate-600 rounded-lg">
+          <h3 className="font-semibold text-slate-900 text-sm">{resolvedTitle}</h3>
+          <button
+            onClick={onClose}
+            aria-label={tr('Tutup', 'Close')}
+            title={tr('Tutup', 'Close')}
+            className="p-1 text-slate-400 hover:text-slate-600 rounded-lg"
+          >
             <X size={20} />
           </button>
         </div>
@@ -124,7 +137,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
             <div className="p-6 text-center text-slate-300 space-y-3">
               <p className="text-xs">{error}</p>
               <label className="inline-block bg-blue-600 text-white text-xs px-4 py-2 rounded-lg font-medium cursor-pointer shadow">
-                Pilih Foto dari Galeri
+                {tr('Pilih Foto dari Galeri', 'Choose Photo from Gallery')}
                 <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
               </label>
             </div>
@@ -140,7 +153,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
           )}
 
           {photo && (
-            <img src={photo} alt="Preview Selfie" className="w-full h-full object-cover" />
+            <img src={photo} alt={tr('Pratinjau Selfie', 'Selfie Preview')} className="w-full h-full object-cover" />
           )}
         </div>
 
@@ -149,7 +162,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
           {!photo ? (
             <>
               <label className="text-xs text-slate-500 underline cursor-pointer">
-                Pilih File
+                {tr('Pilih File', 'Choose File')}
                 <input type="file" accept="image/*" onChange={handleFileUpload} className="hidden" />
               </label>
               <button
@@ -158,7 +171,7 @@ export const CameraModal: React.FC<CameraModalProps> = ({
                 className="flex items-center gap-2 bg-blue-600 text-white px-5 py-2.5 rounded-full font-medium text-sm shadow hover:bg-blue-700 disabled:opacity-50"
               >
                 <Camera size={18} />
-                <span>Ambil Foto</span>
+                <span>{tr('Ambil Foto', 'Take Photo')}</span>
               </button>
               <div className="w-12" />
             </>
@@ -169,14 +182,14 @@ export const CameraModal: React.FC<CameraModalProps> = ({
                 className="flex items-center gap-1.5 text-xs text-slate-600 hover:text-slate-900 font-medium px-3 py-2 rounded-lg border border-slate-200"
               >
                 <RefreshCw size={14} />
-                <span>Ulangi</span>
+                <span>{tr('Ulangi', 'Retake')}</span>
               </button>
               <button
                 onClick={handleConfirm}
                 className="flex items-center gap-1.5 bg-emerald-600 text-white text-xs font-semibold px-5 py-2.5 rounded-lg shadow hover:bg-emerald-700"
               >
                 <Check size={16} />
-                <span>Gunakan Foto Ini</span>
+                <span>{tr('Gunakan Foto Ini', 'Use This Photo')}</span>
               </button>
             </>
           )}

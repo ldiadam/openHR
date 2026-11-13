@@ -1,10 +1,11 @@
 import React, { useState, useEffect } from 'react';
 import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit } from 'lucide-react';
 import { apiFetch } from '../api';
+import { TableSkeleton } from '../components/Skeleton';
 import { useLanguage } from '../context/LanguageContext';
 
 export const HRLeave: React.FC = () => {
-  const { t, formatDate } = useLanguage();
+  const { t, tr, formatDate } = useLanguage();
   const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays'>('requests');
   const [requests, setRequests] = useState<any[]>([]);
   const [balances, setBalances] = useState<any[]>([]);
@@ -48,7 +49,12 @@ export const HRLeave: React.FC = () => {
   }, []);
 
   const handleReview = async (id: string, status: 'approved' | 'rejected') => {
-    const note = prompt(`Catatan ${status === 'approved' ? 'persetujuan' : 'penolakan'} (opsional):`);
+    const note = prompt(
+      tr(
+        `Catatan ${status === 'approved' ? 'persetujuan' : 'penolakan'} (opsional):`,
+        `${status === 'approved' ? 'Approval' : 'Rejection'} note (optional):`
+      )
+    );
     try {
       const res = await apiFetch(`/leave/requests/${id}/review`, {
         method: 'POST',
@@ -68,8 +74,8 @@ export const HRLeave: React.FC = () => {
       const res = await apiFetch('/leave/adjust-balance', {
         method: 'POST',
         body: JSON.stringify({
-          employee_id: selectedBalance.nik ? undefined : selectedBalance.employee_id,
-          leave_type_id: 'lt-annual',
+          employee_id: selectedBalance.employee_id || selectedBalance.nik,
+          leave_type_id: selectedBalance.leave_type_id || 'lt-annual',
           adjustment_days: parseFloat(adjustDays),
           reason: adjustReason,
         }),
@@ -121,7 +127,7 @@ export const HRLeave: React.FC = () => {
             className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
           >
             <Plus size={16} />
-            <span>Tambah Hari Libur</span>
+            <span>{tr('Tambah Hari Libur', 'Add Holiday')}</span>
           </button>
         )}
       </div>
@@ -178,15 +184,18 @@ export const HRLeave: React.FC = () => {
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4 font-bold">Karyawan</th>
-                  <th className="py-3 px-4 font-bold">Jenis Cuti</th>
-                  <th className="py-3 px-4 font-bold">Rentang Tanggal</th>
-                  <th className="py-3 px-4 font-bold">Total Hari</th>
-                  <th className="py-3 px-4 font-bold">Alasan</th>
-                  <th className="py-3 px-4 font-bold">Status</th>
-                  <th className="py-3 px-4 font-bold text-right">Aksi</th>
+                  <th className="py-3 px-4 font-bold">{tr('Karyawan', 'Employee')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Jenis Cuti', 'Leave Type')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Rentang Tanggal', 'Date Range')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Total Hari', 'Total Days')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Alasan', 'Reason')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Status', 'Status')}</th>
+                  <th className="py-3 px-4 font-bold text-right">{tr('Aksi', 'Actions')}</th>
                 </tr>
               </thead>
+              {loading ? (
+                <TableSkeleton rows={6} columns={7} />
+              ) : (
               <tbody className="divide-y divide-slate-100">
                 {requests.map((r) => (
                   <tr key={r.id}>
@@ -195,13 +204,16 @@ export const HRLeave: React.FC = () => {
                     <td className="py-3 px-4">
                       {formatDate(r.start_date)} - {formatDate(r.end_date)}
                     </td>
-                    <td className="py-3 px-4 font-bold">{r.total_days} Hari</td>
+                    <td className="py-3 px-4 font-bold">{r.total_days} {tr('Hari', 'Days')}</td>
                     <td className="py-3 px-4 italic max-w-xs">{r.reason}</td>
                     <td className="py-3 px-4">
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                         r.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : r.status === 'rejected' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
                       }`}>
-                        {r.status}
+                        {tr(
+                          r.status === 'approved' ? 'Disetujui' : r.status === 'rejected' ? 'Ditolak' : 'Menunggu',
+                          r.status === 'approved' ? 'Approved' : r.status === 'rejected' ? 'Rejected' : 'Pending'
+                        )}
                       </span>
                     </td>
                     <td className="py-3 px-4 text-right">
@@ -211,20 +223,28 @@ export const HRLeave: React.FC = () => {
                             onClick={() => handleReview(r.id, 'approved')}
                             className="bg-emerald-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-emerald-700"
                           >
-                            Setujui
+                            {tr('Setujui', 'Approve')}
                           </button>
                           <button
                             onClick={() => handleReview(r.id, 'rejected')}
                             className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-rose-700"
                           >
-                            Tolak
+                            {tr('Tolak', 'Reject')}
                           </button>
                         </div>
                       )}
                     </td>
                   </tr>
                 ))}
+                {!requests.length && (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-xs text-slate-400">
+                      {tr('Belum ada pengajuan cuti.', 'No leave requests yet.')}
+                    </td>
+                  </tr>
+                )}
               </tbody>
+              )}
             </table>
           </div>
         </div>
@@ -237,24 +257,27 @@ export const HRLeave: React.FC = () => {
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4 font-bold">Karyawan</th>
-                  <th className="py-3 px-4 font-bold">Departemen</th>
-                  <th className="py-3 px-4 font-bold">Jenis Cuti</th>
-                  <th className="py-3 px-4 font-bold">Hak Cuti</th>
-                  <th className="py-3 px-4 font-bold">Terpakai</th>
-                  <th className="py-3 px-4 font-bold">Sisa Cuti</th>
-                  <th className="py-3 px-4 font-bold text-right">Aksi</th>
+                  <th className="py-3 px-4 font-bold">{tr('Karyawan', 'Employee')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Departemen', 'Department')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Jenis Cuti', 'Leave Type')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Hak Cuti', 'Leave Entitlement')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Terpakai', 'Used')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Sisa Cuti', 'Remaining')}</th>
+                  <th className="py-3 px-4 font-bold text-right">{tr('Aksi', 'Actions')}</th>
                 </tr>
               </thead>
+              {loading ? (
+                <TableSkeleton rows={6} columns={7} />
+              ) : (
               <tbody className="divide-y divide-slate-100">
                 {balances.map((b, i) => (
                   <tr key={i}>
                     <td className="py-3 px-4 font-bold text-slate-900">{b.full_name} ({b.nik})</td>
                     <td className="py-3 px-4">{b.department_name}</td>
                     <td className="py-3 px-4">{b.leave_type_name}</td>
-                    <td className="py-3 px-4 font-medium">{b.total_entitled} Hari</td>
-                    <td className="py-3 px-4 font-medium text-rose-600">{b.used_days} Hari</td>
-                    <td className="py-3 px-4 font-black text-emerald-600 text-sm">{b.remaining_days} Hari</td>
+                    <td className="py-3 px-4 font-medium">{b.total_entitled} {tr('Hari', 'Days')}</td>
+                    <td className="py-3 px-4 font-medium text-rose-600">{b.used_days} {tr('Hari', 'Days')}</td>
+                    <td className="py-3 px-4 font-black text-emerald-600 text-sm">{b.remaining_days} {tr('Hari', 'Days')}</td>
                     <td className="py-3 px-4 text-right">
                       <button
                         onClick={() => {
@@ -264,12 +287,20 @@ export const HRLeave: React.FC = () => {
                         className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-bold"
                       >
                         <Edit size={14} />
-                        <span>Sesuaikan</span>
+                        <span>{tr('Sesuaikan', 'Adjust')}</span>
                       </button>
                     </td>
                   </tr>
                 ))}
+                {!balances.length && (
+                  <tr>
+                    <td colSpan={7} className="py-10 text-center text-xs text-slate-400">
+                      {tr('Belum ada data saldo cuti.', 'No leave balance data yet.')}
+                    </td>
+                  </tr>
+                )}
               </tbody>
+              )}
             </table>
           </div>
         </div>
@@ -282,12 +313,15 @@ export const HRLeave: React.FC = () => {
             <table className="w-full text-left text-xs text-slate-600">
               <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
                 <tr>
-                  <th className="py-3 px-4 font-bold">Tanggal</th>
-                  <th className="py-3 px-4 font-bold">Nama Hari Libur</th>
-                  <th className="py-3 px-4 font-bold">Kategori</th>
-                  <th className="py-3 px-4 font-bold">Potong Cuti Tahunan?</th>
+                  <th className="py-3 px-4 font-bold">{tr('Tanggal', 'Date')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Nama Hari Libur', 'Holiday Name')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Kategori', 'Category')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Potong Cuti Tahunan?', 'Deduct Annual Leave?')}</th>
                 </tr>
               </thead>
+              {loading ? (
+                <TableSkeleton rows={6} columns={4} />
+              ) : (
               <tbody className="divide-y divide-slate-100">
                 {holidays.map((h) => (
                   <tr key={h.id}>
@@ -297,19 +331,27 @@ export const HRLeave: React.FC = () => {
                       <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
                         h.type === 'cuti_bersama' ? 'bg-amber-100 text-amber-800' : 'bg-blue-100 text-blue-800'
                       }`}>
-                        {h.type === 'cuti_bersama' ? 'Cuti Bersama' : 'Libur Nasional'}
+                        {h.type === 'cuti_bersama' ? tr('Cuti Bersama', 'Collective Leave') : tr('Libur Nasional', 'National Holiday')}
                       </span>
                     </td>
                     <td className="py-3 px-4">
                       {h.is_cuti_bersama_deducts_leave === 1 ? (
-                        <span className="text-rose-600 font-semibold">Ya (Memotong Saldo Cuti)</span>
+                        <span className="text-rose-600 font-semibold">{tr('Ya (Memotong Saldo Cuti)', 'Yes (Deducts Leave Balance)')}</span>
                       ) : (
-                        <span className="text-slate-400">Tidak</span>
+                        <span className="text-slate-400">{tr('Tidak', 'No')}</span>
                       )}
                     </td>
                   </tr>
                 ))}
+                {!holidays.length && (
+                  <tr>
+                    <td colSpan={4} className="py-10 text-center text-xs text-slate-400">
+                      {tr('Belum ada hari libur pada tahun ini.', 'No holidays for this year yet.')}
+                    </td>
+                  </tr>
+                )}
               </tbody>
+              )}
             </table>
           </div>
         </div>
@@ -317,16 +359,21 @@ export const HRLeave: React.FC = () => {
 
       {/* ADJUST BALANCE MODAL */}
       {showAdjustModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setShowAdjustModal(false);
+          }}
+        >
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-900">Penyesuaian Saldo Cuti (HR Adjustment)</h3>
+            <h3 className="font-bold text-base text-slate-900">{tr('Penyesuaian Saldo Cuti (HR Adjustment)', 'Leave Balance Adjustment (HR Adjustment)')}</h3>
             <p className="text-xs text-slate-500">
-              Karyawan: <strong>{selectedBalance?.full_name}</strong>
+              {tr('Karyawan', 'Employee')}: <strong>{selectedBalance?.full_name}</strong>
             </p>
             <form onSubmit={handleAdjustBalance} className="space-y-3 text-xs">
               <div>
                 <label className="block text-slate-700 font-medium mb-1">
-                  Jumlah Hari Penyesuaian (+ untuk tambah, - untuk kurangi)
+                  {tr('Jumlah Hari Penyesuaian (+ untuk tambah, - untuk kurangi)', 'Adjustment Days (+ to add, - to subtract)')}
                 </label>
                 <input
                   type="number"
@@ -339,13 +386,13 @@ export const HRLeave: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Alasan Penyesuaian *</label>
+                <label className="block text-slate-700 font-medium mb-1">{tr('Alasan Penyesuaian *', 'Adjustment Reason *')}</label>
                 <textarea
                   required
                   rows={3}
                   value={adjustReason}
                   onChange={(e) => setAdjustReason(e.target.value)}
-                  placeholder="Kompensasi lembur akhir pekan / penyesuaian carry-over..."
+                  placeholder={tr('Kompensasi lembur akhir pekan / penyesuaian carry-over...', 'Weekend overtime compensation / carry-over adjustment...')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl"
                 />
               </div>
@@ -356,13 +403,13 @@ export const HRLeave: React.FC = () => {
                   onClick={() => setShowAdjustModal(false)}
                   className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 text-xs"
                 >
-                  Batal
+                  {tr('Batal', 'Cancel')}
                 </button>
                 <button
                   type="submit"
                   className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md text-xs hover:bg-blue-700"
                 >
-                  Simpan Penyesuaian
+                  {tr('Simpan Penyesuaian', 'Save Adjustment')}
                 </button>
               </div>
             </form>
@@ -372,24 +419,29 @@ export const HRLeave: React.FC = () => {
 
       {/* ADD HOLIDAY MODAL */}
       {showHolidayModal && (
-        <div className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4">
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setShowHolidayModal(false);
+          }}
+        >
           <div className="bg-white rounded-3xl max-w-sm w-full p-6 shadow-2xl space-y-4">
-            <h3 className="font-bold text-base text-slate-900">Tambah Hari Libur Perusahaan / Nasional</h3>
+            <h3 className="font-bold text-base text-slate-900">{tr('Tambah Hari Libur Perusahaan / Nasional', 'Add Company / National Holiday')}</h3>
             <form onSubmit={handleAddHoliday} className="space-y-3 text-xs">
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Nama Hari Libur *</label>
+                <label className="block text-slate-700 font-medium mb-1">{tr('Nama Hari Libur *', 'Holiday Name *')}</label>
                 <input
                   type="text"
                   required
                   value={holidayName}
                   onChange={(e) => setHolidayName(e.target.value)}
-                  placeholder="HUT Perusahaan..."
+                  placeholder={tr('HUT Perusahaan...', 'Company anniversary...')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl"
                 />
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Tanggal *</label>
+                <label className="block text-slate-700 font-medium mb-1">{tr('Tanggal *', 'Date *')}</label>
                 <input
                   type="date"
                   required
@@ -400,15 +452,15 @@ export const HRLeave: React.FC = () => {
               </div>
 
               <div>
-                <label className="block text-slate-700 font-medium mb-1">Jenis Hari Libur</label>
+                <label className="block text-slate-700 font-medium mb-1">{tr('Jenis Hari Libur', 'Holiday Type')}</label>
                 <select
                   value={holidayType}
                   onChange={(e) => setHolidayType(e.target.value)}
                   className="w-full p-2.5 border border-slate-300 rounded-xl"
                 >
-                  <option value="national">Libur Nasional Resmi</option>
-                  <option value="cuti_bersama">Cuti Bersama Pemerintah</option>
-                  <option value="company">Libur Khusus Perusahaan</option>
+                  <option value="national">{tr('Libur Nasional Resmi', 'Official National Holiday')}</option>
+                  <option value="cuti_bersama">{tr('Cuti Bersama Pemerintah', 'Government Collective Leave')}</option>
+                  <option value="company">{tr('Libur Khusus Perusahaan', 'Company-Specific Holiday')}</option>
                 </select>
               </div>
 
@@ -421,7 +473,7 @@ export const HRLeave: React.FC = () => {
                   className="rounded text-blue-600"
                 />
                 <label htmlFor="hDeduct" className="text-slate-700 font-medium">
-                  Memotong saldo cuti tahunan karyawan
+                  {tr('Memotong saldo cuti tahunan karyawan', "Deducts from the employee's annual leave balance")}
                 </label>
               </div>
 
@@ -431,13 +483,13 @@ export const HRLeave: React.FC = () => {
                   onClick={() => setShowHolidayModal(false)}
                   className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 text-xs"
                 >
-                  Batal
+                  {tr('Batal', 'Cancel')}
                 </button>
                 <button
                   type="submit"
                   className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md text-xs hover:bg-blue-700"
                 >
-                  Tambah Libur
+                  {tr('Tambah Libur', 'Add Holiday')}
                 </button>
               </div>
             </form>

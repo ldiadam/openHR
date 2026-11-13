@@ -7,7 +7,8 @@ import {
   signJwt,
   verifyPassword,
 } from '../middleware/auth';
-import { getWelcomeInviteEmail, sendEmail } from '../services/smtp';
+import { sendEmailInBackground } from '../services/smtp';
+import { getPasswordResetEmail } from '../services/email-templates';
 
 export const authRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -20,13 +21,19 @@ authRoutes.post('/login', async (c) => {
     return c.json({ error: 'Email dan kata sandi wajib diisi' }, 400);
   }
 
+  const identifier = email.toLowerCase().trim();
   const user = await c.env.DB.prepare(
-    `SELECT u.*, e.full_name as employee_name, e.job_title, e.department_id, e.branch_id
+    `SELECT u.*, e.full_name as employee_name, e.job_title, e.department_id, e.branch_id, e.company_email, e.personal_email, e.nik
      FROM users u
      LEFT JOIN employees e ON u.employee_id = e.id
-     WHERE u.email = ? AND u.is_active = 1`
+     WHERE (
+       LOWER(u.email) = ? OR
+       LOWER(COALESCE(e.company_email, '')) = ? OR
+       LOWER(COALESCE(e.personal_email, '')) = ? OR
+       LOWER(COALESCE(e.nik, '')) = ?
+     ) AND u.is_active = 1`
   )
-    .bind(email.toLowerCase().trim())
+    .bind(identifier, identifier, identifier, identifier)
     .first<any>();
 
   if (!user) {
@@ -120,15 +127,33 @@ authRoutes.post('/request-reset', async (c) => {
     .bind(`pr-${Date.now()}`, user.id, token, expiresAt)
     .run();
 
-  const appUrl = c.env.APP_URL || 'http://localhost:8787';
-  const resetLink = `${appUrl}/reset-password?token=${token}`;
+  const comp = await c.env.DB.prepare(
+    `SELECT name, legal_name, custom_domain, purelymail_domain, purelymail_from_address, purelymail_smtp_pass FROM companies LIMIT 1`
+  ).first<any>();
 
-  await sendEmail(c.env, {
+  const appUrl = comp?.custom_domain
+    ? (comp.custom_domain.startsWith('http') ? comp.custom_domain : `https://${comp.custom_domain}`)
+    : (c.env.APP_URL || 'http://localhost:8787');
+  const resetLink = `${appUrl}/reset-password?token=${token}`;
+  const companyName = comp?.legal_name || comp?.name || 'Portal HR';
+
+  const emailData = getPasswordResetEmail({
+    name: user.full_name || undefined,
+    resetLink,
+    companyName,
+    expiresMinutes: 60,
+  });
+
+  sendEmailInBackground(c, c.env, {
     to: user.email,
-    subject: 'Reset Kata Sandi Akun openHR',
-    text: `Halo,\n\nAnda meminta reset kata sandi. Klik tautan berikut:\n${resetLink}\n\nTautan berlaku selama 1 jam.`,
-    html: `<p>Halo,</p><p>Klik tautan berikut untuk membuat kata sandi baru:</p><p><a href="${resetLink}">${resetLink}</a></p>`,
+    subject: `Reset kata sandi akun kepegawaian Anda (Password reset) - ${companyName}`,
+    text: emailData.text,
+    html: emailData.html,
     type: 'password_reset',
+    domainName: comp?.purelymail_domain,
+    fromAddress: comp?.purelymail_from_address,
+    smtpPass: comp?.purelymail_smtp_pass,
+    senderName: companyName,
   });
 
   return c.json({
@@ -169,6 +194,49 @@ authRoutes.post('/confirm-reset', async (c) => {
   return c.json({ message: 'Kata sandi berhasil diperbarui. Silakan login.' });
 });
 
+// 4b. Get Invitation Information (For previewing account details on accept invite page)
+authRoutes.get('/invite-info', async (c) => {
+  const token = c.req.query('token');
+  if (!token) {
+    return c.json({ valid: false, message: 'Token aktivasi tidak disertakan.' });
+  }
+
+  const invite = await c.env.DB.prepare(
+    `SELECT i.*, e.full_name as employee_name, e.company_email, e.personal_email, e.nik
+     FROM invitations i
+     LEFT JOIN employees e ON i.employee_id = e.id
+     WHERE i.token = ?`
+  )
+    .bind(token)
+    .first<any>();
+
+  if (!invite) {
+    return c.json({ valid: false, message: 'Tautan aktivasi tidak valid atau tidak ditemukan.' });
+  }
+
+  const isExpired = new Date(invite.expires_at) < new Date();
+  const isAccepted = invite.status === 'accepted';
+
+  let message = '';
+  if (isAccepted) {
+    message = 'Akun untuk undangan ini sudah aktif. Anda dapat langsung masuk dengan email dan kata sandi Anda.';
+  } else if (isExpired) {
+    message = 'Tautan aktivasi telah kedaluwarsa. Silakan hubungi tim HR untuk mengirim ulang undangan.';
+  }
+
+  return c.json({
+    valid: !isExpired && !isAccepted,
+    status: invite.status,
+    isExpired,
+    isAccepted,
+    message,
+    employeeName: invite.employee_name || 'Karyawan',
+    loginEmail: invite.company_email || invite.email,
+    personalEmail: invite.personal_email,
+    nik: invite.nik,
+  });
+});
+
 // 5. Accept Invitation (New Employee Onboarding Invite)
 authRoutes.post('/accept-invite', async (c) => {
   const { token, password } = await c.req.json();
@@ -205,13 +273,31 @@ authRoutes.post('/accept-invite', async (c) => {
     )
       .bind(userId, invite.email, passwordHash, invite.employee_id)
       .run();
+    user = { id: userId, email: invite.email, role: 'employee', employee_id: invite.employee_id };
   }
 
   await c.env.DB.prepare(`UPDATE invitations SET status = 'accepted' WHERE id = ?`)
     .bind(invite.id)
     .run();
 
-  return c.json({ message: 'Akun Anda telah aktif. Silakan masuk menggunakan email dan kata sandi baru Anda.' });
+  const authToken = await signJwt({
+    userId: user.id,
+    email: user.email,
+    role: user.role || 'employee',
+    tenantId: 'default',
+    employeeId: user.employee_id || invite.employee_id,
+  }, c.env.JWT_SECRET);
+
+  return c.json({
+    message: 'Akun Anda telah aktif dan kata sandi berhasil disimpan.',
+    token: authToken,
+    user: {
+      id: user.id,
+      email: user.email,
+      role: user.role || 'employee',
+      employee_id: user.employee_id || invite.employee_id,
+    },
+  });
 });
 
 // 6. List Invitations (For HR to see pending links)

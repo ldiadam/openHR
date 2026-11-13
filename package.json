@@ -11,6 +11,8 @@
     "test": "node --import tsx --test test/*.test.ts",
     "migrate:local": "wrangler d1 migrations apply DB --local",
     "migrate:remote": "wrangler d1 migrations apply DB --remote",
+    "docuseal:register:template": "node --import tsx scripts/register-document-template.ts",
+    "docuseal:purge": "node --import tsx scripts/purge-signed-documents.ts",
     "deploy": "pnpm build && wrangler deploy"
   },
   "keywords": [],
@@ -28,6 +30,7 @@
   "devDependencies": {
     "@cloudflare/workers-types": "^5.20261107.1",
     "@tailwindcss/vite": "^4.3.5",
+    "@types/geojson": "^7946.0.16",
     "@types/node": "^26.6.6",
     "@types/react": "^19.3.0",
     "@types/react-dom": "^19.3.0",
@@ -40,13 +43,18 @@
   },
   "dependencies": {
     "@hono/zod-validator": "^0.9.1",
+    "clsx": "^2.1.1",
+    "fflate": "^0.8.3",
     "hono": "^4.13.17",
     "jspdf": "^4.2.1",
     "lucide-react": "^1.70.0",
+    "maplibre-gl": "^6.17.0",
     "react": "^19.3.1",
     "react-dom": "^19.3.1",
     "react-router-dom": "^7.18.5",
+    "tailwind-merge": "^3.7.0",
     "xlsx": "^0.18.5",
+    "xlsx-js-style": "^1.2.0",
     "zod": "^4.6.7"
   }
 }

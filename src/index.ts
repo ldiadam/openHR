@@ -10,6 +10,9 @@ import { payrollRoutes } from './routes/payroll';
 import { kasbonRoutes } from './routes/kasbon';
 import { reportRoutes } from './routes/reports';
 import { settingsRoutes } from './routes/settings';
+import { signingRoutes } from './routes/signing';
+import { webhookRoutes } from './routes/webhooks';
+import { getFile } from './services/storage';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -37,12 +40,65 @@ app.get('/api/health', (c) => {
 app.get('/api/public/company', async (c) => {
   try {
     const comp = await c.env.DB.prepare(
-      `SELECT name, legal_name, logo_url, address, phone, email FROM companies LIMIT 1`
+      `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain FROM companies LIMIT 1`
     ).first<any>();
     return c.json({ company: comp || null });
   } catch (err: any) {
     return c.json({ company: null });
   }
+});
+
+// Public Company Logo binary endpoint
+app.get('/api/public/company-logo', async (c) => {
+  try {
+    const file = await getFile(c.env, 'company/logo');
+    if (!file) {
+      return c.json({ error: 'Logo not found' }, 404);
+    }
+    c.header('Content-Type', file.contentType || 'image/png');
+    c.header('Cache-Control', 'public, max-age=86400');
+    return c.body(file.data as any);
+  } catch {
+    return c.json({ error: 'Logo not found' }, 404);
+  }
+});
+
+// Web app manifest (company-aware, required for a valid install prompt)
+app.get('/api/manifest.webmanifest', async (c) => {
+  let companyName = 'HR & Payroll';
+  try {
+    const comp = await c.env.DB.prepare(`SELECT name FROM companies LIMIT 1`).first<any>();
+    if (comp?.name && String(comp.name).trim()) companyName = String(comp.name).trim();
+  } catch {
+    // Fall back to the generic name when the DB is unavailable
+  }
+
+  const origin = new URL(c.req.url).origin;
+  const cleaned = companyName.replace(/^(PT|CV|UD|TBK|NV|FIRMA)\.?\s+/i, '').trim();
+  const shortName =
+    cleaned.length <= 15 ? cleaned : (cleaned.split(/\s+/)[0] || 'HR').slice(0, 15);
+
+  return c.json(
+    {
+      name: companyName,
+      short_name: shortName,
+      description: 'Sistem HR dan penggajian',
+      lang: 'id',
+      start_url: `${origin}/`,
+      scope: `${origin}/`,
+      display: 'standalone',
+      orientation: 'portrait-primary',
+      background_color: '#f8fafc',
+      theme_color: '#2563eb',
+      icons: [
+        { src: `${origin}/icon-192.png`, sizes: '192x192', type: 'image/png', purpose: 'any' },
+        { src: `${origin}/icon-512.png`, sizes: '512x512', type: 'image/png', purpose: 'any' },
+        { src: `${origin}/icon-maskable-512.png`, sizes: '512x512', type: 'image/png', purpose: 'maskable' },
+      ],
+    },
+    200,
+    { 'Content-Type': 'application/manifest+json' }
+  );
 });
 
 // Mount Routes
@@ -55,6 +111,10 @@ app.route('/api/payroll', payrollRoutes);
 app.route('/api/kasbon', kasbonRoutes);
 app.route('/api/reports', reportRoutes);
 app.route('/api/settings', settingsRoutes);
+app.route('/api/hr', signingRoutes);
+
+// DocuSeal webhook (unauthenticated; verified via HMAC signature header)
+app.route('/webhooks', webhookRoutes);
 
 // Global Error Handler
 app.onError((err, c) => {

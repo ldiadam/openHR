@@ -62,6 +62,11 @@ Semua tarif, batas upah (*caps*), dan tabel tarif efektif disimpan di tabel `pay
    - Digunakan pula untuk reset kata sandi, status persetujuan cuti, dan notifikasi slip gaji terbit.
 3. **Toleransi & Fallback Tanpa Kegagalan**:
    - Jika kredensial Purelymail belum diatur (di lingkungan lokal / dev), onboarding **tetap berhasil 100%**. Sistem mencatat email ke tabel `notifications_outbox`, mencetak tautan undangan ke konsol, dan menampilkan tautan aktivasi langsung di antarmuka HR.
+4. **Email API (opsional, direkomendasikan di production)**:
+   - Pengiriman dapat dialihkan dari SMTP ke HTTP email API tanpa mengubah kode. Bila salah satu kredensial berikut ada, API dipakai otomatis; jika tidak, SMTP Purelymail tetap menjadi fallback.
+   - Provider yang didukung: **Resend** (`RESEND_API_KEY`), **SendGrid** (`SENDGRID_API_KEY`), **Brevo** (`BREVO_API_KEY`), **Mailgun** (`MAILGUN_API_KEY` + `MAILGUN_DOMAIN`), atau binding Cloudflare **`send_email`** bernama `EMAIL`.
+   - Gunakan `EMAIL_API_PROVIDER` untuk memaksa provider tertentu (`resend|sendgrid|brevo|mailgun|cloudflare`).
+   - Pengiriman tetap fire-and-forget melalui `ctx.waitUntil`, dan status setiap email tercatat di `notifications_outbox`.
 
 ---
 
@@ -164,6 +169,10 @@ pnpm wrangler secret put PURELYMAIL_API_TOKEN
 pnpm wrangler secret put PURELYMAIL_SMTP_PASS
 # Masukkan App Password SMTP Purelymail
 
+# Opsional: alihkan pengiriman email ke HTTP API (contoh Resend)
+pnpm wrangler secret put RESEND_API_KEY
+# Masukkan API key dari dashboard Resend
+
 pnpm wrangler secret put JWT_SECRET
 # Masukkan kunci rahasia minimal 32 karakter untuk penandatanganan JWT
 ```
@@ -184,3 +193,130 @@ Aplikasi dirancang agar selalu berada di dalam koridor gratis Cloudflare:
 - **Cloudflare R2**: Batas kuota gratis: 10 GB penyimpanan berkas, 1.000.000 operasi Class A/bulan, 10.000.000 operasi Class B/bulan.
 - **Static Assets / Pages**: Permintaan aset statis tidak terbatas (*unlimited free requests*).
 - **Hasil**: Tidak ada batasan free-tier yang terlampaui.
+
+---
+
+## Integrasi Tanda Tangan Elektronik (DocuSeal)
+
+Modul e-signature memakai **DocuSeal self-hosted** sebagai penyedia tanda tangan. Semua kredensial hanya ada di sisi server.
+
+### Konfigurasi (server-side only)
+
+```bash
+DOCUSEAL_URL=https://sign.example.com
+DOCUSEAL_API_TOKEN=...            # header X-Auth-Token
+DOCUSEAL_WEBHOOK_SECRET=whsec_... # HMAC secret untuk webhook
+HR_APP_URL=https://hr.example.com # redirect & tautan dokumen
+```
+
+Tambahkan ke `.dev.vars` (lokal) atau `wrangler secret put` (produksi). **Jangan** pernah memakai prefix `VITE_` untuk nilai ini — bundle klien tidak boleh memuatnya.
+
+### 1. Mendaftarkan template dokumen
+
+Template HR wajib **versioned**. Setiap versi baru membuat template DocuSeal baru (fork ini tidak melakukan upsert berdasarkan `external_id`, jadi id disimpan sendiri di `hr_document_templates`).
+
+Lewat API (Admin HR / `owner_admin`):
+
+```bash
+curl -X POST https://hr.example.com/api/hr/document-templates \
+  -H "Authorization: Bearer $TOKEN" \
+  -F code=offer_letter \
+  -F name="Offer Letter" \
+  -F file=@offer-letter.pdf
+```
+
+Atau lewat CLI:
+
+```bash
+pnpm docuseal:register:template -- --code offer_letter --name "Offer Letter" --file ./offer-letter.pdf --version 2 --remote
+```
+
+- Kode contoh: `offer_letter`, `nda`, `handbook_ack`, `policy_ack`, `offboarding_clearance`, `pip_warning`, `salary_change`.
+- Template yang masih dipakai pengajuan berjalan (`sent`/`partially_signed`) **tidak boleh diubah** — buat versi baru (endpoint akan menolak dengan 409).
+- Definisi field PDF: koordinat `x, y, w, h` ternormalisasi `0..1`, origin kiri-atas, `page` berbasis 1. DOCX memakai tag `{{Signature;type=signature;role=Employee}}`.
+- Role konsisten: `Employee`, `Manager`, `HR`.
+
+### 2. Membuat pengajuan tanda tangan
+
+```bash
+curl -X POST https://hr.example.com/api/hr/signing-requests \
+  -H "Authorization: Bearer $TOKEN" -H 'Content-Type: application/json' \
+  -d '{
+    "employeeId": "emp_123",
+    "templateCode": "offer_letter",
+    "templateVersion": 3,
+    "signers": [
+      { "role": "Employee", "email": "jane@example.com", "name": "Jane" },
+      { "role": "HR", "email": "hr@example.com", "name": "HR Team" }
+    ],
+    "order": "preserved",
+    "dueAt": "2026-12-31T17:00:00Z",
+    "sendEmail": false,
+    "prefill": { "Position": "Engineer" },
+    "idempotencyKey": "offer-emp_123-v3"
+  }'
+```
+
+- `idempotencyKey` mengembalikan pengajuan yang sama bila diulang (tanpa submission DocuSeal kedua).
+- URL tanda tangan diambil dari `embed_src` DocuSeal — jangan menyusun `/s/:slug` sendiri.
+- Jika pembuatan submission gagal, pengajuan ditandai `failed` dan dapat diulang tanpa membuat template duplikat.
+
+Endpoint lain:
+
+| Method | Path | Keterangan |
+|---|---|---|
+| GET | `/api/hr/signing-requests` | daftar (RBAC-scoped) |
+| GET | `/api/hr/signing-requests/:id` | detail + signer + dokumen |
+| POST | `/api/hr/signing-requests/:id/resend` | perbarui tautan tanda tangan |
+| POST | `/api/hr/signing-requests/:id/supersede` | tandai digantikan (re-sign) |
+| POST | `/api/hr/signing-requests/bulk-policy-ack` | buat massal per departemen/cabang |
+| GET | `/api/hr/signing-requests/ack-status?code=policy_ack` | siapa sudah/belum |
+| GET | `/api/hr/document-templates` | daftar template & versi |
+| POST | `/api/hr/document-templates/:id/deactivate` | nonaktifkan versi |
+| GET | `/api/hr/employees/:id/documents` | dokumen milik karyawan |
+| GET | `/api/hr/signing-documents/:id/download` | unduhan terotorisasi |
+
+UI tersedia di menu **Dokumen & Tanda Tangan** (`/documents`) untuk `owner_admin`, `finance`, dan `manager`.
+
+### 3. Webhook
+
+Daftarkan di DocuSeal: `https://hr.example.com/webhooks/docuseal`
+
+- Header `X-Docuseal-Signature: <timestamp>.<hex_hmac_sha256>`
+- HMAC input: `<timestamp>.<raw_body>`, secret `DOCUSEAL_WEBHOOK_SECRET`
+- Toleransi timestamp **5 menit**, perbandingan constant-time, ditolak dengan **401**.
+- Event yang ditangani: `submission.completed`, `submission.expired`, `submission.archived`, `submission.declined`, `form.completed`, `form.declined`.
+- Pada `submission.completed` sistem **mengambil submission dari API** lalu langsung mengunduh PDF bertanda tangan + audit trail (URL DocuSeal kedaluwarsa), menyimpannya ke R2, memperbarui status, dan menandai pengajuan `completed`.
+- Retry menghasilkan `{"ok":true,"duplicate":true}` tanpa dokumen/status ganda (dedupe `docuseal_webhook_events`).
+
+### 4. Penyimpanan & retensi
+
+- Objek disimpan di R2 dengan kunci `signed/<signingRequestId>/<kind>-<submitterId>.pdf` (tanpa nama/email).
+- Tiap dokumen mencatat `sha256`, `byte_size`, `content_type`, dan `downloaded_at`.
+- **Audit trail** selalu disimpan bersama PDF sebagai bukti.
+- Retensi default 60 bulan per template (`hr_document_templates.retention_months`); jalankan `pnpm docuseal:purge` (tidak dijadwalkan otomatis).
+- Unduhan hanya lewat endpoint terotorisasi; URL DocuSeal tidak pernah menjadi satu-satunya salinan.
+
+### 5. RBAC
+
+| Peran aplikasi | Padanan | Hak |
+|---|---|---|
+| `owner_admin` | HR_ADMIN | kelola template, semua pengajuan, semua dokumen |
+| `finance` | HR_OPERATOR | buat pengajuan, lihat dokumen karyawan |
+| `manager` | MANAGER | hanya bawahan langsung |
+| `employee` | EMPLOYEE | hanya dokumen sendiri |
+
+Workflow `pip_warning` dan `salary_change` dibatasi ke HR admin dan rantai manajemen karyawan.
+
+### 6. Catatan kepatuhan
+
+- Cocok untuk dokumen internal: offer letter, NDA, acknowledgment kebijakan, PIP, exit clearance, surat perubahan gaji.
+- **Tidak** untuk dokumen yang membutuhkan tanda tangan basah, notarisasi, meterai fisik, atau portal pemerintah.
+- Sertifikat self-signed hanya untuk dokumen berisiko rendah; kontrak kerja berisiko tinggi sebaiknya memakai sertifikat PSrE/terpercaya (unggah PKCS#12 di DocuSeal).
+- Sertakan pemberitahuan privasi/consent serta kebijakan retensi & penghapusan. Kepatuhan UU ITE / PP 71/2019 (ID) dan ETA (SG) perlu ditinjau bersama penasihat hukum.
+
+### 7. Batasan yang diketahui
+
+- Fork ini **tidak** menyediakan konversi HTML→PDF di sisi server, endpoint submission PDF/HTML sekali pakai, atau pengiriman SMS.
+- `/api/templates/html`, `/api/submissions/pdf`, dan `/api/submissions/html` tidak didukung dan tidak dipanggil.
+- Setiap `/api/templates/pdf` membuat template baru; id selalu disimpan lokal.

@@ -155,6 +155,10 @@ export function sanitizeEmployeeByRole(
       fixed_allowances_detail,
       bank_account_number,
       bank_account_holder,
+      bank_swift_code,
+      bank_branch_name,
+      bank_branch_code,
+      bank_branch_address,
       bpjs_wage_basis,
       ...rest
     } = emp;

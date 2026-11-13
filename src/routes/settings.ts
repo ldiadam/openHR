@@ -1,6 +1,10 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
+import { sendEmail } from '../services/smtp';
+import { getTestEmail } from '../services/email-templates';
+import { deleteFile, putFile } from '../services/storage';
+import { makeId } from '../utils/id';
 
 export const settingsRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -20,28 +24,279 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
     `UPDATE companies SET
       name = COALESCE(?, name),
       legal_name = COALESCE(?, legal_name),
+      logo_url = CASE WHEN ? = 1 THEN ? ELSE logo_url END,
       npwp = COALESCE(?, npwp),
       bpjs_kesehatan_code = COALESCE(?, bpjs_kesehatan_code),
       bpjs_tk_code = COALESCE(?, bpjs_tk_code),
       address = COALESCE(?, address),
       phone = COALESCE(?, phone),
       email = COALESCE(?, email),
+      custom_domain = COALESCE(?, custom_domain),
+      purelymail_domain = COALESCE(?, purelymail_domain),
+      purelymail_from_address = COALESCE(?, purelymail_from_address),
+      purelymail_api_token = COALESCE(?, purelymail_api_token),
+      purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
       updated_at = CURRENT_TIMESTAMP
      WHERE tenant_id = 'default'`
   )
     .bind(
       body.name,
       body.legal_name,
+      body.logo_url !== undefined ? 1 : 0,
+      body.logo_url !== undefined ? (body.logo_url?.trim() || null) : null,
       body.npwp,
       body.bpjs_kesehatan_code,
       body.bpjs_tk_code,
       body.address,
       body.phone,
-      body.email
+      body.email,
+      body.custom_domain !== undefined ? (body.custom_domain?.trim() || null) : null,
+      body.purelymail_domain !== undefined ? (body.purelymail_domain?.trim() || null) : null,
+      body.purelymail_from_address !== undefined ? (body.purelymail_from_address?.trim() || null) : null,
+      body.purelymail_api_token !== undefined ? (body.purelymail_api_token?.trim() || null) : null,
+      body.purelymail_smtp_pass !== undefined ? (body.purelymail_smtp_pass?.trim() || null) : null
     )
     .run();
 
-  return c.json({ message: 'Profil perusahaan berhasil diperbarui' });
+  return c.json({ message: 'Profil perusahaan & konfigurasi domain/email berhasil diperbarui' });
+});
+
+const ALLOWED_LOGO_TYPES = new Set([
+  'image/png',
+  'image/jpeg',
+  'image/jpg',
+  'image/webp',
+  'image/svg+xml',
+]);
+const MAX_LOGO_BYTES = 2 * 1024 * 1024;
+
+// Upload Company Logo (supports multipart/form-data or JSON base64)
+settingsRoutes.post('/company/logo', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  const reqType = (c.req.header('Content-Type') || '').toLowerCase();
+
+  let fileData: Uint8Array | null = null;
+  let contentType = 'image/png';
+
+  if (reqType.includes('multipart/form-data')) {
+    const formData = await c.req.formData();
+    const uploaded = formData.get('file') || formData.get('logo');
+    if (uploaded && typeof uploaded !== 'string') {
+      const f = uploaded as unknown as File;
+      contentType = (f.type || 'image/png').toLowerCase();
+      fileData = new Uint8Array(await f.arrayBuffer());
+    }
+  } else {
+    const body = await c.req.json().catch(() => ({}));
+    const base64Input = body.logo_base64 || body.logoBase64 || body.file;
+    if (typeof base64Input === 'string' && base64Input.trim()) {
+      const parts = base64Input.split(',');
+      if (parts.length === 2 && parts[0].startsWith('data:')) {
+        const mimeMatch = parts[0].match(/:(.*?);/);
+        if (mimeMatch) contentType = mimeMatch[1].toLowerCase();
+        const bin = atob(parts[1]);
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        fileData = bytes;
+      } else {
+        const bin = atob(base64Input.trim());
+        const bytes = new Uint8Array(bin.length);
+        for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+        fileData = bytes;
+        if (body.content_type) contentType = String(body.content_type).toLowerCase();
+      }
+    }
+  }
+
+  if (!fileData || fileData.byteLength === 0) {
+    return c.json({ error: 'File logo wajib diunggah.' }, 400);
+  }
+  if (!ALLOWED_LOGO_TYPES.has(contentType)) {
+    return c.json({ error: 'Format logo harus PNG, JPG, WEBP, atau SVG.' }, 400);
+  }
+  if (fileData.byteLength > MAX_LOGO_BYTES) {
+    return c.json({ error: 'Ukuran logo maksimal 2 MB.' }, 400);
+  }
+
+  await putFile(c.env, {
+    key: 'company/logo',
+    data: fileData,
+    contentType: contentType === 'image/jpg' ? 'image/jpeg' : contentType,
+  });
+
+  const logoUrl = `/api/public/company-logo?v=${Date.now()}`;
+  await c.env.DB.prepare(
+    `UPDATE companies SET logo_url = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default'`
+  )
+    .bind(logoUrl)
+    .run();
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
+     VALUES (?, 'default', ?, 'UPLOAD_COMPANY_LOGO', 'companies', 'default', ?)`
+  )
+    .bind(makeId('aud'), user.userId, JSON.stringify({ logo_url: logoUrl, contentType }))
+    .run();
+
+  return c.json({ message: 'Logo perusahaan berhasil diunggah.', logo_url: logoUrl });
+});
+
+// Remove Company Logo (fall back to openHR initials/branding)
+settingsRoutes.delete('/company/logo', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  await deleteFile(c.env, 'company/logo');
+
+  await c.env.DB.prepare(
+    `UPDATE companies SET logo_url = NULL, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default'`
+  ).run();
+
+  await c.env.DB.prepare(
+    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
+     VALUES (?, 'default', ?, 'DELETE_COMPANY_LOGO', 'companies', 'default', '{}')`
+  )
+    .bind(makeId('aud'), user.userId)
+    .run();
+
+  return c.json({ message: 'Logo perusahaan berhasil dihapus.', logo_url: null });
+});
+
+// Test Purelymail Connection (API Token & SMTP)
+settingsRoutes.post('/test-purelymail', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const user = c.get('user');
+
+  // Load from DB if not passed in body
+  const comp = await c.env.DB.prepare(`SELECT * FROM companies LIMIT 1`).first<any>();
+  const apiToken = (body.purelymail_api_token !== undefined ? body.purelymail_api_token?.trim() : null) || comp?.purelymail_api_token || c.env.PURELYMAIL_API_TOKEN;
+  const domainName = (body.purelymail_domain !== undefined ? body.purelymail_domain?.trim() : null) || comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN;
+  const fromAddress = (body.purelymail_from_address !== undefined ? body.purelymail_from_address?.trim() : null) || comp?.purelymail_from_address || c.env.PURELYMAIL_FROM_ADDRESS;
+  const smtpPass = (body.purelymail_smtp_pass !== undefined ? body.purelymail_smtp_pass?.trim() : null) || comp?.purelymail_smtp_pass || c.env.PURELYMAIL_SMTP_PASS;
+  const testRecipient = body.test_recipient?.trim() || user?.email || fromAddress;
+
+  // Persist entered credentials immediately so they become active across the application
+  if (body.purelymail_api_token || body.purelymail_domain || body.purelymail_from_address || body.purelymail_smtp_pass || body.custom_domain) {
+    try {
+      await c.env.DB.prepare(
+        `UPDATE companies SET
+          custom_domain = COALESCE(?, custom_domain),
+          purelymail_domain = COALESCE(?, purelymail_domain),
+          purelymail_from_address = COALESCE(?, purelymail_from_address),
+          purelymail_api_token = COALESCE(?, purelymail_api_token),
+          purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = 'default'`
+      )
+        .bind(
+          body.custom_domain?.trim() || null,
+          body.purelymail_domain?.trim() || null,
+          body.purelymail_from_address?.trim() || null,
+          body.purelymail_api_token?.trim() || null,
+          body.purelymail_smtp_pass?.trim() || null
+        )
+        .run();
+    } catch (e: any) {
+      console.warn('Auto-save in test-purelymail failed:', e.message);
+    }
+  }
+
+  const result: any = {
+    api: { status: 'untested', message: 'Tidak ada token API yang dikonfigurasi' },
+    smtp: { status: 'untested', message: 'SMTP belum diuji' }
+  };
+
+  // 1. Test Purelymail API Token
+  if (apiToken) {
+    try {
+      const baseUrl = c.env.PURELYMAIL_API_BASE_URL || 'https://purelymail.com';
+      const apiRes = await fetch(`${baseUrl}/api/v0/checkAccountCredit`, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          'Purelymail-Api-Token': apiToken,
+        },
+        body: JSON.stringify({}),
+      });
+
+      const apiData: any = await apiRes.json().catch(() => null);
+
+      if (apiRes.ok && apiData?.type === 'success') {
+        const credit = apiData?.result?.credit !== undefined ? `$${apiData.result.credit}` : 'Aktif';
+        result.api = {
+          status: 'ok',
+          message: `Token API Purelymail VALID! Saldo Akun: ${credit}`,
+          credit: apiData?.result?.credit
+        };
+      } else {
+        const errDetail = apiData?.message || apiData?.code || `HTTP ${apiRes.status}`;
+        result.api = {
+          status: 'error',
+          message: `Token API GAGAL: ${errDetail}`
+        };
+      }
+    } catch (err: any) {
+      result.api = {
+        status: 'error',
+        message: `Koneksi API Purelymail gagal: ${err.message}`
+      };
+    }
+  } else {
+    result.api = {
+      status: 'warning',
+      message: 'API Token belum diisi. Otomatisasi pembuatan email karyawan dalam mode simulasi.'
+    };
+  }
+
+  // 2. Test SMTP Sending
+  if (smtpPass && fromAddress && testRecipient) {
+    try {
+      const compName = comp?.legal_name || comp?.name || 'Portal HR';
+      const emailData = getTestEmail({
+        companyName: compName,
+        fromAddress,
+        smtpHost: c.env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com',
+      });
+      const sendRes = await sendEmail(c.env, {
+        to: testRecipient,
+        subject: `Uji koneksi email (Email connection test) - ${compName}`,
+        text: emailData.text,
+        html: emailData.html,
+        type: 'general',
+        fromAddress,
+        smtpPass,
+        domainName,
+        senderName: compName,
+      });
+
+      if (sendRes.success && !sendRes.simulated) {
+        result.smtp = {
+          status: 'ok',
+          message: `Email uji coba berhasil dikirim ke ${testRecipient} via SMTP!`
+        };
+      } else if (sendRes.simulated) {
+        result.smtp = {
+          status: 'warning',
+          message: `Password SMTP belum dikonfigurasi (pengiriman masih simulasi lokal).`
+        };
+      } else {
+        result.smtp = {
+          status: 'error',
+          message: sendRes.error || 'Gagal mengirim email melalui server SMTP.'
+        };
+      }
+    } catch (err: any) {
+      result.smtp = {
+        status: 'error',
+        message: `Error SMTP: ${err.message}`
+      };
+    }
+  } else if (!smtpPass) {
+    result.smtp = {
+      status: 'warning',
+      message: 'Password SMTP belum diisi. Pengiriman email masih disimulasikan.'
+    };
+  }
+
+  return c.json(result);
 });
 
 // 2. Branches (with geofence lat/lng, radius, and UMK)
@@ -151,6 +406,45 @@ settingsRoutes.post('/departments', requireRole(['owner_admin']), async (c) => {
     .run();
 
   return c.json({ message: 'Departemen berhasil ditambahkan', departmentId: id });
+});
+
+settingsRoutes.put('/departments/:id', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const { name, code } = body;
+  if (!name) return c.json({ error: 'Nama departemen wajib diisi' }, 400);
+
+  await c.env.DB.prepare(
+    `UPDATE departments SET name = ?, code = COALESCE(?, code) WHERE id = ?`
+  )
+    .bind(name, code || null, c.req.param('id'))
+    .run();
+
+  return c.json({ message: 'Departemen berhasil diperbarui' });
+});
+
+settingsRoutes.delete('/departments/:id', requireRole(['owner_admin']), async (c) => {
+  const deptId = c.req.param('id');
+  const used = await c.env.DB.prepare(
+    `SELECT COUNT(*) as count FROM employees WHERE department_id = ?`
+  )
+    .bind(deptId)
+    .first<any>();
+
+  if (used && used.count > 0) {
+    return c.json({ error: `Departemen tidak dapat dihapus karena masih dipakai oleh ${used.count} karyawan` }, 400);
+  }
+
+  await c.env.DB.prepare(`DELETE FROM departments WHERE id = ?`).bind(deptId).run();
+  return c.json({ message: 'Departemen berhasil dihapus' });
+});
+
+// Notifications outbox (delivery status)
+settingsRoutes.get('/notifications', requireRole(['owner_admin']), async (c) => {
+  const rows = await c.env.DB.prepare(
+    `SELECT id, to_email, subject, notification_type, status, error_message, created_at, sent_at
+     FROM notifications_outbox ORDER BY created_at DESC LIMIT 50`
+  ).all<any>();
+  return c.json({ notifications: rows.results || [] });
 });
 
 // 5. Attendance Config (Selfie & GPS Settings)
@@ -271,7 +565,7 @@ settingsRoutes.put('/payroll', requireRole(['owner_admin']), async (c) => {
     `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, old_values, new_values)
      VALUES (?, 'default', ?, 'UPDATE_PAYROLL_SETTINGS', 'payroll_settings', ?, ?, ?)`
   )
-    .bind(`aud-${Date.now()}`, user.userId, old.id, JSON.stringify(old), JSON.stringify(body))
+    .bind(makeId('aud'), user.userId, old.id, JSON.stringify(old), JSON.stringify(body))
     .run();
 
   return c.json({ message: 'Konfigurasi payroll Indonesia berhasil diperbarui' });

@@ -94,6 +94,8 @@ export interface EmployeePayrollInput {
   expected_working_days: number;
   late_minutes: number;
   unapproved_absence_days: number;
+  /** Days with no attendance log and no approved leave/absence justification (alpha). */
+  alpha_days?: number;
   
   // Overtime
   overtime_weekday_hours: number;
@@ -106,6 +108,7 @@ export interface EmployeePayrollInput {
   // Manual additions / deductions
   attendance_bonus?: number;
   commission_bonus?: number;
+  thr_amount?: number;
   other_deductions?: number;
   other_deductions_reason?: string;
   
@@ -138,10 +141,14 @@ export interface PayrollCalculationResult {
   attendance_bonus: number;
   commission_bonus: number;
   reimbursement_amount: number;
+  thr_amount: number;
   gross_earnings: number;
   
   late_deduction: number;
   unpaid_leave_deduction: number;
+  /** Alpha portion of unpaid_leave_deduction, for display on payroll items. */
+  alpha_days: number;
+  alpha_deduction: number;
   kasbon_deduction: number;
   other_deductions: number;
   other_deductions_reason?: string;
@@ -221,9 +228,22 @@ export function calculateEmployeePayroll(
     unpaidLeaveDeduction = Math.round((input.base_salary / expectedDays) * input.unapproved_absence_days);
   }
 
+  // Alpha (no-show with no reason) is always deducted at a daily rate. Unlike the
+  // optional late/absence deductions above, this is not gated by a settings toggle:
+  // an unjustified missing day is unpaid by definition.
+  //
+  // The divisor is the same expected_working_days used by proration and unpaid
+  // leave, and the day count is capped at daysWorked. Otherwise a new joiner would
+  // be prorated AND alpha-deducted for the same days, driving net pay negative.
+  const alphaDaysRaw = Math.max(0, Math.floor(input.alpha_days || 0));
+  const alphaDays = Math.min(alphaDaysRaw, daysWorked);
+  const alphaDeduction =
+    alphaDays > 0 ? Math.round((input.base_salary / expectedDays) * alphaDays) : 0;
+
   const attendanceBonus = input.attendance_bonus || 0;
   const commissionBonus = input.commission_bonus || 0;
   const reimbursementAmount = input.reimbursement_amount || 0;
+  const thrAmount = input.thr_amount || 0;
 
   // Gross Earnings
   const grossEarnings =
@@ -232,7 +252,8 @@ export function calculateEmployeePayroll(
     overtimePay +
     attendanceBonus +
     commissionBonus +
-    reimbursementAmount;
+    reimbursementAmount +
+    thrAmount;
 
   // BPJS Wage Base (subject to cap)
   const bpjsWageBase = input.bpjs_wage_basis && input.bpjs_wage_basis > 0
@@ -301,6 +322,7 @@ export function calculateEmployeePayroll(
   const totalDeductions =
     lateDeduction +
     unpaidLeaveDeduction +
+    alphaDeduction +
     kasbonDeduction +
     otherDeductions +
     bpjsKesEmployee +
@@ -329,9 +351,12 @@ export function calculateEmployeePayroll(
     attendance_bonus: attendanceBonus,
     commission_bonus: commissionBonus,
     reimbursement_amount: reimbursementAmount,
+    thr_amount: thrAmount,
     gross_earnings: grossEarnings,
     late_deduction: lateDeduction,
     unpaid_leave_deduction: unpaidLeaveDeduction,
+    alpha_days: alphaDays,
+    alpha_deduction: alphaDeduction,
     kasbon_deduction: kasbonDeduction,
     other_deductions: otherDeductions,
     other_deductions_reason: input.other_deductions_reason,

@@ -1,32 +1,48 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { useSearchParams } from 'react-router-dom';
 import {
   Calendar,
   Clock,
-  CreditCard,
   Receipt,
   Plus,
   CheckCircle2,
   AlertCircle,
   FileCheck,
   Camera,
+  FileSpreadsheet,
+  FileDown,
+  Upload,
+  Eye,
 } from 'lucide-react';
-import { apiFetch } from '../api';
+import { apiFetch, getLocalDateString, getLocalMonthString, downloadFile, getToken } from '../api';
+import { apiFetchCached } from '../utils/offlineCache';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
+import { useAuth } from '../context/AuthContext';
 import { CameraModal } from '../components/CameraModal';
+import { MobileDatePicker } from '../components/pickers/MobileDatePicker';
+import { MobileTimePicker } from '../components/pickers/MobileTimePicker';
+import { MobileSelect } from '../components/pickers/MobileSelect';
+import { MobileMonthPicker } from '../components/pickers/MobileMonthPicker';
+import { generateCombinedReceiptsPdf, ClaimItemForPdf } from '../utils/claimPdf';
 
 export const EmployeeRequests: React.FC = () => {
-  const { t, formatDate, formatCurrency } = useLanguage();
+  const { t, tr, lang, formatDate, formatCurrency } = useLanguage();
+  const { companyName } = useCompany();
+  const { user } = useAuth();
   const [searchParams] = useSearchParams();
-  const initialTab = searchParams.get('type') || 'leave';
-  const [activeTab, setActiveTab] = useState<'leave' | 'overtime' | 'kasbon' | 'reimbursement'>(
-    initialTab as any
-  );
+  const initialType = searchParams.get('type');
+  const initialTab = initialType === 'reimbursement' || initialType === 'overtime' ? initialType : 'leave';
+  const [activeTab, setActiveTab] = useState<'leave' | 'overtime' | 'reimbursement'>(initialTab);
+  const [showForm, setShowForm] = useState(false);
+  const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
+  const [claimMonth, setClaimMonth] = useState(getLocalMonthString);
 
   const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [leaveBalances, setLeaveBalances] = useState<any[]>([]);
   const [history, setHistory] = useState<any[]>([]);
   const [loading, setLoading] = useState(false);
+  const [downloading, setDownloading] = useState(false);
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Forms states
@@ -36,33 +52,37 @@ export const EmployeeRequests: React.FC = () => {
   const [leaveEnd, setLeaveEnd] = useState('');
   const [leaveDays, setLeaveDays] = useState('1');
   const [leaveReason, setLeaveReason] = useState('');
+  const [leaveAttachment, setLeaveAttachment] = useState<string | null>(null);
+  const [leaveAttachmentName, setLeaveAttachmentName] = useState('');
+  const [leaveAttachmentMime, setLeaveAttachmentMime] = useState('image/jpeg');
 
   // 2. Overtime
-  const [otDate, setOtDate] = useState(new Date().toISOString().split('T')[0]);
+  const [otDate, setOtDate] = useState(getLocalDateString());
   const [otStart, setOtStart] = useState('18:00');
   const [otEnd, setOtEnd] = useState('20:00');
   const [otHours, setOtHours] = useState('2');
   const [otReason, setOtReason] = useState('');
   const [otIsHoliday, setOtIsHoliday] = useState(false);
 
-  // 3. Kasbon
-  const [kasbonAmount, setKasbonAmount] = useState('500000');
-  const [kasbonReason, setKasbonReason] = useState('');
-  const [kasbonInstalments, setKasbonInstalments] = useState('1');
-
-  // 4. Reimbursement
+  // 3. Reimbursement
+  const [reimbDate, setReimbDate] = useState(getLocalDateString());
   const [reimbCategory, setReimbCategory] = useState('Transport');
   const [reimbAmount, setReimbAmount] = useState('100000');
   const [reimbDesc, setReimbDesc] = useState('');
+  const [reimbRemarks, setReimbRemarks] = useState('');
+  const [reimbCostCentre, setReimbCostCentre] = useState('');
+  const [reimbProjectRef, setReimbProjectRef] = useState('');
   const [receiptPhoto, setReceiptPhoto] = useState<string | null>(null);
   const [cameraOpen, setCameraOpen] = useState(false);
+  const [previewModalImg, setPreviewModalImg] = useState<string | null>(null);
+  const fileInputRef = useRef<HTMLInputElement>(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
       const [ltRes, balRes] = await Promise.all([
-        apiFetch('/leave/types'),
-        apiFetch('/leave/balances'),
+        apiFetchCached('/leave/types'),
+        apiFetchCached('/leave/balances'),
       ]);
       setLeaveTypes(ltRes.leaveTypes || []);
       setLeaveBalances(balRes.balances || []);
@@ -81,16 +101,13 @@ export const EmployeeRequests: React.FC = () => {
   const loadHistory = async (tab: string) => {
     try {
       if (tab === 'leave') {
-        const res = await apiFetch('/leave/requests');
+        const res = await apiFetchCached('/leave/requests?scope=mine');
         setHistory(res.requests || []);
       } else if (tab === 'overtime') {
-        const res = await apiFetch('/shifts/overtime/requests');
+        const res = await apiFetchCached('/shifts/overtime/requests?scope=mine');
         setHistory(res.requests || []);
-      } else if (tab === 'kasbon') {
-        const res = await apiFetch('/kasbon/requests');
-        setHistory(res.kasbonList || []);
       } else if (tab === 'reimbursement') {
-        const res = await apiFetch('/kasbon/reimbursements');
+        const res = await apiFetchCached(`/kasbon/reimbursements?month=${claimMonth}&scope=mine`);
         setHistory(res.reimbursements || []);
       }
     } catch (err: any) {
@@ -100,11 +117,33 @@ export const EmployeeRequests: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [activeTab]);
+  }, [activeTab, claimMonth]);
 
   const handleSubmitLeave = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+    if (!leaveTypeId || !leaveStart || !leaveEnd) {
+      setMsg({
+        type: 'error',
+        text: tr('Lengkapi jenis cuti, tanggal mulai, dan tanggal selesai.', 'Please complete the leave type, start date, and end date.'),
+      });
+      return;
+    }
+    const today = getLocalDateString();
+    if (leaveStart < today || leaveEnd < today) {
+      setMsg({
+        type: 'error',
+        text: tr('Tanggal cuti tidak boleh mundur dari hari ini.', 'Leave dates cannot be earlier than today.'),
+      });
+      return;
+    }
+    if (leaveEnd < leaveStart) {
+      setMsg({
+        type: 'error',
+        text: tr('Tanggal selesai tidak boleh sebelum tanggal mulai.', 'The end date cannot be before the start date.'),
+      });
+      return;
+    }
     try {
       const res = await apiFetch('/leave/requests', {
         method: 'POST',
@@ -114,10 +153,15 @@ export const EmployeeRequests: React.FC = () => {
           end_date: leaveEnd,
           total_days: parseFloat(leaveDays),
           reason: leaveReason,
+          attachment_base64: leaveAttachment || undefined,
+          attachment_mime: leaveAttachment ? leaveAttachmentMime : undefined,
         }),
       });
       setMsg({ type: 'success', text: res.message });
+      setShowForm(false);
       setLeaveReason('');
+      setLeaveAttachment(null);
+      setLeaveAttachmentName('');
       loadHistory('leave');
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
@@ -127,6 +171,13 @@ export const EmployeeRequests: React.FC = () => {
   const handleSubmitOvertime = async (e: React.FormEvent) => {
     e.preventDefault();
     setMsg(null);
+    if (otDate < getLocalDateString()) {
+      setMsg({
+        type: 'error',
+        text: tr('Tanggal lembur tidak boleh mundur dari hari ini.', 'Overtime date cannot be earlier than today.'),
+      });
+      return;
+    }
     try {
       const res = await apiFetch('/shifts/overtime/requests', {
         method: 'POST',
@@ -140,6 +191,7 @@ export const EmployeeRequests: React.FC = () => {
         }),
       });
       setMsg({ type: 'success', text: res.message });
+      setShowForm(false);
       setOtReason('');
       loadHistory('overtime');
     } catch (err: any) {
@@ -147,24 +199,23 @@ export const EmployeeRequests: React.FC = () => {
     }
   };
 
-  const handleSubmitKasbon = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setMsg(null);
-    try {
-      const res = await apiFetch('/kasbon/requests', {
-        method: 'POST',
-        body: JSON.stringify({
-          amount: parseFloat(kasbonAmount),
-          reason: kasbonReason,
-          total_instalments: parseInt(kasbonInstalments, 10),
-        }),
-      });
-      setMsg({ type: 'success', text: res.message });
-      setKasbonReason('');
-      loadHistory('kasbon');
-    } catch (err: any) {
-      setMsg({ type: 'error', text: err.message });
-    }
+  const handleLeaveAttachmentChange = (event: React.ChangeEvent<HTMLInputElement>) => {
+    const file = event.target.files?.[0];
+    if (!file) return;
+    setLeaveAttachmentName(file.name);
+    setLeaveAttachmentMime(file.type || 'image/jpeg');
+    const reader = new FileReader();
+    reader.onload = (e) => setLeaveAttachment(e.target?.result as string);
+    reader.readAsDataURL(file);
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {    const file = e.target.files?.[0];
+    if (!file) return;
+    const reader = new FileReader();
+    reader.onload = (event) => {
+      setReceiptPhoto(event.target?.result as string);
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleSubmitReimbursement = async (e: React.FormEvent) => {
@@ -174,14 +225,22 @@ export const EmployeeRequests: React.FC = () => {
       const res = await apiFetch('/kasbon/reimbursements', {
         method: 'POST',
         body: JSON.stringify({
+          expense_date: reimbDate,
           category: reimbCategory,
           amount: parseFloat(reimbAmount),
           description: reimbDesc,
+          remarks: reimbRemarks || null,
+          cost_centre: reimbCostCentre || null,
+          project_ref: reimbProjectRef || null,
           receipt_photo_base64: receiptPhoto,
         }),
       });
       setMsg({ type: 'success', text: res.message });
+      setShowForm(false);
       setReimbDesc('');
+      setReimbRemarks('');
+      setReimbCostCentre('');
+      setReimbProjectRef('');
       setReceiptPhoto(null);
       loadHistory('reimbursement');
     } catch (err: any) {
@@ -189,7 +248,74 @@ export const EmployeeRequests: React.FC = () => {
     }
   };
 
-  const statusBadge = (status: string) => {
+  const handleDownloadExcel = async () => {
+    setDownloading(true);
+    try {
+      await downloadFile(
+        `/kasbon/claims/export-excel?month=${claimMonth}&status=approved`,
+        `Claim_Expenses_${claimMonth}.xlsx`
+      );
+    } catch (err: any) {
+      alert(err.message || tr('Gagal mengunduh Excel klaim', 'Failed to download claim Excel'));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const handleDownloadPdf = async () => {
+    setDownloading(true);
+    try {
+      const approvedClaims = history.filter((h) => h.status === 'approved');
+      if (approvedClaims.length === 0) {
+        alert(tr('Belum ada klaim yang disetujui (approved) untuk diunduh struknya.', 'There are no approved claims to download receipts for yet.'));
+        return;
+      }
+      const token = getToken();
+      const itemsForPdf: ClaimItemForPdf[] = approvedClaims.map((c, i) => ({
+        id: c.id,
+        no: i + 1,
+        date: c.expense_date || c.created_at?.split('T')[0] || '-',
+        description: c.description || '-',
+        category: c.category || '-',
+        amount: Number(c.amount) || 0,
+        remarks: c.remarks || '',
+        receipt_photo_key: c.receipt_photo_key,
+        receipt_url: c.receipt_photo_key ? `/api/kasbon/reimbursements/${c.id}/receipt?token=${token}` : null,
+        status: c.status,
+      }));
+
+      await generateCombinedReceiptsPdf({
+        companyName: companyName || 'SMTS Pte Ltd',
+        periodTitle: (() => {
+          const [yearStr, monthStr] = claimMonth.split('-');
+          return new Date(Number(yearStr), Number(monthStr) - 1, 1).toLocaleDateString(
+            lang === 'id' ? 'id-ID' : 'en-US',
+            { month: 'long', year: 'numeric' }
+          );
+        })(),
+        employeeName: user?.name || 'Adam',
+        employeeNik: user?.employeeId || '-',
+        claims: itemsForPdf,
+      });
+    } catch (err: any) {
+      alert(err.message || tr('Gagal membuat file PDF struk', 'Failed to create the receipt PDF file'));
+    } finally {
+      setDownloading(false);
+    }
+  };
+
+  const statusBadge = (status: string, payrollRunId?: string | null, payrollRunTitle?: string | null) => {
+    if (status === 'paid') {
+      return <span className="bg-blue-100 text-blue-800 text-[10px] font-bold px-2 py-0.5 rounded">{tr('Dibayar', 'Paid')}</span>;
+    }
+    if (status === 'approved' && payrollRunId) {
+      return (
+        <div className="flex flex-col items-end gap-0.5">
+          <span className="bg-indigo-100 text-indigo-800 text-[10px] font-bold px-2 py-0.5 rounded">{tr('Masuk Payroll', 'In Payroll')}</span>
+          {payrollRunTitle && <span className="text-[9px] text-slate-500">{payrollRunTitle}</span>}
+        </div>
+      );
+    }
     switch (status) {
       case 'approved':
         return <span className="bg-emerald-100 text-emerald-800 text-[10px] font-bold px-2 py-0.5 rounded">{t.leave.approved}</span>;
@@ -200,11 +326,25 @@ export const EmployeeRequests: React.FC = () => {
     }
   };
 
+  const statusCounts = {
+    pending: history.filter((h) => h.status === 'pending').length,
+    approved: history.filter((h) => h.status === 'approved').length,
+    paid: history.filter((h) => h.status === 'paid').length,
+    rejected: history.filter((h) => h.status === 'rejected').length,
+  };
+  const filteredHistory =
+    statusFilter === 'all' ? history : history.filter((h) => h.status === statusFilter);
+
+  const [claimYear, claimMonthNumber] = claimMonth.split('-').map(Number);
+  const claimPrevMonth = new Date(claimYear, claimMonthNumber - 2, 25);
+  const claimPeriodStart = `${claimPrevMonth.getFullYear()}-${String(claimPrevMonth.getMonth() + 1).padStart(2, '0')}-25`;
+  const claimPeriodEnd = `${claimMonth}-25`;
+
   return (
-    <div className="max-w-md mx-auto space-y-4">
+    <div className="max-w-md mx-auto flex flex-col gap-4">
       <div>
         <h2 className="text-xl font-bold text-slate-900">{t.nav.requests}</h2>
-        <p className="text-xs text-slate-500">{t.leave.requestLeave}, {t.shifts.requestOvertime}, {t.kasbon.requestKasbon}</p>
+        <p className="text-xs text-slate-500">{t.leave.requestLeave}, {t.shifts.requestOvertime}, {tr('Klaim Biaya', 'Expense Claims')}</p>
       </div>
 
       {msg && (
@@ -218,38 +358,52 @@ export const EmployeeRequests: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="grid grid-cols-4 gap-1 bg-slate-200 p-1 rounded-2xl text-[11px] font-semibold text-slate-700">
+      {/* Mobile-Optimized Modern Tabs */}
+      <div className="order-1 grid grid-cols-3 gap-1 p-1.5 bg-slate-100 rounded-2xl border border-slate-200/80 shadow-2xs">
         <button
+          type="button"
           onClick={() => setActiveTab('leave')}
-          className={`py-2 rounded-xl transition ${activeTab === 'leave' ? 'bg-white text-blue-700 shadow-xs' : ''}`}
+          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
+            activeTab === 'leave'
+              ? 'bg-white text-blue-600 shadow-xs border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
         >
-          {t.nav.leave}
+          <Calendar size={14} className={`shrink-0 ${activeTab === 'leave' ? 'text-blue-600' : 'text-slate-400'}`} />
+          <span className="min-w-0 break-words">{t.nav.leave}</span>
         </button>
+
         <button
+          type="button"
           onClick={() => setActiveTab('overtime')}
-          className={`py-2 rounded-xl transition ${activeTab === 'overtime' ? 'bg-white text-amber-700 shadow-xs' : ''}`}
+          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
+            activeTab === 'overtime'
+              ? 'bg-white text-amber-600 shadow-xs border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
         >
-          {t.shifts.requestOvertime}
+          <Clock size={14} className={`shrink-0 ${activeTab === 'overtime' ? 'text-amber-600' : 'text-slate-400'}`} />
+          <span className="min-w-0 break-words">{t.shifts.requestOvertime}</span>
         </button>
+
         <button
-          onClick={() => setActiveTab('kasbon')}
-          className={`py-2 rounded-xl transition ${activeTab === 'kasbon' ? 'bg-white text-purple-700 shadow-xs' : ''}`}
-        >
-          {t.kasbon.requestKasbon}
-        </button>
-        <button
+          type="button"
           onClick={() => setActiveTab('reimbursement')}
-          className={`py-2 rounded-xl transition ${activeTab === 'reimbursement' ? 'bg-white text-emerald-700 shadow-xs' : ''}`}
+          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
+            activeTab === 'reimbursement'
+              ? 'bg-white text-emerald-600 shadow-xs border border-slate-200/80'
+              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
+          }`}
         >
-          {t.kasbon.requestClaim}
+          <Receipt size={14} className={`shrink-0 ${activeTab === 'reimbursement' ? 'text-emerald-600' : 'text-slate-400'}`} />
+          <span className="min-w-0 break-words">{tr('Klaim Biaya', 'Expense Claims')}</span>
         </button>
       </div>
 
       {/* TAB 1: CUTI / IZIN */}
-      {activeTab === 'leave' && (
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-          <div className="flex items-center justify-between pb-3 border-b border-slate-100">
+      {showForm && activeTab === 'leave' && (
+        <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <h3 className="font-bold text-xs uppercase text-slate-900">{t.leave.requestLeave}</h3>
             <div className="text-xs text-blue-600 font-semibold">
               {t.leave.annualLeaveBalance}: {leaveBalances.find((b) => b.leave_type_code === 'annual')?.remaining_days || 12} {t.leave.remainingDays}
@@ -259,44 +413,40 @@ export const EmployeeRequests: React.FC = () => {
           <form onSubmit={handleSubmitLeave} className="space-y-3 text-xs">
             <div>
               <label className="block text-slate-600 font-medium mb-1">{t.leave.leaveType}</label>
-              <select
+              <MobileSelect
                 value={leaveTypeId}
-                onChange={(e) => setLeaveTypeId(e.target.value)}
-                className="w-full p-2.5 border border-slate-300 rounded-xl"
-              >
-                {leaveTypes.map((t) => (
-                  <option key={t.id} value={t.id}>
-                    {t.name} ({t.is_paid ? 'Dibayar' : 'Tanpa Gaji'})
-                  </option>
-                ))}
-              </select>
+                onChange={setLeaveTypeId}
+                title={t.leave.leaveType}
+                options={leaveTypes.map((lt) => ({
+                  value: lt.id,
+                  label: `${lt.name} (${lt.is_paid ? tr('Dibayar', 'Paid') : tr('Tanpa Gaji', 'Unpaid')})`,
+                }))}
+              />
             </div>
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Tgl Mulai</label>
-                <input
-                  type="date"
-                  required
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Tgl Mulai', 'Start Date')}</label>
+                <MobileDatePicker
                   value={leaveStart}
-                  onChange={(e) => setLeaveStart(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded-xl"
+                  onChange={setLeaveStart}
+                  min={getLocalDateString()}
+                  placeholder={tr('Pilih tanggal', 'Select date')}
                 />
               </div>
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Tgl Selesai</label>
-                <input
-                  type="date"
-                  required
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Tgl Selesai', 'End Date')}</label>
+                <MobileDatePicker
                   value={leaveEnd}
-                  onChange={(e) => setLeaveEnd(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded-xl"
+                  onChange={setLeaveEnd}
+                  min={leaveStart || getLocalDateString()}
+                  placeholder={tr('Pilih tanggal', 'Select date')}
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Total Hari Kerja</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Total Hari Kerja', 'Total Working Days')}</label>
               <input
                 type="number"
                 min="0.5"
@@ -309,68 +459,72 @@ export const EmployeeRequests: React.FC = () => {
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Alasan Cuti / Izin</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Alasan Cuti / Izin', 'Leave / Permission Reason')}</label>
               <textarea
                 required
                 rows={2}
                 value={leaveReason}
                 onChange={(e) => setLeaveReason(e.target.value)}
-                placeholder="Keperluan keluarga, sakit flu, dll..."
+                placeholder={tr('Keperluan keluarga, sakit flu, dll...', 'Family matters, flu, etc...')}
                 className="w-full p-2 border border-slate-300 rounded-xl"
               />
+            </div>
+
+            <div>
+              <label className="block text-slate-600 font-medium mb-1">
+                {tr('Lampiran (opsional)', 'Attachment (optional)')}
+              </label>
+              <input
+                type="file"
+                accept="image/*,.pdf"
+                onChange={handleLeaveAttachmentChange}
+                className="w-full rounded-xl border border-slate-300 bg-white p-2 text-[11px]"
+              />
+              {leaveAttachmentName && (
+                <p className="mt-1 text-[10px] font-medium text-emerald-600">{leaveAttachmentName}</p>
+              )}
             </div>
 
             <button
               type="submit"
               className="w-full py-2.5 bg-blue-600 text-white font-bold rounded-xl shadow-xs hover:bg-blue-700 transition"
             >
-              Kirim Pengajuan Cuti
+              {tr('Kirim Pengajuan Cuti', 'Submit Leave Request')}
             </button>
           </form>
         </div>
       )}
 
       {/* TAB 2: OVERTIME */}
-      {activeTab === 'overtime' && (
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+      {showForm && activeTab === 'overtime' && (
+        <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
           <h3 className="font-bold text-xs uppercase text-slate-900 border-b border-slate-100 pb-3">
-            Form Pengajuan Lembur
+            {tr('Form Pengajuan Lembur', 'Overtime Request Form')}
           </h3>
           <form onSubmit={handleSubmitOvertime} className="space-y-3 text-xs">
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Tanggal Lembur</label>
-              <input
-                type="date"
-                required
+              <label className="block text-slate-600 font-medium mb-1">{tr('Tanggal Lembur', 'Overtime Date')}</label>
+              <MobileDatePicker
                 value={otDate}
-                onChange={(e) => setOtDate(e.target.value)}
-                className="w-full p-2 border border-slate-300 rounded-xl"
+                onChange={setOtDate}
+                min={getLocalDateString()}
+                placeholder={tr('Pilih tanggal', 'Select date')}
               />
             </div>
 
             <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Jam Mulai</label>
-                <input
-                  type="time"
-                  value={otStart}
-                  onChange={(e) => setOtStart(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded-xl"
-                />
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Jam Mulai', 'Start Time')}</label>
+                <MobileTimePicker value={otStart} onChange={setOtStart} />
               </div>
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Jam Selesai</label>
-                <input
-                  type="time"
-                  value={otEnd}
-                  onChange={(e) => setOtEnd(e.target.value)}
-                  className="w-full p-2 border border-slate-300 rounded-xl"
-                />
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Jam Selesai', 'End Time')}</label>
+                <MobileTimePicker value={otEnd} onChange={setOtEnd} />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Durasi Rencana (Jam)</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Durasi Rencana (Jam)', 'Planned Duration (Hours)')}</label>
               <input
                 type="number"
                 min="0.5"
@@ -391,204 +545,406 @@ export const EmployeeRequests: React.FC = () => {
                 className="rounded text-amber-600"
               />
               <label htmlFor="otHoliday" className="text-slate-700 font-medium">
-                Hari Libur / Istirahat Mingguan (Tarif 2x / 3x / 4x)
+                {tr('Hari Libur / Istirahat Mingguan (Tarif 2x / 3x / 4x)', 'Public Holiday / Weekly Rest Day (2x / 3x / 4x Rate)')}
               </label>
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Uraian Tugas Lembur</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Uraian Tugas Lembur', 'Overtime Task Description')}</label>
               <textarea
                 required
                 rows={2}
                 value={otReason}
                 onChange={(e) => setOtReason(e.target.value)}
-                placeholder="Pekerjaan deploy sistem, closing akhir bulan..."
+                placeholder={tr('Pekerjaan deploy sistem, closing akhir bulan...', 'System deployment work, month-end closing...')}
                 className="w-full p-2 border border-slate-300 rounded-xl"
               />
             </div>
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-amber-600 text-white font-bold rounded-xl shadow-xs hover:bg-amber-700 transition"
+              className="w-full py-2.5 bg-amber-600 text-white font-bold rounded-xl shadow-xs hover:bg-amber-700 transition cursor-pointer"
             >
-              Kirim Pengajuan Lembur
+              {tr('Kirim Pengajuan Lembur', 'Submit Overtime Request')}
             </button>
           </form>
         </div>
       )}
 
-      {/* TAB 3: KASBON */}
-      {activeTab === 'kasbon' && (
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-          <h3 className="font-bold text-xs uppercase text-slate-900 border-b border-slate-100 pb-3">
-            Form Pinjaman Kasbon (Potong Gaji)
-          </h3>
-          <form onSubmit={handleSubmitKasbon} className="space-y-3 text-xs">
+      {/* TAB 3: REIMBURSEMENT (KLAIM BIAYA) */}
+      {showForm && activeTab === 'reimbursement' && (
+        <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
+          <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Jumlah Kasbon (Rp)</label>
-              <input
-                type="number"
-                step="50000"
-                min="100000"
-                required
-                value={kasbonAmount}
-                onChange={(e) => setKasbonAmount(e.target.value)}
-                className="w-full p-2.5 border border-slate-300 rounded-xl font-bold text-slate-900"
-              />
+              <h3 className="font-bold text-xs uppercase text-slate-900">
+                {tr('Form Klaim Biaya (Expense Claim)', 'Expense Claim Form')}
+              </h3>
+              <p className="text-[11px] text-slate-500 mt-0.5">{tr('Format standar template klaim operasional & struk', 'Standard format for operational expense claims & receipts')}</p>
             </div>
+            <span className="text-[10px] bg-emerald-50 text-emerald-700 border border-emerald-200 font-bold px-2 py-0.5 rounded-full">
+              IDR
+            </span>
+          </div>
 
-            <div>
-              <label className="block text-slate-600 font-medium mb-1">Jumlah Cicilan Bulan</label>
-              <select
-                value={kasbonInstalments}
-                onChange={(e) => setKasbonInstalments(e.target.value)}
-                className="w-full p-2.5 border border-slate-300 rounded-xl"
-              >
-                <option value="1">1 Bulan (Lunas di Payroll Berikutnya)</option>
-                <option value="2">2 Bulan</option>
-                <option value="3">3 Bulan</option>
-                <option value="6">6 Bulan</option>
-              </select>
-            </div>
-
-            <div>
-              <label className="block text-slate-600 font-medium mb-1">Keperluan Pinjaman</label>
-              <textarea
-                required
-                rows={2}
-                value={kasbonReason}
-                onChange={(e) => setKasbonReason(e.target.value)}
-                placeholder="Biaya perbaikan kendaraan, biaya sekolah..."
-                className="w-full p-2 border border-slate-300 rounded-xl"
-              />
-            </div>
-
-            <button
-              type="submit"
-              className="w-full py-2.5 bg-purple-600 text-white font-bold rounded-xl shadow-xs hover:bg-purple-700 transition"
-            >
-              Kirim Pengajuan Kasbon
-            </button>
-          </form>
-        </div>
-      )}
-
-      {/* TAB 4: REIMBURSEMENT */}
-      {activeTab === 'reimbursement' && (
-        <div className="bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
-          <h3 className="font-bold text-xs uppercase text-slate-900 border-b border-slate-100 pb-3">
-            Form Klaim Reimbursement
-          </h3>
           <form onSubmit={handleSubmitReimbursement} className="space-y-3 text-xs">
-            <div className="grid grid-cols-2 gap-2">
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Kategori</label>
-                <select
-                  value={reimbCategory}
-                  onChange={(e) => setReimbCategory(e.target.value)}
-                  className="w-full p-2.5 border border-slate-300 rounded-xl"
-                >
-                  <option value="Transport">Transport / Bensin</option>
-                  <option value="Makan Lembur">Makan Lembur</option>
-                  <option value="ATK & Operasional">ATK & Operasional</option>
-                  <option value="Medis">Medis / Kesehatan</option>
-                  <option value="Lainnya">Lainnya</option>
-                </select>
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Tanggal Pengeluaran *', 'Expense Date *')}</label>
+                <MobileDatePicker value={reimbDate} onChange={setReimbDate} placeholder={tr('Pilih tanggal', 'Select date')} />
               </div>
-              <div>
-                <label className="block text-slate-600 font-medium mb-1">Nominal (Rp)</label>
-                <input
-                  type="number"
-                  required
-                  value={reimbAmount}
-                  onChange={(e) => setReimbAmount(e.target.value)}
-                  className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+
+              <div className="min-w-0">
+                <label className="block text-slate-600 font-medium mb-1">{tr('Kategori Kolom *', 'Column Category *')}</label>
+                <MobileSelect
+                  value={reimbCategory}
+                  onChange={setReimbCategory}
+                  title={tr('Kategori Kolom', 'Column Category')}
+                  options={[
+                    { value: 'Transport', label: tr('Transport (Bensin, Tiket, Ferry)', 'Transport (Fuel, Tickets, Ferry)') },
+                    { value: 'Food', label: tr('Food (Makan Lembur, Konsumsi)', 'Food (Overtime Meals, Catering)') },
+                    { value: 'Hotel', label: tr('Hotel (Penginapan / Lodging)', 'Hotel (Accommodation / Lodging)') },
+                    { value: 'UNPAID', label: tr('UNPAID (Beban Belum Dibayar / Gaji)', 'UNPAID (Unpaid Expense / Payroll)') },
+                    { value: 'OTHERS', label: tr('OTHERS (Lain-lain / Operasional)', 'OTHERS (Miscellaneous / Operational)') },
+                  ]}
                 />
               </div>
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Deskripsi Klaim</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Deskripsi Klaim (Description) *', 'Claim Description *')}</label>
               <input
                 type="text"
                 required
                 value={reimbDesc}
                 onChange={(e) => setReimbDesc(e.target.value)}
-                placeholder="Grab ke klien PT ABC..."
+                placeholder={tr('Contoh: Meeting Singapore, Place Rent, Grab ke klien...', 'Example: Singapore Meeting, Place Rent, Grab to client...')}
                 className="w-full p-2.5 border border-slate-300 rounded-xl"
               />
             </div>
 
             <div>
-              <label className="block text-slate-600 font-medium mb-1">Foto Bukti / Struk</label>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Nominal Biaya (Rp) *', 'Expense Amount (Rp) *')}</label>
+              <input
+                type="number"
+                required
+                min="1000"
+                step="1000"
+                value={reimbAmount}
+                onChange={(e) => setReimbAmount(e.target.value)}
+                placeholder="2300000"
+                className="w-full p-2.5 border border-slate-300 rounded-xl font-bold text-slate-900"
+              />
+            </div>
+
+            <div className="grid grid-cols-2 gap-2">
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">{tr('Pusat Biaya (Cost Centre)', 'Cost Centre')}</label>
+                <input
+                  type="text"
+                  value={reimbCostCentre}
+                  onChange={(e) => setReimbCostCentre(e.target.value)}
+                  placeholder={tr('Opsional, cth: SMTS', 'Optional, e.g. SMTS')}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+              <div>
+                <label className="block text-slate-600 font-medium mb-1">{tr('Ref Proyek (Project Ref)', 'Project Ref')}</label>
+                <input
+                  type="text"
+                  value={reimbProjectRef}
+                  onChange={(e) => setReimbProjectRef(e.target.value)}
+                  placeholder={tr('Opsional, cth: PRJ-01', 'Optional, e.g. PRJ-01')}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+            </div>
+
+            <div>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Catatan Tambahan (Remarks)', 'Additional Notes (Remarks)')}</label>
+              <input
+                type="text"
+                value={reimbRemarks}
+                onChange={(e) => setReimbRemarks(e.target.value)}
+                placeholder={tr('Contoh: Ferry + Fuel Surcharge, Arround 175 SGD, dll.', 'Example: Ferry + Fuel Surcharge, Around 175 SGD, etc.')}
+                className="w-full p-2.5 border border-slate-300 rounded-xl"
+              />
+            </div>
+
+            <div>
+              <label className="block text-slate-600 font-medium mb-1">{tr('Lampiran Foto Bukti / Struk', 'Proof / Receipt Photo Attachment')}</label>
+              <input
+                type="file"
+                ref={fileInputRef}
+                accept="image/*"
+                onChange={handleFileChange}
+                className="hidden"
+              />
+
               {receiptPhoto ? (
-                <div className="relative rounded-xl overflow-hidden border border-slate-300 aspect-16/9 bg-black">
-                  <img src={receiptPhoto} alt="Struk" className="w-full h-full object-contain" />
+                <div className="relative rounded-2xl overflow-hidden border border-slate-300 aspect-16/9 bg-slate-900">
+                  <img src={receiptPhoto} alt={tr('Struk', 'Receipt')} className="w-full h-full object-contain" />
                   <button
                     type="button"
                     onClick={() => setReceiptPhoto(null)}
-                    className="absolute top-2 right-2 bg-rose-600 text-white text-[10px] px-2 py-1 rounded"
+                    className="absolute top-2 right-2 bg-rose-600 hover:bg-rose-700 text-white text-[10px] px-2.5 py-1 rounded-lg font-bold shadow-md cursor-pointer"
                   >
-                    Hapus Foto
+                    {tr('Hapus Foto', 'Remove Photo')}
                   </button>
                 </div>
               ) : (
-                <button
-                  type="button"
-                  onClick={() => setCameraOpen(true)}
-                  className="w-full py-3 border-2 border-dashed border-slate-300 rounded-xl flex items-center justify-center gap-2 text-slate-600 hover:border-emerald-500 font-medium"
-                >
-                  <Camera size={18} className="text-emerald-600" />
-                  <span>Ambil Foto Struk via Kamera / Galeri</span>
-                </button>
+                <div className="grid grid-cols-2 gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setCameraOpen(true)}
+                    className="py-3 px-2 border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl flex flex-col items-center justify-center gap-1 text-slate-700 font-medium cursor-pointer transition"
+                  >
+                    <Camera size={18} className="text-emerald-600" />
+                    <span className="text-[11px]">{tr('Foto via Kamera', 'Photo via Camera')}</span>
+                  </button>
+
+                  <button
+                    type="button"
+                    onClick={() => fileInputRef.current?.click()}
+                    className="py-3 px-2 border-2 border-dashed border-slate-300 hover:border-emerald-500 rounded-xl flex flex-col items-center justify-center gap-1 text-slate-700 font-medium cursor-pointer transition"
+                  >
+                    <Upload size={18} className="text-blue-600" />
+                    <span className="text-[11px]">{tr('Unggah dari Galeri', 'Upload from Gallery')}</span>
+                  </button>
+                </div>
               )}
             </div>
 
             <button
               type="submit"
-              className="w-full py-2.5 bg-emerald-600 text-white font-bold rounded-xl shadow-xs hover:bg-emerald-700 transition"
+              className="w-full py-3 bg-emerald-600 hover:bg-emerald-700 text-white font-bold rounded-xl shadow-xs transition cursor-pointer text-xs"
             >
-              Kirim Klaim Biaya
+              {tr('Kirim Klaim Biaya', 'Submit Expense Claim')}
             </button>
           </form>
         </div>
       )}
 
       {/* REQUEST HISTORY LIST */}
-      <div className="bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3">
-        <h3 className="font-bold text-xs uppercase text-slate-900 flex items-center justify-between">
-          <span>{t.dashboard.pendingApprovals} / History</span>
-          <span className="text-[10px] text-slate-400">{t.common.all}</span>
-        </h3>
+      <div className="order-2 bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3">
+        <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-2 border-b border-slate-100 pb-3">
+          <div>
+            <h3 className="font-bold text-xs uppercase text-slate-900">
+              {tr('Riwayat Pengajuan', 'Request History')}
+            </h3>
+            <p className="text-[11px] text-slate-400">
+              {loading
+                ? tr('Memuat pengajuan...', 'Loading requests...')
+                : tr(`${filteredHistory.length} dari ${history.length} pengajuan`, `${filteredHistory.length} of ${history.length} requests`)}
+            </p>
+          </div>
 
-        {history.length === 0 ? (
-          <p className="text-center text-xs text-slate-400 py-4">Belum ada riwayat pengajuan.</p>
-        ) : (
-          <div className="space-y-2">
-            {history.map((h) => (
-              <div key={h.id} className="p-3 rounded-xl border border-slate-100 bg-slate-50 flex justify-between items-start text-xs">
-                <div>
-                  <div className="font-bold text-slate-900">
-                    {h.leave_type_name || (h.amount ? formatCurrency(h.amount) : `${h.actual_hours || h.planned_hours} ${t.common.hours}`)}
+          <button
+            type="button"
+            onClick={() => setShowForm((value) => !value)}
+            className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800 cursor-pointer"
+          >
+            <Plus size={14} />
+            <span>{showForm ? tr('Tutup Form', 'Hide Form') : tr('Buat Pengajuan', 'New Request')}</span>
+          </button>
+        </div>
+
+        <div className="flex flex-wrap gap-1.5">
+          {[
+            { key: 'all', label: tr('Semua', 'All'), count: history.length },
+            { key: 'pending', label: tr('Menunggu', 'Pending'), count: statusCounts.pending },
+            { key: 'approved', label: tr('Disetujui', 'Approved'), count: statusCounts.approved },
+            { key: 'paid', label: tr('Dibayar', 'Paid'), count: statusCounts.paid },
+            { key: 'rejected', label: tr('Ditolak', 'Rejected'), count: statusCounts.rejected },
+          ].map((filter) => (
+            <button
+              key={filter.key}
+              type="button"
+              onClick={() => setStatusFilter(filter.key as typeof statusFilter)}
+              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold transition cursor-pointer ${
+                statusFilter === filter.key
+                  ? 'bg-slate-900 text-white'
+                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
+              }`}
+            >
+              <span>{filter.label}</span>
+              <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${statusFilter === filter.key ? 'bg-white/20' : 'bg-white'}`}>
+                {filter.count}
+              </span>
+            </button>
+          ))}
+        </div>
+
+        {activeTab === 'reimbursement' && (
+          <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
+            <span className="text-[11px] font-semibold text-slate-600">
+              {tr('Periode Klaim', 'Claim Period')}
+            </span>
+            <div className="w-40">
+              <MobileMonthPicker value={claimMonth} onChange={setClaimMonth} />
+            </div>
+          </div>
+        )}
+
+        {activeTab === 'reimbursement' && (
+          <p className="text-[10px] text-slate-400">
+            {tr('Periode:', 'Period:')} {formatDate(claimPeriodStart)} – {formatDate(claimPeriodEnd)}
+          </p>
+        )}
+
+        {activeTab === 'reimbursement' && (
+            <div className="flex flex-wrap items-center gap-2">
+              <button
+                type="button"
+                disabled={downloading || history.length === 0}
+                onClick={handleDownloadExcel}
+                className="flex items-center gap-1.5 bg-emerald-50 hover:bg-emerald-100 text-emerald-800 border border-emerald-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                title={tr('Unduh Claim Sheet Excel sesuai template resmi', 'Download the Excel Claim Sheet using the official template')}
+              >
+                <FileSpreadsheet size={14} className="text-emerald-600 shrink-0" />
+                <span>{tr('Claim Excel (.xlsx)', 'Claim Excel (.xlsx)')}</span>
+              </button>
+
+              <button
+                type="button"
+                disabled={downloading || history.filter((h) => h.status === 'approved').length === 0}
+                onClick={handleDownloadPdf}
+                className="flex items-center gap-1.5 bg-blue-50 hover:bg-blue-100 text-blue-800 border border-blue-300 px-3 py-1.5 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
+                title={tr('Gabungkan seluruh bukti struk yang disetujui ke dalam satu file PDF', 'Combine all approved receipt proofs into a single PDF file')}
+              >
+                <FileDown size={14} className="text-blue-600 shrink-0" />
+                <span>{tr('Struk PDF (Combined)', 'Receipt PDF (Combined)')}</span>
+              </button>
+            </div>
+          )}
+
+        {loading ? (
+          <div className="space-y-2.5">
+            {[0, 1, 2].map((index) => (
+              <div key={index} className="rounded-2xl border border-slate-200/80 bg-slate-50/70 p-3.5">
+                <div className="flex items-start justify-between gap-3">
+                  <div className="flex-1 space-y-2">
+                    <div className="h-3.5 w-1/2 animate-pulse rounded bg-slate-200" />
+                    <div className="h-3 w-3/4 animate-pulse rounded bg-slate-200" />
                   </div>
-                  <div className="text-[11px] text-slate-500 mt-0.5">
-                    {h.start_date ? `${formatDate(h.start_date)} - ${formatDate(h.end_date)} (${h.total_days} ${t.common.days})` : formatDate(h.date || h.created_at)}
-                  </div>
-                  {h.reason && <p className="text-[10px] text-slate-600 italic mt-1">"{h.reason}"</p>}
-                  {h.rejection_note && <p className="text-[10px] text-rose-600 font-medium mt-1">Catatan: {h.rejection_note}</p>}
+                  <div className="h-4 w-16 animate-pulse rounded bg-slate-200" />
                 </div>
-                <div>{statusBadge(h.status)}</div>
+                <div className="mt-3 h-3 w-2/3 animate-pulse rounded bg-slate-200" />
+              </div>
+            ))}
+          </div>
+        ) : filteredHistory.length === 0 ? (
+          <p className="text-center text-xs text-slate-400 py-6">
+            {statusFilter === 'all'
+              ? tr('Belum ada riwayat pengajuan.', 'No request history yet.')
+              : tr('Tidak ada pengajuan dengan status ini.', 'No requests with this status.')}
+          </p>
+        ) : (
+          <div className="space-y-2.5">
+            {filteredHistory.map((h, idx) => (
+              <div key={h.id} className="p-3.5 rounded-2xl border border-slate-200/80 bg-slate-50/70 space-y-2 text-xs">
+                <div className="flex justify-between items-start gap-2">
+                  <div className="min-w-0">
+                    <div className="font-bold text-slate-900 text-sm break-words">
+                      {h.leave_type_name || (h.amount ? formatCurrency(h.amount) : `${h.actual_hours || h.planned_hours} ${t.common.hours}`)}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5 break-words">
+                      {h.start_date
+                        ? `${formatDate(h.start_date)} - ${formatDate(h.end_date)} (${h.total_days} ${t.common.days})`
+                        : formatDate(h.expense_date || h.date || h.created_at)}
+                      {h.category && <span className="ml-2 font-medium text-slate-700 bg-slate-200 px-1.5 py-0.5 rounded text-[10px]">{h.category}</span>}
+                    </div>
+                  </div>
+                  <div className="shrink-0">{statusBadge(h.status, h.payroll_run_id, h.payroll_run_title)}</div>
+                </div>
+
+                {h.description && (
+                  <p className="text-xs text-slate-700 font-medium">{h.description}</p>
+                )}
+
+                {h.remarks && (
+                  <p className="text-[11px] text-blue-700 bg-blue-50 px-2.5 py-1 rounded-lg border border-blue-100">
+                    <span className="font-bold">{tr('Remarks:', 'Remarks:')}</span> {h.remarks}
+                  </p>
+                )}
+
+                {h.cost_centre && (
+                  <div className="text-[10px] text-slate-500">
+                    {tr('Cost Centre:', 'Cost Centre:')} <span className="font-semibold text-slate-700">{h.cost_centre}</span>
+                    {h.project_ref && <span> | {tr('Ref:', 'Ref:')} <span className="font-semibold text-slate-700">{h.project_ref}</span></span>}
+                  </div>
+                )}
+
+                {h.reason && <p className="text-[11px] text-slate-600 italic">"{h.reason}"</p>}
+                {h.attachment_key && (
+                  <a
+                    href={`/api/leave/requests/${h.id}/attachment?token=${getToken()}`}
+                    target="_blank"
+                    rel="noreferrer"
+                    className="inline-flex items-center gap-1 text-[11px] font-semibold text-blue-700 hover:underline"
+                  >
+                    {tr('Lihat Lampiran', 'View Attachment')}
+                  </a>
+                )}
+                {h.rejection_note && <p className="text-[11px] text-rose-600 font-medium">{tr('Catatan Penolakan:', 'Rejection Note:')} {h.rejection_note}</p>}
+
+                {h.has_receipt && h.receipt_url && (
+                  <div className="pt-1 flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={() => setPreviewModalImg(h.receipt_url)}
+                      className="inline-flex items-center gap-1 text-[11px] font-semibold text-emerald-700 hover:text-emerald-800 bg-emerald-50 px-2 py-1 rounded-md border border-emerald-200 cursor-pointer"
+                    >
+                      <Eye size={12} />
+                      <span>{tr('Lihat Foto Struk', 'View Receipt Photo')}</span>
+                    </button>
+                  </div>
+                )}
               </div>
             ))}
           </div>
         )}
       </div>
 
+      {/* Image Preview Modal */}
+      {previewModalImg && (
+        <div
+          onClick={() => setPreviewModalImg(null)}
+          className="fixed inset-0 z-50 bg-black/80 backdrop-blur-xs flex items-center justify-center p-4 cursor-pointer"
+        >
+          <div className="bg-white rounded-2xl max-w-lg w-full p-4 overflow-hidden shadow-2xl space-y-3" onClick={(e) => e.stopPropagation()}>
+            <div className="flex justify-between items-center pb-2 border-b border-slate-100">
+              <h4 className="font-bold text-xs uppercase text-slate-800">{tr('Bukti Struk Pembayaran', 'Payment Receipt Proof')}</h4>
+              <button
+                type="button"
+                onClick={() => setPreviewModalImg(null)}
+                className="text-slate-400 hover:text-slate-700 font-bold p-1 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <div className="max-h-[70vh] overflow-y-auto flex items-center justify-center bg-slate-950 rounded-xl p-2">
+              <img
+                src={previewModalImg}
+                alt={tr('Bukti Struk', 'Receipt Proof')}
+                className="max-h-[65vh] w-auto object-contain rounded"
+              />
+            </div>
+            <button
+              type="button"
+              onClick={() => setPreviewModalImg(null)}
+              className="w-full py-2 bg-slate-100 hover:bg-slate-200 text-slate-700 rounded-xl text-xs font-medium cursor-pointer"
+            >
+              {tr('Tutup', 'Close')}
+            </button>
+          </div>
+        </div>
+      )}
+
       <CameraModal
         isOpen={cameraOpen}
         onClose={() => setCameraOpen(false)}
         onCapture={(photo) => setReceiptPhoto(photo)}
-        title="Ambil Foto Nota / Struk"
+        title={tr('Ambil Foto Nota / Struk', 'Take Receipt / Invoice Photo')}
         facingMode="environment"
       />
     </div>

@@ -4,3 +4,7 @@ dist/
 .DS_Store
 *.local
 .env
+
+# Local Worker secrets
+.dev.vars
+.dev.vars.*

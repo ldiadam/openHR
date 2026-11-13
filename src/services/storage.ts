@@ -51,3 +51,14 @@ export async function getFile(
 
   return null;
 }
+
+export async function deleteFile(env: Bindings, key: string): Promise<void> {
+  if (env.R2) {
+    await env.R2.delete(key);
+    return;
+  }
+  const g = globalThis as any;
+  if (g.__openhr_storage) {
+    g.__openhr_storage.delete(key);
+  }
+}

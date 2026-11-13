@@ -1,9 +1,11 @@
 import React from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
-import { LanguageProvider, useLanguage } from './context/LanguageContext';
+import { LanguageProvider } from './context/LanguageContext';
 import { CompanyProvider } from './context/CompanyContext';
 import { Layout } from './components/Layout';
+import { InstallPwaPrompt } from './components/InstallPwaPrompt';
+import { LoadingScreen } from './components/LoadingScreen';
 import { Login } from './pages/Login';
 import { ResetPassword } from './pages/ResetPassword';
 import { EmployeeHome } from './pages/EmployeeHome';
@@ -13,30 +15,35 @@ import { EmployeePayslips } from './pages/EmployeePayslips';
 import { EmployeeProfile } from './pages/EmployeeProfile';
 import { HRDashboard } from './pages/HRDashboard';
 import { HREmployees } from './pages/HREmployees';
+import { HREmployeeDetail } from './pages/HREmployeeDetail';
 import { HRAttendance } from './pages/HRAttendance';
 import { HRLeave } from './pages/HRLeave';
 import { HRShifts } from './pages/HRShifts';
 import { HRPayroll } from './pages/HRPayroll';
 import { HRKasbon } from './pages/HRKasbon';
+import { HRDocuments } from './pages/HRDocuments';
 import { HRReports } from './pages/HRReports';
 import { HRSettings } from './pages/HRSettings';
 
-const ProtectedRoute: React.FC<{ children: React.ReactNode; allowedRoles?: string[] }> = ({
-  children,
-  allowedRoles,
-}) => {
+const ProtectedRoute: React.FC<{
+  children: React.ReactNode;
+  allowedRoles?: string[];
+  allowSelfService?: boolean;
+}> = ({ children, allowedRoles, allowSelfService = true }) => {
   const { user, loading } = useAuth();
 
   if (loading) {
-    return (
-      <div className="min-h-screen flex items-center justify-center bg-slate-900 text-white text-xs">
-        Memuat aplikasi openHR...
-      </div>
-    );
+    return <LoadingScreen />;
   }
 
   if (!user) {
     return <Navigate to="/login" replace />;
+  }
+
+  // ESS pages are one switchable area; fall back to the HR dashboard when the
+  // account has no employee record linked to it.
+  if (allowSelfService && !user.employeeId) {
+    return <Navigate to={user.role === 'employee' ? '/login' : '/'} replace />;
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
@@ -70,7 +77,7 @@ export const App: React.FC = () => {
           <Route
             path="/"
             element={
-              <ProtectedRoute>
+              <ProtectedRoute allowSelfService={false}>
                 <RootRedirect />
               </ProtectedRoute>
             }
@@ -122,15 +129,23 @@ export const App: React.FC = () => {
           <Route
             path="/employees"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
                 <HREmployees />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/employees/:id"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager', 'finance']}>
+                <HREmployeeDetail />
               </ProtectedRoute>
             }
           />
           <Route
             path="/attendance"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
                 <HRAttendance />
               </ProtectedRoute>
             }
@@ -138,7 +153,7 @@ export const App: React.FC = () => {
           <Route
             path="/leave"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
                 <HRLeave />
               </ProtectedRoute>
             }
@@ -146,7 +161,7 @@ export const App: React.FC = () => {
           <Route
             path="/shifts"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
                 <HRShifts />
               </ProtectedRoute>
             }
@@ -154,7 +169,7 @@ export const App: React.FC = () => {
           <Route
             path="/payroll"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'finance']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance']}>
                 <HRPayroll />
               </ProtectedRoute>
             }
@@ -162,7 +177,7 @@ export const App: React.FC = () => {
           <Route
             path="/kasbon"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'finance', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
                 <HRKasbon />
               </ProtectedRoute>
             }
@@ -170,15 +185,23 @@ export const App: React.FC = () => {
           <Route
             path="/reports"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin', 'finance', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
                 <HRReports />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/documents"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
+                <HRDocuments />
               </ProtectedRoute>
             }
           />
           <Route
             path="/settings"
             element={
-              <ProtectedRoute allowedRoles={['owner_admin']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin']}>
                 <HRSettings />
               </ProtectedRoute>
             }
@@ -189,6 +212,7 @@ export const App: React.FC = () => {
         </Routes>
       </BrowserRouter>
     </AuthProvider>
+    <InstallPwaPrompt />
     </CompanyProvider>
   </LanguageProvider>
   );

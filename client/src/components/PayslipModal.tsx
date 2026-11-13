@@ -1,6 +1,10 @@
 import React from 'react';
-import { X, Printer, Download } from 'lucide-react';
+import { Download, FileText, X } from 'lucide-react';
 import { formatRupiah, formatDateIndo } from '../api';
+import { downloadPayslipPdf } from '../utils/payslipPdf';
+import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 
 interface PayslipModalProps {
   isOpen: boolean;
@@ -8,267 +12,397 @@ interface PayslipModalProps {
   payslip: any;
 }
 
-export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, payslip }) => {
-  if (!isOpen || !payslip) return null;
+const comp = (value: any) => Number(value) || 0;
 
-  const handlePrint = () => {
-    window.print();
-  };
+const InfoItem = ({ label, value }: { label: string; value: React.ReactNode }) => (
+  <div className="min-w-0">
+    <dt className="text-[9px] font-semibold uppercase tracking-wide text-slate-400">{label}</dt>
+    <dd className="truncate text-[11px] font-semibold text-slate-800">{value || '-'}</dd>
+  </div>
+);
+
+const MoneyRow = ({ label, amount }: { label: string; amount: number }) => (
+  <tr>
+    <td className="w-[62%] break-words px-3 py-1.5 align-top text-slate-600">{label}</td>
+    <td className="w-[38%] whitespace-nowrap px-3 py-1.5 text-right font-medium tabular-nums text-slate-800">
+      {formatRupiah(amount)}
+    </td>
+  </tr>
+);
+
+export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, payslip }) => {
+  const { tr } = useLanguage();
+  const { logoUrl } = useCompany();
+  useLockBodyScroll(isOpen);
+
+  if (!isOpen || !payslip) return null;
+  const activeLogoUrl = payslip.company_logo_url || logoUrl;
+
+  const prorationDelta = comp(payslip.prorated_salary) - comp(payslip.base_salary);
+
+  const earnings: Array<{ label: string; amount: number }> = [
+    { label: tr('Gaji Pokok', 'Base Salary'), amount: comp(payslip.base_salary) },
+    ...(prorationDelta !== 0
+      ? [
+          {
+            label: tr(
+              `Penyesuaian Prorata (${payslip.days_worked}/${payslip.expected_working_days} hari)`,
+              `Proration Adjustment (${payslip.days_worked}/${payslip.expected_working_days} days)`
+            ),
+            amount: prorationDelta,
+          },
+        ]
+      : []),
+    { label: tr('Tunjangan Tetap', 'Fixed Allowance'), amount: comp(payslip.fixed_allowance) },
+    ...(comp(payslip.thr_amount) > 0
+      ? [
+          {
+            label: tr('THR (Tunjangan Hari Raya)', 'THR (Holiday Allowance)'),
+            amount: comp(payslip.thr_amount),
+          },
+        ]
+      : []),
+    ...(comp(payslip.overtime_pay) > 0
+      ? [
+          {
+            label: tr(`Upah Lembur (${payslip.overtime_hours} jam)`, `Overtime Pay (${payslip.overtime_hours} hrs)`),
+            amount: comp(payslip.overtime_pay),
+          },
+        ]
+      : []),
+    ...(comp(payslip.attendance_bonus) > 0
+      ? [{ label: tr('Bonus Kehadiran', 'Attendance Bonus'), amount: comp(payslip.attendance_bonus) }]
+      : []),
+    ...(comp(payslip.commission_bonus) > 0
+      ? [{ label: tr('Komisi / Bonus', 'Commission / Bonus'), amount: comp(payslip.commission_bonus) }]
+      : []),
+    ...(comp(payslip.reimbursement_amount) > 0
+      ? [{ label: tr('Reimbursement', 'Reimbursement'), amount: comp(payslip.reimbursement_amount) }]
+      : []),
+  ];
+
+  const deductions: Array<{ label: string; amount: number; kind?: 'alpha' }> = [
+    ...(comp(payslip.bpjs_kes_employee) > 0
+      ? [{ label: tr('BPJS Kesehatan (1%)', 'BPJS Health (1%)'), amount: comp(payslip.bpjs_kes_employee) }]
+      : []),
+    ...(comp(payslip.bpjs_jht_employee) > 0
+      ? [{ label: tr('BPJS JHT (2%)', 'BPJS JHT (2%)'), amount: comp(payslip.bpjs_jht_employee) }]
+      : []),
+    ...(comp(payslip.bpjs_jp_employee) > 0
+      ? [{ label: tr('BPJS JP (1%)', 'BPJS JP (1%)'), amount: comp(payslip.bpjs_jp_employee) }]
+      : []),
+    ...(comp(payslip.pph21_amount) > 0
+      ? [
+          {
+            label: tr(`PPh 21 (${payslip.pph21_method})`, `Income Tax PPh 21 (${payslip.pph21_method})`),
+            amount: comp(payslip.pph21_amount),
+          },
+        ]
+      : []),
+    ...(comp(payslip.kasbon_deduction) > 0
+      ? [{ label: tr('Cicilan Kasbon', 'Salary Advance'), amount: comp(payslip.kasbon_deduction) }]
+      : []),
+    ...(comp(payslip.late_deduction) > 0
+      ? [{ label: tr('Potongan Terlambat', 'Late Deduction'), amount: comp(payslip.late_deduction) }]
+      : []),
+    ...(comp(payslip.unpaid_leave_deduction) > 0
+      ? [
+          {
+            label: tr('Cuti Tidak Berbayar', 'Unpaid Leave'),
+            amount: comp(payslip.unpaid_leave_deduction),
+          },
+        ]
+      : []),
+    ...(comp(payslip.alpha_deduction) > 0
+      ? [
+          {
+            label: tr('Alpa / Tanpa Keterangan', 'Absence Without Notice'),
+            amount: comp(payslip.alpha_deduction),
+            kind: 'alpha' as const,
+          },
+        ]
+      : []),
+    ...(comp(payslip.other_deductions) > 0
+      ? [
+          {
+            label: tr(
+              `Lain-lain (${payslip.other_deductions_reason || 'Koreksi'})`,
+              `Other (${payslip.other_deductions_reason || 'Correction'})`
+            ),
+            amount: comp(payslip.other_deductions),
+          },
+        ]
+      : []),
+  ];
+
+  const employerRows = [
+    { label: tr('BPJS Kesehatan (4%)', 'BPJS Health (4%)'), amount: comp(payslip.bpjs_kes_employer) },
+    { label: tr('BPJS JHT (3.7%)', 'BPJS JHT (3.7%)'), amount: comp(payslip.bpjs_jht_employer) },
+    { label: tr('BPJS JP (2%)', 'BPJS JP (2%)'), amount: comp(payslip.bpjs_jp_employer) },
+    { label: tr('BPJS JKK (0.24%)', 'BPJS JKK (0.24%)'), amount: comp(payslip.jkk_employer ?? payslip.bpjs_jkk_employer) },
+    { label: tr('BPJS JKM (0.3%)', 'BPJS JKM (0.3%)'), amount: comp(payslip.jkm_employer ?? payslip.bpjs_jkm_employer) },
+  ].filter((row) => row.amount > 0);
+
+  const periodStart = formatDateIndo(payslip.period_start);
+  const periodEnd = formatDateIndo(payslip.period_end);
+  const paymentDate = formatDateIndo(payslip.payment_date || payslip.period_end);
 
   return (
-    <div className="fixed inset-0 z-50 bg-black/60 backdrop-blur-xs flex items-center justify-center p-4 overflow-y-auto print:p-0 print:bg-white print:fixed print:inset-0">
-      <div className="bg-white rounded-2xl max-w-2xl w-full shadow-2xl overflow-hidden border border-slate-200 my-8 print:shadow-none print:border-none print:m-0 print:max-w-none">
-        {/* Modal Top Bar (Hidden in Print) */}
-        <div className="p-4 bg-slate-900 text-white flex items-center justify-between print:hidden">
-          <div className="flex items-center gap-2">
-            <h3 className="font-semibold text-sm">Slip Gaji Resmi (Official Payslip)</h3>
-            <span className="text-xs bg-blue-600 px-2 py-0.5 rounded text-white">{payslip.run_title}</span>
+    <div
+      className="fixed inset-0 z-50 flex items-start justify-center overflow-y-auto bg-slate-700/70 p-3 backdrop-blur-sm sm:p-6"
+      onClick={(event) => {
+        if (event.target === event.currentTarget) onClose();
+      }}
+    >
+      <div className="my-2 w-full max-w-2xl rounded-2xl bg-white shadow-2xl sm:my-6">
+        {/* Toolbar */}
+        <div className="sticky top-0 z-20 flex items-center justify-between gap-2 rounded-t-2xl border-b border-slate-200 bg-slate-50 px-4 py-3">
+          <div className="flex min-w-0 items-center gap-2.5">
+            <div className="flex h-8 w-8 shrink-0 items-center justify-center rounded-lg bg-slate-900 text-white">
+              <FileText size={15} />
+            </div>
+            <div className="min-w-0">
+              <p className="text-xs font-bold text-slate-900">{tr('Slip Gaji', 'Payslip')}</p>
+              <p className="truncate text-[10px] text-slate-500">{payslip.run_title}</p>
+            </div>
           </div>
-          <div className="flex items-center gap-2">
+          <div className="flex shrink-0 items-center gap-1.5">
             <button
-              onClick={handlePrint}
-              className="flex items-center gap-1.5 bg-slate-800 hover:bg-slate-700 text-xs px-3 py-1.5 rounded-lg border border-slate-700 transition"
+              type="button"
+              onClick={() => downloadPayslipPdf({ ...payslip, company_logo_url: activeLogoUrl })}
+              className="flex items-center gap-1.5 rounded-lg bg-slate-900 px-3 py-2 text-[11px] font-semibold text-white transition hover:bg-slate-800 cursor-pointer"
             >
-              <Printer size={15} />
-              <span>Cetak / Simpan PDF</span>
+              <Download size={14} />
+              <span>{tr('Unduh PDF', 'Download PDF')}</span>
             </button>
-            <button onClick={onClose} className="p-1.5 text-slate-400 hover:text-white rounded-lg">
-              <X size={18} />
+            <button
+              type="button"
+              onClick={onClose}
+              aria-label={tr('Tutup', 'Close')}
+              className="rounded-lg p-2 text-slate-400 transition hover:bg-slate-200 hover:text-slate-700 cursor-pointer"
+            >
+              <X size={16} />
             </button>
           </div>
         </div>
 
-        {/* Payslip Document Body */}
-        <div className="p-6 md:p-8 space-y-6 text-slate-800 print:p-8" id="printable-payslip">
-          {/* Header */}
-          <div className="border-b-2 border-slate-900 pb-4 flex justify-between items-start">
-            <div>
-              <h2 className="text-xl font-bold tracking-tight text-slate-900 uppercase">
+        {/* Document */}
+        <div className="space-y-5 px-5 py-6 sm:px-8 sm:py-7">
+          {/* Letterhead */}
+          <div className="flex flex-col gap-3 border-b-2 border-slate-900 pb-4 sm:flex-row sm:items-start sm:justify-between">
+            <div className="min-w-0">
+              {activeLogoUrl && (
+                <img
+                  src={activeLogoUrl}
+                  alt={payslip.company_name || 'Company Logo'}
+                  className="mb-2 max-h-9 w-auto max-w-[220px] object-contain"
+                />
+              )}
+              <p className="text-[9px] font-bold uppercase tracking-[0.22em] text-slate-500">
+                {tr('Slip Gaji Karyawan', 'Employee Payslip')}
+              </p>
+              <h2 className="mt-1 text-lg font-bold leading-tight text-slate-900">
                 {payslip.company_name || 'PT Nusantara Digital Kreasi'}
               </h2>
-              <p className="text-xs text-slate-600 mt-1 max-w-md">
+              <p className="mt-0.5 max-w-md text-[10px] leading-relaxed text-slate-500">
                 {payslip.company_address || 'Jl. Jend. Sudirman Kav. 52-53, Jakarta Selatan'}
               </p>
               {payslip.company_npwp && (
-                <p className="text-xs text-slate-500">NPWP: {payslip.company_npwp}</p>
+                <p className="text-[10px] text-slate-500">NPWP: {payslip.company_npwp}</p>
               )}
             </div>
-            <div className="text-right">
-              <span className="inline-block bg-slate-100 text-slate-800 font-bold text-xs uppercase px-2.5 py-1 rounded tracking-wider border border-slate-200">
-                SLIP GAJI
+            <div className="shrink-0 sm:text-right">
+              <span className="inline-block rounded bg-slate-900 px-2.5 py-1 text-[9px] font-bold uppercase tracking-[0.18em] text-white">
+                {tr('Rahasia', 'Confidential')}
               </span>
-              <p className="text-xs font-semibold text-slate-700 mt-2">{payslip.run_title}</p>
-              <p className="text-[11px] text-slate-500">
-                Tgl Bayar: {formatDateIndo(payslip.payment_date || payslip.period_end)}
+              <p className="mt-2 text-xs font-bold text-slate-900">{payslip.run_title}</p>
+              <p className="text-[10px] text-slate-500">
+                {tr('Periode', 'Period')}: {periodStart} – {periodEnd}
+              </p>
+              <p className="text-[10px] text-slate-500">
+                {tr('Tanggal Bayar', 'Payment Date')}: {paymentDate}
               </p>
             </div>
           </div>
 
-          {/* Employee Metadata Grid */}
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 text-xs bg-slate-50 p-4 rounded-xl border border-slate-200">
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Nama Karyawan</span>
-              <span className="font-bold text-slate-900">{payslip.employee_name}</span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">NIK / ID</span>
-              <span className="font-semibold text-slate-800">{payslip.employee_nik}</span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Jabatan / Dept</span>
-              <span className="font-semibold text-slate-800">
-                {payslip.job_title} ({payslip.department_name || '-'})
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Status PTKP</span>
-              <span className="font-semibold text-slate-800">{payslip.ptkp_status}</span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Rekening Bank</span>
-              <span className="font-semibold text-slate-800">
-                {payslip.bank_name} {payslip.bank_account_number}
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Hari Kerja</span>
-              <span className="font-semibold text-slate-800">
-                {payslip.days_worked} / {payslip.expected_working_days} Hari
-              </span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Lembur Disetujui</span>
-              <span className="font-semibold text-slate-800">{payslip.overtime_hours} Jam</span>
-            </div>
-            <div>
-              <span className="text-slate-400 block text-[10px] uppercase">Metode Pajak</span>
-              <span className="font-semibold text-slate-800">{payslip.pph21_method}</span>
-            </div>
+          {/* Employee data */}
+          <div>
+            <h3 className="mb-2 border-l-2 border-slate-900 pl-2 text-[10px] font-bold uppercase tracking-wide text-slate-700">
+              {tr('Data Karyawan', 'Employee Details')}
+            </h3>
+            <dl className="grid grid-cols-2 gap-x-6 gap-y-2.5 rounded-lg border border-slate-200 bg-slate-50/60 p-3 sm:grid-cols-3">
+              <InfoItem label={tr('Nama Karyawan', 'Employee Name')} value={payslip.employee_name} />
+              <InfoItem label={tr('NIK / ID', 'Employee ID')} value={payslip.employee_nik} />
+              <InfoItem label={tr('Jabatan', 'Job Title')} value={payslip.job_title} />
+              <InfoItem label={tr('Departemen', 'Department')} value={payslip.department_name} />
+              <InfoItem label={tr('Status PTKP', 'Tax Status')} value={payslip.ptkp_status} />
+              <InfoItem
+                label={tr('Rekening Bank', 'Bank Account')}
+                value={
+                  payslip.bank_account_number
+                    ? `${payslip.bank_name || '-'} · ${payslip.bank_account_number}`
+                    : payslip.bank_name
+                    ? `${payslip.bank_name} · ${tr('belum diisi', 'not set')}`
+                    : '-'
+                }
+              />
+              <InfoItem
+                label={tr('Hari Kerja', 'Working Days')}
+                value={`${payslip.days_worked} / ${payslip.expected_working_days} ${tr('hari', 'days')}`}
+              />
+              <InfoItem
+                label={tr('Lembur Disetujui', 'Approved Overtime')}
+                value={`${payslip.overtime_hours} ${tr('jam', 'hrs')}`}
+              />
+              <InfoItem label={tr('Metode Pajak', 'Tax Method')} value={payslip.pph21_method} />
+            </dl>
           </div>
 
-          {/* Dual Columns: Earnings vs Deductions */}
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs">
-            {/* EARNINGS */}
-            <div className="border border-slate-200 rounded-xl p-4 bg-white flex flex-col justify-between shadow-xs">
-              <div>
-                <h4 className="font-bold text-slate-900 border-b border-slate-100 pb-2 mb-3 text-sm flex items-center justify-between">
-                  <span>PENGHASILAN (EARNINGS)</span>
-                  <span className="text-[11px] font-normal text-slate-500">Rupiah</span>
-                </h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Gaji Pokok</span>
-                    <span className="font-medium">{formatRupiah(payslip.base_salary)}</span>
-                  </div>
-                  {payslip.prorated_salary !== payslip.base_salary && (
-                    <div className="flex justify-between text-blue-600 font-medium">
-                      <span>Penyesuaian Prorata ({payslip.days_worked} hari)</span>
-                      <span>{formatRupiah(payslip.prorated_salary)}</span>
-                    </div>
-                  )}
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Tunjangan Tetap</span>
-                    <span className="font-medium">{formatRupiah(payslip.fixed_allowance)}</span>
-                  </div>
-                  {payslip.overtime_pay > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Upah Lembur ({payslip.overtime_hours} jam)</span>
-                      <span className="font-medium text-emerald-600">{formatRupiah(payslip.overtime_pay)}</span>
-                    </div>
-                  )}
-                  {payslip.attendance_bonus > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Bonus Kehadiran</span>
-                      <span className="font-medium text-emerald-600">{formatRupiah(payslip.attendance_bonus)}</span>
-                    </div>
-                  )}
-                  {payslip.commission_bonus > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Komisi / Bonus Performa</span>
-                      <span className="font-medium text-emerald-600">{formatRupiah(payslip.commission_bonus)}</span>
-                    </div>
-                  )}
-                  {payslip.reimbursement_amount > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Klaim Reimbursement</span>
-                      <span className="font-medium">{formatRupiah(payslip.reimbursement_amount)}</span>
-                    </div>
-                  )}
-                </div>
+          {/* Earnings & deductions — both cards share the same height; the total
+              row is pinned to the bottom so the two tables line up. */}
+          <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-stretch">
+            <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-white">
+                <span>{tr('Penghasilan', 'Earnings')}</span>
+                <span className="font-normal normal-case text-slate-300">Rupiah</span>
               </div>
-
-              <div className="border-t border-slate-200 pt-3 mt-4 flex justify-between font-bold text-slate-900 text-sm">
-                <span>Total Penghasilan Bruto</span>
-                <span>{formatRupiah(payslip.gross_earnings)}</span>
+              <table className="w-full table-fixed text-[11px]">
+                <tbody className="divide-y divide-slate-100">
+                  {earnings.map((row, index) => (
+                    <MoneyRow key={`${row.label}-${index}`} label={row.label} amount={row.amount} />
+                  ))}
+                </tbody>
+              </table>
+              <div className="mt-auto flex items-center justify-between border-t-2 border-slate-900 bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-900">
+                <span>{tr('Total Penghasilan Bruto', 'Gross Earnings')}</span>
+                <span className="tabular-nums">{formatRupiah(payslip.gross_earnings)}</span>
               </div>
             </div>
 
-            {/* DEDUCTIONS */}
-            <div className="border border-slate-200 rounded-xl p-4 bg-white flex flex-col justify-between shadow-xs">
-              <div>
-                <h4 className="font-bold text-slate-900 border-b border-slate-100 pb-2 mb-3 text-sm flex items-center justify-between">
-                  <span>POTONGAN (DEDUCTIONS)</span>
-                  <span className="text-[11px] font-normal text-slate-500">Rupiah</span>
-                </h4>
-                <div className="space-y-2">
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">BPJS Kesehatan (1%)</span>
-                    <span className="font-medium text-rose-600">{formatRupiah(payslip.bpjs_kes_employee)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">BPJS Ketenagakerjaan JHT (2%)</span>
-                    <span className="font-medium text-rose-600">{formatRupiah(payslip.bpjs_jht_employee)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">BPJS Ketenagakerjaan JP (1%)</span>
-                    <span className="font-medium text-rose-600">{formatRupiah(payslip.bpjs_jp_employee)}</span>
-                  </div>
-                  <div className="flex justify-between">
-                    <span className="text-slate-600">Pajak PPh 21 ({payslip.pph21_method})</span>
-                    <span className="font-medium text-rose-600">{formatRupiah(payslip.pph21_amount)}</span>
-                  </div>
-                  {payslip.kasbon_deduction > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Cicilan Kasbon</span>
-                      <span className="font-medium text-rose-600">{formatRupiah(payslip.kasbon_deduction)}</span>
-                    </div>
-                  )}
-                  {payslip.late_deduction > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Potongan Terlambat</span>
-                      <span className="font-medium text-rose-600">{formatRupiah(payslip.late_deduction)}</span>
-                    </div>
-                  )}
-                  {payslip.unpaid_leave_deduction > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Potongan Cuti Tidak Berbayar</span>
-                      <span className="font-medium text-rose-600">{formatRupiah(payslip.unpaid_leave_deduction)}</span>
-                    </div>
-                  )}
-                  {payslip.other_deductions > 0 && (
-                    <div className="flex justify-between">
-                      <span className="text-slate-600">Lain-lain ({payslip.other_deductions_reason || 'Koreksi'})</span>
-                      <span className="font-medium text-rose-600">{formatRupiah(payslip.other_deductions)}</span>
-                    </div>
-                  )}
-                </div>
+            <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
+              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-white">
+                <span>{tr('Potongan', 'Deductions')}</span>
+                <span className="font-normal normal-case text-slate-300">Rupiah</span>
               </div>
+              <table className="w-full table-fixed text-[11px]">
+                <tbody className="divide-y divide-slate-100">
+                  {deductions.length === 0 ? (
+                    <tr>
+                      <td colSpan={2} className="px-3 py-4 text-center text-[10px] italic text-slate-400">
+                        {comp(payslip.total_deductions) > 0
+                          ? tr(
+                              'Rincian potongan tidak tersedia untuk periode ini',
+                              'Deduction breakdown unavailable for this period'
+                            )
+                          : tr('Tidak ada potongan pada periode ini', 'No deductions in this period')}
+                      </td>
+                    </tr>
+                  ) : (
+                    deductions.flatMap((row, index) => {
+                      const rows = [
+                        <MoneyRow key={`${row.label}-${index}`} label={row.label} amount={row.amount} />,
+                      ];
 
-              <div className="border-t border-slate-200 pt-3 mt-4 flex justify-between font-bold text-rose-600 text-sm">
-                <span>Total Potongan</span>
-                <span>{formatRupiah(payslip.total_deductions)}</span>
+                      // Alpha shows its unit basis inline: rate × number of days.
+                      if (row.kind === 'alpha') {
+                        rows[0] = (
+                          <tr key={`${row.label}-${index}`} className="border-t border-slate-100">
+                            <td className="px-3 py-2 text-slate-700">
+                              <span className="block">{row.label}</span>
+                              <span className="block text-[9px] text-slate-500">
+                                {formatRupiah(Number(payslip.alpha_daily_rate_exact) || 0)} × {payslip.alpha_days}
+                              </span>
+                            </td>
+                            <td className="px-3 py-2 text-right font-semibold tabular-nums text-slate-900">
+                              {formatRupiah(row.amount)}
+                            </td>
+                          </tr>
+                        );
+                      }
+
+                      return rows;
+                    })
+                  )}
+                </tbody>
+              </table>
+              <div className="mt-auto flex items-center justify-between border-t-2 border-slate-900 bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-900">
+                <span>{tr('Total Potongan', 'Total Deductions')}</span>
+                <span className="tabular-nums">{formatRupiah(payslip.total_deductions)}</span>
               </div>
             </div>
           </div>
 
-          {/* Highlighted Take Home Pay */}
-          <div className="bg-blue-50 border-2 border-blue-600 rounded-xl p-5 flex items-center justify-between text-blue-950">
+          {/* Net pay */}
+          <div className="flex flex-col gap-2 rounded-lg bg-slate-900 px-4 py-3.5 text-white sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <span className="text-xs uppercase font-bold tracking-wider text-blue-800">
-                Gaji Bersih Diterima (Take Home Pay)
-              </span>
-              <p className="text-xs text-blue-700 mt-0.5">
-                Ditransfer ke rekening {payslip.bank_name} - {payslip.bank_account_number}
+              <p className="text-[9px] font-bold uppercase tracking-[0.18em] text-slate-300">
+                {tr('Gaji Bersih Diterima', 'Net Take-Home Pay')}
+              </p>
+              <p className="mt-0.5 text-[10px] text-slate-400">
+                {payslip.bank_account_number
+                  ? `${tr('Ditransfer ke', 'Transferred to')} ${payslip.bank_name || '-'} · ${payslip.bank_account_number}`
+                  : tr('Nomor rekening belum diisi', 'Bank account number not set')}
               </p>
             </div>
-            <div className="text-2xl font-black text-blue-700 tracking-tight">
+            <p className="font-mono text-xl font-black tracking-tight tabular-nums">
               {formatRupiah(payslip.take_home_pay)}
-            </div>
+            </p>
           </div>
 
-          {/* Employer Cost Transparency Box */}
-          <div className="bg-slate-50 border border-slate-200 rounded-xl p-4 text-[11px] text-slate-600">
-            <span className="font-bold text-slate-700 block mb-1">
-              Informasi Kontribusi Perusahaan (Employer Cost - Bukan Pemotong Gaji):
-            </span>
-            <div className="grid grid-cols-2 md:grid-cols-5 gap-2">
-              <div>BPJS Kes (4%): <strong className="text-slate-800">{formatRupiah(payslip.bpjs_kes_employer)}</strong></div>
-              <div>BPJS JHT (3.7%): <strong className="text-slate-800">{formatRupiah(payslip.bpjs_jht_employer)}</strong></div>
-              <div>BPJS JP (2%): <strong className="text-slate-800">{formatRupiah(payslip.bpjs_jp_employer)}</strong></div>
-              <div>BPJS JKK (0.24%): <strong className="text-slate-800">{formatRupiah(payslip.bpjs_jkk_employer)}</strong></div>
-              <div>BPJS JKM (0.3%): <strong className="text-slate-800">{formatRupiah(payslip.bpjs_jkm_employer)}</strong></div>
+          {/* Employer contributions */}
+          {employerRows.length > 0 && (
+            <div className="rounded-lg border border-slate-200 p-3">
+              <p className="mb-2 text-[9px] font-bold uppercase tracking-wide text-slate-500">
+                {tr('Kontribusi Perusahaan (bukan potongan gaji)', 'Employer Contributions (not deducted from pay)')}
+              </p>
+              <div className="grid grid-cols-2 gap-x-4 gap-y-1 text-[10px] text-slate-600 sm:grid-cols-3">
+                {employerRows.map((row) => (
+                  <div key={row.label} className="flex items-baseline justify-between gap-2">
+                    <span className="truncate">{row.label}</span>
+                    <span className="shrink-0 font-semibold tabular-nums text-slate-800">{formatRupiah(row.amount)}</span>
+                  </div>
+                ))}
+              </div>
+              <div className="mt-2 flex items-center justify-between border-t border-slate-200 pt-2 text-[10px] font-bold text-slate-800">
+                <span>{tr('Total Beban Perusahaan', 'Total Employer Cost')}</span>
+                <span className="tabular-nums">{formatRupiah(payslip.total_employer_cost)}</span>
+              </div>
             </div>
-            <div className="mt-2 text-slate-500 border-t border-slate-200 pt-2 flex justify-between">
-              <span>Total Beban Biaya Perusahaan (Total Employer Cost):</span>
-              <span className="font-bold text-slate-800">{formatRupiah(payslip.total_employer_cost)}</span>
-            </div>
-          </div>
+          )}
 
           {/* Signatures */}
-          <div className="grid grid-cols-2 gap-8 pt-6 text-center text-xs text-slate-700">
+          <div className="grid grid-cols-2 gap-6 pt-3 text-center text-[10px] text-slate-600">
             <div>
-              <p className="text-slate-500 mb-14">Diterima oleh (Penerima)</p>
-              <p className="font-bold border-t border-slate-300 pt-1 inline-block min-w-44">
-                {payslip.employee_name}
+              <p className="text-[9px] uppercase tracking-wide text-slate-400">
+                {tr('Diterima oleh', 'Received by')}
               </p>
+              <div className="mx-auto mt-12 w-40 border-t border-dotted border-slate-400 pt-1.5">
+                <p className="truncate font-semibold text-slate-800">{payslip.employee_name}</p>
+              </div>
             </div>
             <div>
-              <p className="text-slate-500 mb-14">Disahkan oleh (HR / Finance)</p>
-              <p className="font-bold border-t border-slate-300 pt-1 inline-block min-w-44">
-                {payslip.company_name || 'PT Nusantara Digital Kreasi'}
+              <p className="text-[9px] uppercase tracking-wide text-slate-400">
+                {tr('Disahkan oleh', 'Authorized by')}
               </p>
+              <div className="mx-auto mt-12 w-40 border-t border-dotted border-slate-400 pt-1.5">
+                <p className="truncate font-semibold text-slate-800">
+                  {payslip.approver_name || payslip.company_name || 'HR / Finance'}
+                </p>
+                {(payslip.approver_title || payslip.authorized_by_company) && (
+                  <p className="truncate text-[8px] font-medium uppercase tracking-wide text-slate-400">
+                    {payslip.approver_title || tr('Perusahaan', 'Company')}
+                  </p>
+                )}
+              </div>
             </div>
           </div>
+
+          <p className="border-t border-slate-100 pt-3 text-center text-[9px] leading-relaxed text-slate-400">
+            {tr(
+              'Dokumen ini bersifat rahasia dan dihasilkan otomatis oleh sistem penggajian. Tidak memerlukan tanda tangan basah.',
+              'This document is confidential and generated automatically by the payroll system. No wet signature is required.'
+            )}
+          </p>
         </div>
       </div>
     </div>
