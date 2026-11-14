@@ -5,6 +5,22 @@ import { sendEmailInBackground } from '../services/smtp';
 import { getLeaveStatusEmail } from '../services/email-templates';
 import { getFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
+import {
+  ADMIN_CLASH_FLAGS,
+  DEPT_HEAD_FLAGS,
+  applyApprovalSideEffects,
+  auditLeaveAction,
+  canTransition,
+  findLeaveConflicts,
+  formatDDMMYY,
+  isOpenStatus,
+  letterheadGaps,
+  loadLetterhead,
+  nextReferenceNo,
+  parseFlags,
+  workingDaySlaDueAt,
+  type LeaveStatus,
+} from '../services/leave-workflow';
 
 export const leaveRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -311,35 +327,9 @@ leaveRoutes.post('/requests/:id/review', requireRole(['owner_admin', 'manager'])
     .run();
 
   if (status === 'approved') {
-    // 1. Update leave balance
-    await c.env.DB.prepare(
-      `UPDATE leave_balances SET
-        used_days = used_days + ?,
-        remaining_days = remaining_days - ?,
-        updated_at = CURRENT_TIMESTAMP
-       WHERE employee_id = ? AND leave_type_id = ?`
-    )
-      .bind(req.total_days, req.total_days, req.employee_id, req.leave_type_id)
-      .run();
-
-    // 2. Automatically feed into attendance records for the leave period!
-    const startDate = new Date(req.start_date);
-    const endDate = new Date(req.end_date);
-    const attStatus = req.leave_type_code === 'sick' ? 'sick' : 'on_leave';
-
-    for (let d = new Date(startDate); d <= endDate; d.setDate(d.getDate() + 1)) {
-      const dateStr = d.toISOString().split('T')[0];
-      const dayOfWeek = d.getDay();
-      // Skip weekend if standard 5-day week
-      if (dayOfWeek !== 0 && dayOfWeek !== 6) {
-        await c.env.DB.prepare(
-          `INSERT OR REPLACE INTO attendance (id, tenant_id, employee_id, date, status, source)
-           VALUES (?, 'default', ?, ?, ?, 'manual')`
-        )
-          .bind(`att-leave-${req.employee_id}-${dateStr}`, req.employee_id, dateStr, attStatus)
-          .run();
-      }
-    }
+    // Balance deduction and attendance backfill live in the workflow service so
+    // the multi-stage approval, an override and this legacy route all agree.
+    await applyApprovalSideEffects(c.env, req);
   }
 
   // Send Email Notification
@@ -379,3 +369,633 @@ leaveRoutes.post('/requests/:id/review', requireRole(['owner_admin', 'manager'])
 
   return c.json({ message: `Pengajuan cuti berhasil di-${status}.` });
 });
+
+/* ------------------------------------------------------------------ */
+/* Multi-stage leave application                                       */
+/*                                                                     */
+/* Company identity is read from the companies table and the department */
+/* and leave-type choices come from their own tables. Nothing in this   */
+/* section describes a particular organisation.                        */
+/* ------------------------------------------------------------------ */
+
+const LEAVE_APPLICATION_SELECT = `
+  SELECT lr.*,
+         e.full_name, e.nik, e.job_title, e.manager_id,
+         d.name AS employee_department_name
+  FROM leave_requests lr
+  JOIN employees e ON e.id = lr.employee_id
+  LEFT JOIN departments d ON e.department_id = d.id
+`;
+
+/** Roles allowed to act at each stage, given how this app maps its roles. */
+function stageRights(user: { role: string }, request: any) {
+  const isAdmin = user.role === 'owner_admin';
+  const isDeptHead = user.role === 'manager';
+  return {
+    canAdminCheck: isAdmin && ['pending', 'submitted', 'pending_administrator'].includes(request.status),
+    canDeptHeadReview: (isAdmin || isDeptHead) && request.status === 'pending_dept_head',
+    canManagementDecide: isAdmin && request.status === 'pending_management',
+    canOverride: isAdmin && !['cancelled'].includes(request.status),
+    canPrint: isAdmin,
+  };
+}
+
+async function loadApplication(db: D1Database, id: string) {
+  return db.prepare(`${LEAVE_APPLICATION_SELECT} WHERE lr.id = ?`).bind(id).first<any>();
+}
+
+/** Employees see only their own; managers see their reports; admins see all. */
+function scopeClause(user: { role: string; employeeId?: string | null }) {
+  if (user.role === 'owner_admin' || user.role === 'finance') return { sql: '', params: [] as any[] };
+  if (user.role === 'manager') {
+    return {
+      sql: 'WHERE (e.manager_id = ? OR e.id = ?)',
+      params: [user.employeeId, user.employeeId],
+    };
+  }
+  return { sql: 'WHERE lr.employee_id = ?', params: [user.employeeId] };
+}
+
+// Form configuration: letterhead + the real department and leave-type rows.
+leaveRoutes.get('/form/config', async (c) => {
+  const user = c.get('user');
+
+  const [letterhead, departments, leaveTypes] = await Promise.all([
+    loadLetterhead(c.env),
+    c.env.DB.prepare(`SELECT id, name, code FROM departments ORDER BY name ASC`).all<any>(),
+    c.env.DB.prepare(`SELECT id, code, name, is_paid FROM leave_types ORDER BY name ASC`).all<any>(),
+  ]);
+
+  return c.json({
+    letterhead,
+    letterheadGaps: letterheadGaps(letterhead),
+    departments: departments.results || [],
+    leaveTypes: leaveTypes.results || [],
+    adminClashFlags: ADMIN_CLASH_FLAGS,
+    deptHeadFlags: DEPT_HEAD_FLAGS,
+    // The form title is the document's name, not organisation data.
+    formTitle: 'LEAVE APPLICATION FORM',
+    viewer: {
+      role: user.role,
+      employeeId: user.employeeId || null,
+      canPrint: user.role === 'owner_admin',
+    },
+  });
+});
+
+// Stage 1 — applicant submits a signed application.
+leaveRoutes.post('/applications', async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => null);
+  if (!body) return c.json({ error: 'Body JSON tidak valid.' }, 400);
+
+  const employeeId = String(body.employee_id || user.employeeId || '').trim();
+  if (!employeeId) return c.json({ error: 'Karyawan wajib dipilih.' }, 400);
+
+  // Only HR may file on someone else's behalf.
+  if (user.role !== 'owner_admin' && employeeId !== user.employeeId) {
+    return c.json({ error: 'Anda hanya dapat mengajukan cuti untuk diri sendiri.' }, 403);
+  }
+
+  const departmentId = String(body.department_id || '').trim();
+  const leaveTypeId = String(body.leave_type_id || '').trim();
+  const startDate = String(body.start_date || '').trim();
+  const endDate = String(body.end_date || '').trim();
+  const signature = String(body.applicant_signature || '').trim();
+  const otherNote = String(body.leave_type_other_note || '').trim();
+  const reason = String(body.reason || '').trim();
+
+  const missing = Object.entries({ departmentId, leaveTypeId, startDate, endDate, signature, reason })
+    .filter(([, value]) => !value)
+    .map(([key]) => key);
+  if (missing.length > 0) {
+    return c.json({ error: `Lengkapi field berikut: ${missing.join(', ')}.` }, 400);
+  }
+  if (endDate < startDate) {
+    return c.json({ error: 'Tanggal selesai tidak boleh sebelum tanggal mulai.' }, 400);
+  }
+
+  // Both choices must be real rows: the options are configuration, not literals.
+  const department = await c.env.DB.prepare(`SELECT id, name FROM departments WHERE id = ?`)
+    .bind(departmentId)
+    .first<any>();
+  if (!department) return c.json({ error: 'Departemen tidak ditemukan.' }, 400);
+
+  const leaveType = await c.env.DB.prepare(`SELECT id, code, name FROM leave_types WHERE id = ?`)
+    .bind(leaveTypeId)
+    .first<any>();
+  if (!leaveType) return c.json({ error: 'Jenis cuti tidak ditemukan.' }, 400);
+
+  if (['other', 'others'].includes(String(leaveType.code).toLowerCase()) && !otherNote) {
+    return c.json({ error: 'Jelaskan jenis cuti "Others".' }, 400);
+  }
+
+  const employee = await c.env.DB.prepare(
+    `SELECT id, full_name, manager_id FROM employees WHERE id = ?`
+  )
+    .bind(employeeId)
+    .first<any>();
+  if (!employee) return c.json({ error: 'Karyawan tidak ditemukan.' }, 404);
+
+  // Working days, holiday-aware, is the number that actually gets deducted.
+  const holidayRows = await c.env.DB.prepare(
+    `SELECT date FROM holidays WHERE date BETWEEN ? AND ?`
+  )
+    .bind(startDate, endDate)
+    .all<{ date: string }>();
+  const holidays = (holidayRows.results || []).map((row) => row.date);
+
+  const submissionDate = String(body.submission_date || new Date().toISOString().slice(0, 10)).slice(0, 10);
+  const totalDays = Number(body.total_days) > 0 ? Number(body.total_days) : undefined;
+
+  let referenceNo: string;
+  try {
+    referenceNo = await nextReferenceNo(c.env, submissionDate);
+  } catch (err: any) {
+    // A missing column here means migration 0018 has not been applied.
+    console.error('[leave] reference number failed:', err?.message || err);
+    return c.json(
+      { error: 'Gagal membuat nomor referensi. Pastikan migrasi database sudah dijalankan.' },
+      500
+    );
+  }
+
+  const requestId = makeId('lvr');
+  const slaDueAt = workingDaySlaDueAt(submissionDate, holidays);
+
+  await c.env.DB.prepare(
+    `INSERT INTO leave_requests (
+       id, tenant_id, employee_id, leave_type_id, start_date, end_date, total_days,
+       reason, status, reference_no, submission_date, department_id, department_label,
+       leave_type_label, leave_type_other_note, applicant_signature, applicant_signed_at,
+       submitted_at, sla_due_at
+     ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'pending_administrator', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`
+  )
+    .bind(
+      requestId,
+      employeeId,
+      leaveTypeId,
+      startDate,
+      endDate,
+      totalDays ?? Math.max(1, countWorkingDaysFallback(startDate, endDate, holidays)),
+      reason,
+      referenceNo,
+      submissionDate,
+      department.id,
+      department.name,
+      leaveType.name,
+      otherNote || null,
+      signature,
+      slaDueAt
+    )
+    .run();
+
+  await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_SUBMITTED', requestId, {
+    reference_no: referenceNo,
+    status: 'pending_administrator',
+    department: department.name,
+    leave_type: leaveType.name,
+    total_days: totalDays ?? null,
+  });
+
+  return c.json(
+    { message: 'Pengajuan cuti berhasil dikirim.', requestId, referenceNo, status: 'pending_administrator', slaDueAt },
+    201
+  );
+});
+
+/** Shared working-day count (kept local so the route reads without extra imports). */
+function countWorkingDaysFallback(fromISO: string, toISO: string, holidays: string[]): number {
+  const holidaySet = new Set(holidays);
+  const start = new Date(`${fromISO}T00:00:00Z`);
+  const end = new Date(`${toISO}T00:00:00Z`);
+  if (Number.isNaN(start.getTime()) || Number.isNaN(end.getTime()) || end < start) return 1;
+  let days = 0;
+  for (const cursor = new Date(start); cursor <= end; cursor.setUTCDate(cursor.getUTCDate() + 1)) {
+    const day = cursor.getUTCDay();
+    if (day === 0 || day === 6) continue;
+    if (holidaySet.has(cursor.toISOString().slice(0, 10))) continue;
+    days++;
+  }
+  return days;
+}
+
+// List applications, scoped by role.
+leaveRoutes.get('/applications', async (c) => {
+  const user = c.get('user');
+  const status = c.req.query('status');
+  const scope = c.req.query('scope');
+
+  let sql = LEAVE_APPLICATION_SELECT;
+  const where: string[] = [];
+  const params: any[] = [];
+
+  if (scope === 'mine' || user.role === 'employee') {
+    where.push('lr.employee_id = ?');
+    params.push(user.employeeId);
+  } else {
+    const scoped = scopeClause(user);
+    if (scoped.sql) {
+      where.push(scoped.sql.replace(/^WHERE /, ''));
+      params.push(...scoped.params);
+    }
+  }
+
+  if (status && status !== 'all') {
+    where.push('lr.status = ?');
+    params.push(status);
+  }
+
+  if (where.length > 0) sql += ` WHERE ${where.join(' AND ')}`;
+  sql += ` ORDER BY COALESCE(lr.submitted_at, lr.created_at) DESC LIMIT 300`;
+
+  const rows = await c.env.DB.prepare(sql).bind(...params).all<any>();
+  return c.json({ applications: rows.results || [] });
+});
+
+// Conflict detection for the administrative check and department head review.
+leaveRoutes.get(
+  '/applications/conflicts',
+  requireRole(['owner_admin', 'manager']),
+  async (c) => {
+    const departmentId = c.req.query('departmentId');
+    const start = c.req.query('start');
+    const end = c.req.query('end');
+    const excludeId = c.req.query('excludeId');
+
+    if (!departmentId || !start || !end) {
+      return c.json({ error: 'departmentId, start dan end wajib diisi.' }, 400);
+    }
+
+    const conflicts = await findLeaveConflicts(c.env.DB, {
+      departmentId,
+      start,
+      end,
+      excludeId,
+    });
+    return c.json({ conflicts });
+  }
+);
+
+// SLA summary for the dashboard badge.
+leaveRoutes.get('/sla-summary', requireRole(['owner_admin']), async (c) => {
+  const today = new Date().toISOString().slice(0, 10);
+  const row = await c.env.DB.prepare(
+    `SELECT
+       COUNT(*) AS open_count,
+       SUM(CASE WHEN sla_due_at IS NOT NULL AND sla_due_at < ? THEN 1 ELSE 0 END) AS overdue
+     FROM leave_requests
+     WHERE status IN ('submitted', 'pending_administrator', 'pending_dept_head', 'pending_management')`
+  )
+    .bind(today)
+    .first<any>();
+
+  return c.json({
+    open: Number(row?.open_count || 0),
+    overdue: Number(row?.overdue || 0),
+  });
+});
+
+// Single application with its stage history.
+leaveRoutes.get('/applications/:id', async (c) => {
+  const user = c.get('user');
+  const request = await loadApplication(c.env.DB, c.req.param('id'));
+  if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  const isOwn = user.employeeId && request.employee_id === user.employeeId;
+  const isReports = user.role === 'manager';
+  if (user.role === 'employee' && !isOwn) return c.json({ error: 'Forbidden' }, 403);
+  if (isReports && !isOwn && request.manager_id !== user.employeeId) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const history = await c.env.DB.prepare(
+    `SELECT id, action, user_id, new_values, created_at FROM audit_logs
+     WHERE entity_type = 'leave_requests' AND entity_id = ?
+     ORDER BY created_at ASC`
+  )
+    .bind(request.id)
+    .all<any>();
+
+  const letterhead = await loadLetterhead(c.env);
+
+  return c.json({
+    application: {
+      ...request,
+      submission_date_display: formatDDMMYY(request.submission_date || request.created_at || ''),
+      start_date_display: formatDDMMYY(request.start_date || ''),
+      end_date_display: formatDDMMYY(request.end_date || ''),
+    },
+    history: history.results || [],
+    letterhead,
+    rights: stageRights(user, request),
+  });
+});
+
+// Stage 2 — administrative check.
+leaveRoutes.post('/applications/:id/admin-check', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+
+  const request = await loadApplication(c.env.DB, c.req.param('id'));
+  if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  if (!canTransition(request.status, 'pending_dept_head')) {
+    return c.json(
+      { error: `Tidak dapat melakukan pemeriksaan administratif pada status "${request.status}".` },
+      409
+    );
+  }
+
+  const flags = parseFlags(body.admin_clash_checks, ADMIN_CLASH_FLAGS);
+  const otherReason = String(body.admin_other_reason || '').trim().slice(0, 500);
+
+  if (flags.includes('Other reason') && !otherReason) {
+    return c.json({ error: 'Isi keterangan untuk "Other reason".' }, 400);
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE leave_requests
+     SET status = 'pending_dept_head',
+         admin_clash_checks = ?,
+         admin_other_reason = ?,
+         admin_checked_by = ?,
+         admin_checked_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(JSON.stringify(flags), otherReason || null, user.userId, request.id)
+    .run();
+
+  await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_ADMIN_CHECKED', request.id, {
+    admin_clash_checks: flags,
+    admin_other_reason: otherReason || null,
+    from: request.status,
+    to: 'pending_dept_head',
+  });
+
+  return c.json({ message: 'Pemeriksaan administratif disimpan.', status: 'pending_dept_head' });
+});
+
+// Stage 3 — department head review.
+leaveRoutes.post(
+  '/applications/:id/dept-head-review',
+  requireRole(['owner_admin', 'manager']),
+  async (c) => {
+    const user = c.get('user');
+    const body = await c.req.json().catch(() => ({}));
+
+    const request = await loadApplication(c.env.DB, c.req.param('id'));
+    if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+    // Only the applicant's own manager may act, unless it is an HR admin.
+    if (user.role === 'manager' && request.manager_id !== user.employeeId) {
+      return c.json({ error: 'Anda bukan atasan langsung karyawan ini.' }, 403);
+    }
+
+    if (!canTransition(request.status, 'pending_management')) {
+      return c.json(
+        { error: `Tidak dapat meninjau pada status "${request.status}". Pemeriksaan administratif harus selesai lebih dulu.` },
+        409
+      );
+    }
+
+    const decisionRaw = String(body.dept_head_decision || '').trim().toUpperCase();
+    const decision = decisionRaw === 'NOT_APPROVED' ? 'NOT_APPROVED' : decisionRaw === 'APPROVED' ? 'APPROVED' : '';
+    if (!decision) {
+      return c.json({ error: 'Keputusan department head wajib dipilih.' }, 400);
+    }
+
+    const issues = parseFlags(body.dept_head_issues, DEPT_HEAD_FLAGS);
+
+    await c.env.DB.prepare(
+      `UPDATE leave_requests
+       SET status = 'pending_management',
+           dept_head_issues = ?,
+           dept_head_decision = ?,
+           dept_head_decided_by = ?,
+           dept_head_decided_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+      .bind(JSON.stringify(issues), decision, user.userId, request.id)
+      .run();
+
+    await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_DEPT_HEAD_REVIEWED', request.id, {
+      dept_head_issues: issues,
+      dept_head_decision: decision,
+      from: request.status,
+      to: 'pending_management',
+    });
+
+    return c.json({ message: 'Tinjauan department head disimpan.', status: 'pending_management' });
+  }
+);
+
+// Stage 4 — final management decision. Requires a signature.
+leaveRoutes.post('/applications/:id/management-decision', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+
+  const request = await loadApplication(c.env.DB, c.req.param('id'));
+  if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  const decisionRaw = String(body.management_decision || '').trim().toUpperCase();
+  const nextStatus: LeaveStatus | null =
+    decisionRaw === 'APPROVED' ? 'approved' : decisionRaw === 'NOT_APPROVED' ? 'rejected' : null;
+  if (!nextStatus) {
+    return c.json({ error: 'Keputusan management wajib dipilih.' }, 400);
+  }
+
+  const signature = String(body.management_signature || '').trim();
+  if (!signature) {
+    return c.json({ error: 'Tanda tangan management wajib diisi.' }, 400);
+  }
+
+  if (!canTransition(request.status, nextStatus)) {
+    return c.json(
+      { error: `Keputusan akhir tidak dapat diambil pada status "${request.status}".` },
+      409
+    );
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE leave_requests
+     SET status = ?,
+         management_decision = ?,
+         management_signature = ?,
+         management_signed_at = CURRENT_TIMESTAMP,
+         management_by = ?,
+         approved_by = ?,
+         approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,
+         rejection_note = CASE WHEN ? = 'rejected' THEN ? ELSE rejection_note END
+     WHERE id = ?`
+  )
+    .bind(
+      nextStatus,
+      decisionRaw,
+      signature,
+      user.userId,
+      user.userId,
+      nextStatus,
+      nextStatus,
+      String(body.note || '').trim().slice(0, 500) || null,
+      request.id
+    )
+    .run();
+
+  if (nextStatus === 'approved') {
+    await applyApprovalSideEffects(c.env, request);
+  }
+
+  await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_MANAGEMENT_DECIDED', request.id, {
+    management_decision: decisionRaw,
+    from: request.status,
+    to: nextStatus,
+  });
+
+  await notifyLeaveOutcome(c, request, nextStatus, String(body.note || '').trim());
+
+  return c.json({ message: 'Keputusan management tersimpan.', status: nextStatus });
+});
+
+// Override — management may force an outcome from any non-terminal status.
+leaveRoutes.post('/applications/:id/override', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  const body = await c.req.json().catch(() => ({}));
+
+  const request = await loadApplication(c.env.DB, c.req.param('id'));
+  if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  const raw = String(body.status || '').trim().toLowerCase();
+  const nextStatus: LeaveStatus | null =
+    raw === 'approved' ? 'approved' : raw === 'rejected' ? 'rejected' : raw === 'cancelled' ? 'cancelled' : null;
+  if (!nextStatus) {
+    return c.json({ error: 'Status override harus approved, rejected atau cancelled.' }, 400);
+  }
+
+  const reason = String(body.reason || '').trim().slice(0, 500);
+  if (!reason) return c.json({ error: 'Alasan override wajib diisi.' }, 400);
+
+  if (request.status === 'cancelled') {
+    return c.json({ error: 'Pengajuan yang sudah dibatalkan tidak dapat diubah.' }, 409);
+  }
+  if (!canTransition(request.status, nextStatus)) {
+    return c.json({ error: `Override ke "${nextStatus}" tidak diizinkan dari "${request.status}".` }, 409);
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE leave_requests
+     SET status = ?,
+         override_reason = ?,
+         approved_by = CASE WHEN ? = 'approved' THEN ? ELSE approved_by END,
+         approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,
+         cancelled_at = CASE WHEN ? = 'cancelled' THEN CURRENT_TIMESTAMP ELSE cancelled_at END,
+         cancelled_by = CASE WHEN ? = 'cancelled' THEN ? ELSE cancelled_by END
+     WHERE id = ?`
+  )
+    .bind(
+      nextStatus,
+      reason,
+      nextStatus,
+      user.userId,
+      nextStatus,
+      nextStatus,
+      nextStatus,
+      user.userId,
+      request.id
+    )
+    .run();
+
+  if (nextStatus === 'approved') {
+    await applyApprovalSideEffects(c.env, request);
+  }
+
+  await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_OVERRIDDEN', request.id, {
+    from: request.status,
+    to: nextStatus,
+    reason,
+  });
+
+  if (nextStatus !== 'cancelled') {
+    await notifyLeaveOutcome(c, request, nextStatus, reason);
+  }
+
+  return c.json({ message: 'Override tersimpan.', status: nextStatus });
+});
+
+// Everything the client needs to render the printable document.
+leaveRoutes.get('/applications/:id/print', async (c) => {
+  const user = c.get('user');
+  const request = await loadApplication(c.env.DB, c.req.param('id'));
+  if (!request) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  const isOwn = user.employeeId && request.employee_id === user.employeeId;
+  if (user.role === 'employee' && !isOwn) return c.json({ error: 'Forbidden' }, 403);
+  if (user.role !== 'owner_admin' && user.role !== 'manager' && !isOwn) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  // The printed form lists every department and leave type as a checkbox, so the
+  // payload carries the full option sets rather than only this application's.
+  const [departmentRows, leaveTypeRows] = await Promise.all([
+    c.env.DB.prepare(`SELECT name FROM departments ORDER BY name ASC`).all<any>(),
+    c.env.DB.prepare(`SELECT name FROM leave_types ORDER BY name ASC`).all<any>(),
+  ]);
+
+  return c.json({
+    application: request,
+    letterhead: await loadLetterhead(c.env),
+    adminClashFlags: ADMIN_CLASH_FLAGS,
+    deptHeadFlags: DEPT_HEAD_FLAGS,
+    // Full option lists so the printed form shows every checkbox, not just the
+    // ones this application happens to use.
+    departments: (departmentRows.results || []).map((row: any) => row.name),
+    leaveTypes: (leaveTypeRows.results || []).map((row: any) => row.name),
+    canPrint: user.role === 'owner_admin',
+  });
+});
+
+/** Emails the applicant the final outcome. Silently skips a missing address. */
+async function notifyLeaveOutcome(c: any, request: any, status: string, note: string): Promise<void> {
+  if (!['approved', 'rejected'].includes(status)) return;
+
+  const employee: any = await c.env.DB.prepare(
+    `SELECT full_name, personal_email, company_email FROM employees WHERE id = ?`
+  )
+    .bind(request.employee_id)
+    .first();
+  const email = employee?.company_email || employee?.personal_email;
+  if (!email) return;
+
+  const company: any = await c.env.DB.prepare(
+    `SELECT name, legal_name, custom_domain FROM companies LIMIT 1`
+  ).first();
+  const appUrl = company?.custom_domain
+    ? company.custom_domain.startsWith('http')
+      ? company.custom_domain
+      : `https://${company.custom_domain}`
+    : c.env.APP_URL || undefined;
+
+  const content = getLeaveStatusEmail({
+    employeeName: employee.full_name,
+    leaveType: request.leave_type_label || request.leave_type_name || 'Leave',
+    startDate: request.start_date,
+    endDate: request.end_date,
+    totalDays: Number(request.total_days),
+    status: status as 'approved' | 'rejected',
+    reviewerName: 'Management',
+    note,
+    appUrl,
+    companyName: company?.legal_name || company?.name,
+  });
+
+  sendEmailInBackground(c, c.env, {
+    to: email,
+    subject:
+      status === 'approved'
+        ? 'Pengajuan cuti disetujui (Leave approved)'
+        : 'Pengajuan cuti ditolak (Leave rejected)',
+    text: content.text,
+    html: content.html,
+    type: 'leave_status',
+  });
+}

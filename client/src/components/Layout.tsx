@@ -109,6 +109,12 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { name: t.nav.employees, path: '/employees', icon: Users, show: isOwnerAdmin || isManager },
     { name: t.nav.attendance, path: '/attendance', icon: Clock, show: isOwnerAdmin || isManager },
     { name: t.nav.leave, path: '/leave', icon: Calendar, show: isOwnerAdmin || isManager },
+    {
+      name: tr('Persetujuan Cuti', 'Leave Approvals'),
+      path: '/leave-applications',
+      icon: FileCheck,
+      show: isOwnerAdmin || isManager,
+    },
     { name: t.nav.shifts, path: '/shifts', icon: Layers, show: isOwnerAdmin || isManager },
     { name: t.nav.payroll, path: '/payroll', icon: DollarSign, show: isOwnerAdmin || isFinance },
     { name: tr('Klaim Biaya', 'Expense Claims'), path: '/kasbon', icon: Receipt, show: isOwnerAdmin || isFinance || isManager },
@@ -122,6 +128,11 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { name: t.nav.home, path: '/app', icon: Home },
     { name: t.nav.myAttendance, path: '/app/attendance', icon: Clock },
     { name: t.nav.requests, path: '/app/requests', icon: FileCheck },
+    {
+      name: tr('Permohonan Cuti', 'Leave Application'),
+      path: '/app/leave-application',
+      icon: Calendar,
+    },
     { name: t.nav.payslips, path: '/app/payslips', icon: DollarSign },
     { name: t.nav.profile, path: '/app/profile', icon: UserCircle },
   ];

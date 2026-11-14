@@ -14,7 +14,7 @@ import { apiFetch, getLocalDateString } from '../api';
 
 export const HRDashboard: React.FC = () => {
   const { user } = useAuth();
-  const { t, formatDate } = useLanguage();
+  const { t, tr, formatDate } = useLanguage();
   const [todaySummary, setTodaySummary] = useState<any>({ total: 0, present: 0, late: 0, on_leave: 0, absent: 0 });
   const [contractAlerts, setContractAlerts] = useState<any[]>([]);
   const [pendingCounts, setPendingCounts] = useState({
@@ -24,19 +24,24 @@ export const HRDashboard: React.FC = () => {
     reimbursements: 0,
   });
   const [loading, setLoading] = useState(true);
+  const [leaveSla, setLeaveSla] = useState<{ open: number; overdue: number }>({ open: 0, overdue: 0 });
 
   useEffect(() => {
     const loadDashboard = async () => {
       try {
         const todayStr = getLocalDateString();
-        const [attRes, alertRes, corrRes, lvrRes, otRes, rmbRes] = await Promise.all([
+        const [attRes, alertRes, corrRes, lvrRes, otRes, rmbRes, slaRes] = await Promise.all([
           apiFetch(`/attendance/today?date=${todayStr}`),
           apiFetch('/employees/contract-alerts'),
           apiFetch('/attendance/corrections'),
           apiFetch('/leave/requests'),
           apiFetch('/shifts/overtime/requests'),
           apiFetch('/kasbon/reimbursements'),
+          // Applications past their one-working-day notification SLA.
+          apiFetch('/leave/sla-summary').catch(() => ({ open: 0, overdue: 0 })),
         ]);
+
+        setLeaveSla({ open: slaRes.open || 0, overdue: slaRes.overdue || 0 });
 
         setTodaySummary(attRes.summary || {});
         setContractAlerts(alertRes.alerts || []);
@@ -189,12 +194,18 @@ export const HRDashboard: React.FC = () => {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Link
-              to="/leave"
+              to="/leave-applications"
               className="p-3.5 rounded-2xl bg-slate-50 hover:bg-blue-50 border border-slate-200 transition text-center"
             >
               <Calendar size={20} className="mx-auto text-blue-600 mb-1" />
               <div className="text-xs font-bold text-slate-800">{t.dashboard.leaveRequests}</div>
-              <div className="text-lg font-black text-blue-700">{pendingCounts.leave}</div>
+              <div className="text-lg font-black text-blue-700">{leaveSla.open || pendingCounts.leave}</div>
+              {leaveSla.overdue > 0 && (
+                <div className="mt-0.5 inline-flex items-center gap-1 rounded-full bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
+                  <AlertTriangle size={9} />
+                  {leaveSla.overdue} {tr('lewat SLA', 'past SLA')}
+                </div>
+              )}
             </Link>
 
             <Link

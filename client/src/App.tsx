@@ -18,6 +18,8 @@ import { HREmployees } from './pages/HREmployees';
 import { HREmployeeDetail } from './pages/HREmployeeDetail';
 import { HRAttendance } from './pages/HRAttendance';
 import { HRLeave } from './pages/HRLeave';
+import { LeaveApplicationForm } from './pages/LeaveApplicationForm';
+import { LeaveApprovals } from './pages/LeaveApprovals';
 import { HRShifts } from './pages/HRShifts';
 import { HRPayroll } from './pages/HRPayroll';
 import { HRKasbon } from './pages/HRKasbon';
@@ -162,6 +164,15 @@ export const App: React.FC = () => {
               </ProtectedRoute>
             }
           />
+          <Route
+            path="/leave-applications"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
+                <LeaveApprovals />
+              </ProtectedRoute>
+            }
+          />
+          <Route path="/app/leave-application" element={<ProtectedRoute><LeaveApplicationForm /></ProtectedRoute>} />
           <Route
             path="/shifts"
             element={
