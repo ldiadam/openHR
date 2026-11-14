@@ -85,13 +85,16 @@ export async function storeSignedDocument(
 
   const id = `sd-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
 
-  // Same (request, kind, submitter) may be re-downloaded on retry; keep one row.
+  // Same (request, kind, submitter) may be re-downloaded on every sync; keep one
+  // row. The conflict target must match the expression index from migration 0017:
+  // a plain UNIQUE on docuseal_submitter_id never fires because SQLite treats
+  // NULLs as distinct, and audit trails always store a NULL submitter id.
   await env.DB.prepare(
     `INSERT INTO signed_documents (
        id, tenant_id, signing_request_id, docuseal_submitter_id, kind,
        storage_key, content_type, byte_size, sha256, downloaded_at
      ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?)
-     ON CONFLICT(signing_request_id, kind, docuseal_submitter_id) DO UPDATE SET
+     ON CONFLICT(signing_request_id, kind, COALESCE(docuseal_submitter_id, '')) DO UPDATE SET
        storage_key = excluded.storage_key,
        content_type = excluded.content_type,
        byte_size = excluded.byte_size,

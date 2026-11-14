@@ -1285,4 +1285,93 @@ describe('One-off document signing', () => {
       'a completed submitter is reflected on the signer row'
     );
   });
+
+  it('does not accumulate stored documents when syncing repeatedly', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const token = await adminToken();
+
+    // DocuSeal exposes the same document URLs on every status poll; each sync
+    // re-downloads them and must not append another row per visit.
+    globalThis.fetch = (async (input: any) => {
+      const url = String(input);
+      if (url.includes('/api/templates/')) {
+        return new Response(JSON.stringify({ id: 4242 }), { status: 200 });
+      }
+      if (url.includes('/api/submissions') && !url.match(/\/api\/submissions\/\d+/)) {
+        return new Response(
+          JSON.stringify([{ id: 900, role: 'Employee', status: 'sent', submission_id: 456 }]),
+          { status: 200 }
+        );
+      }
+      if (url.includes('/api/submissions/456')) {
+        return new Response(
+          JSON.stringify({
+            id: 456,
+            status: 'completed',
+            submitters: [{ id: 900, role: 'Employee', status: 'completed' }],
+            documents: [
+              { name: 'signed.pdf', url: 'https://sign.example.com/files/signed.pdf' },
+              { name: 'audit-log.pdf', url: 'https://sign.example.com/files/audit.pdf' },
+            ],
+          }),
+          { status: 200 }
+        );
+      }
+      // Document downloads.
+      return new Response(new Uint8Array([37, 80, 68, 70]), {
+        status: 200,
+        headers: { 'content-type': 'application/pdf' },
+      });
+    }) as any;
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          templateVersion: 1,
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+          sendEmail: false,
+          idempotencyKey: 'sync-repeat-1',
+        }),
+      },
+      token
+    );
+    assert.equal(created.status, 201);
+    const { signingRequestId } = (await created.json()) as any;
+
+    for (let i = 0; i < 4; i++) {
+      const res = await request(
+        env,
+        `/api/hr/signing-requests/${signingRequestId}/sync`,
+        { method: 'POST' },
+        token
+      );
+      assert.equal(res.status, 200);
+      const body = (await res.json()) as any;
+      // Documents must actually be stored. Without this, a broken upsert that
+      // throws would be swallowed as "failed" and still leave one row behind.
+      assert.ok(body.documentsStored > 0, `sync ${i + 1} stored documents`);
+    }
+
+    const docs = (
+      await db
+        .prepare(
+          `SELECT kind, COUNT(*) AS n FROM signed_documents
+           WHERE signing_request_id = ? GROUP BY kind`
+        )
+        .bind(signingRequestId)
+        .all()
+    ).results as any[];
+
+    assert.ok(docs.length > 0, 'the sync stored documents');
+    assert.ok(
+      docs.every((row: any) => Number(row.n) === 1),
+      `each kind is stored exactly once after repeated syncs, got ${JSON.stringify(docs)}`
+    );
+  });
 });
