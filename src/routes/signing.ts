@@ -23,6 +23,7 @@ import {
   registerTemplate,
   resolveTemplate,
 } from '../services/document-templates';
+import { reconcileSubmission } from '../services/signing-reconcile';
 import {
   getDocumentById,
   listDocumentsForEmployee,
@@ -578,6 +579,23 @@ signingRoutes.post('/signing-requests', async (c) => {
       return badRequest(c, 'Dokumen: minimal satu field tanda tangan diperlukan.');
     }
 
+    // Every signer this workflow will send must have a field placed on the
+    // document. DocuSeal creates a submitter per field-role, so a role with no
+    // field silently vanishes and the request can never reach "completed".
+    const fieldRoles = new Set(fields.map((f: any) => String(f.role || '').trim().toLowerCase()));
+    const rolesWithoutField = signers
+      .map((signer) => signer.role)
+      .filter((role) => !fieldRoles.has(role.toLowerCase()));
+
+    if (rolesWithoutField.length > 0) {
+      return badRequest(
+        c,
+        `Tempatkan minimal satu field untuk setiap penandatangan. Belum ada field untuk: ${rolesWithoutField.join(
+          ', '
+        )}.`
+      );
+    }
+
     try {
       const created = await createDocuSealClient(c.env).createTemplateFromPdf({
         name: docName,
@@ -618,8 +636,10 @@ signingRoutes.post('/signing-requests', async (c) => {
   const prefill = body.prefill && typeof body.prefill === 'object' ? body.prefill : null;
   const order = body.order === 'random' ? 'random' : 'preserved';
   const sendEmailRequested = body.sendEmail !== false;
+  // Must be public: the signer is usually an external party with no openHR
+  // session, so pointing at /documents bounced them to /login.
   const completedRedirectUrl =
-    body.completedRedirectUrl || `${hrAppUrl(c.env)}/documents?completed=${requestId}`;
+    body.completedRedirectUrl || `${hrAppUrl(c.env)}/signing/complete?request=${requestId}`;
 
   // Persist the draft first so a submission failure is retryable and auditable.
   try {
@@ -697,15 +717,25 @@ signingRoutes.post('/signing-requests', async (c) => {
     ? submission.submitters
     : [];
 
+  // DocuSeal only creates a submitter for a role that actually has a field on
+  // the document. A workflow may declare three signers while the uploaded PDF
+  // only has two signature areas — writing a signer row for the missing role
+  // produced an un-signable phantom that made the counter read "0/3" forever.
+  // Match strictly by role and skip anything DocuSeal did not create.
+  const unmatchedRoles: string[] = [];
+
   for (let i = 0; i < signers.length; i++) {
     const signer = signers[i];
-    const result =
-      submitterResults.find(
-        (r) => String(r.role || '').toLowerCase() === signer.role.toLowerCase() &&
-          (!r.email || String(r.email).toLowerCase() === signer.email)
-      ) || submitterResults[i];
+    const result = submitterResults.find(
+      (r) => String(r.role || '').toLowerCase() === signer.role.toLowerCase()
+    );
 
-    const status: string = String(result?.status || 'sent').toLowerCase();
+    if (!result || result.id === undefined || result.id === null) {
+      unmatchedRoles.push(signer.role);
+      continue;
+    }
+
+    const status: string = String(result.status || 'sent').toLowerCase();
     const signerStatus = ['awaiting', 'sent', 'opened', 'completed', 'declined'].includes(status)
       ? status
       : 'sent';
@@ -723,12 +753,19 @@ signingRoutes.post('/signing-requests', async (c) => {
         signer.role,
         signer.email,
         signer.name,
-        result?.id !== undefined ? String(result.id) : null,
-        result?.slug || result?.uuid || null,
-        resolveSigningUrl(result || {}),
+        String(result.id),
+        result.slug || result.uuid || null,
+        resolveSigningUrl(result),
         signerStatus
       )
       .run();
+  }
+
+  if (unmatchedRoles.length > 0) {
+    await audit(c.env.DB, user.userId, 'SIGNING_SIGNERS_UNMATCHED', requestId, {
+      roles: unmatchedRoles,
+      reason: 'DocuSeal created no submitter for these roles (no field placed on the document)',
+    });
   }
 
   await c.env.DB.prepare(
@@ -920,6 +957,40 @@ signingRoutes.post('/signing-requests/preview-signers', async (c) => {
       };
     }),
     problem: resolution.problem ?? null,
+  });
+});
+
+signingRoutes.post('/signing-requests/:id/sync', async (c) => {
+  const user = c.get('user');
+  const ctx = await loadRequestContext(c.env.DB, c.req.param('id'));
+
+  if (!ctx.request) return badRequest(c, 'Pengajuan tanda tangan tidak ditemukan.', 404);
+  if (!canViewSigningRequest(user, ctx.request, ctx.signers, ctx.employee)) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const submissionId = ctx.request.docuseal_submission_id;
+  if (!submissionId) {
+    return badRequest(c, 'Pengajuan ini belum memiliki submission DocuSeal.');
+  }
+
+  let submission;
+  try {
+    submission = await createDocuSealClient(c.env).getSubmission(submissionId);
+  } catch (err: any) {
+    return mapDocuSealError(c, err);
+  }
+
+  const result = await reconcileSubmission(c.env, ctx.request, submission);
+  const refreshed = await loadRequestContext(c.env.DB, ctx.request.id);
+
+  return c.json({
+    message: 'Status tanda tangan diperbarui dari DocuSeal.',
+    status: result.status,
+    signersUpdated: result.signersUpdated,
+    documentsStored: result.stored,
+    signingRequest: refreshed.request,
+    signers: refreshed.signers,
   });
 });
 

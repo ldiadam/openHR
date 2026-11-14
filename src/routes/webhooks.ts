@@ -1,10 +1,10 @@
 import { Hono } from 'hono';
 import { Bindings } from '../types';
 import { createDocuSealClient, DocuSealError, DocuSealSubmissionResult } from '../services/docuseal';
-import { storeSignedDocument, sha256Hex } from '../services/signed-documents';
+import { sha256Hex } from '../services/signed-documents';
 import { runInBackground, sendEmail } from '../services/smtp';
 import { getSigningStatusEmail } from '../services/email-templates';
-import { onSigningCompleted } from '../services/signing-completion';
+import { reconcileSubmission } from '../services/signing-reconcile';
 
 export const webhookRoutes = new Hono<{ Bindings: Bindings }>();
 
@@ -189,84 +189,6 @@ async function findRequestBySubmission(env: Bindings, submissionId: string | nul
     .first<any>();
 }
 
-function normaliseStatus(raw: unknown): string {
-  const value = String(raw || '').toLowerCase();
-  if (['awaiting', 'sent', 'opened', 'completed', 'declined'].includes(value)) return value;
-  if (value === 'signed') return 'completed';
-  return 'sent';
-}
-
-async function persistSubmissionDocuments(
-  env: Bindings,
-  signingRequestId: string,
-  submission: DocuSealSubmissionResult
-): Promise<{ stored: number; failed: number }> {
-  let stored = 0;
-  let failed = 0;
-
-  const documents = Array.isArray(submission.documents) ? submission.documents : [];
-
-  for (const document of documents) {
-    if (!document?.url) continue;
-
-    const isAudit =
-      String(document.kind || '').toLowerCase().includes('audit') ||
-      String(document.name || '').toLowerCase().includes('audit');
-
-    const submitterId = (document as any).submitter_id ?? (document as any).submitter?.id ?? null;
-
-    try {
-      const response = await fetch(document.url, { method: 'GET' });
-      if (!response.ok) {
-        failed++;
-        continue;
-      }
-
-      const data = await response.arrayBuffer();
-      const contentType =
-        response.headers.get('content-type') ||
-        (isAudit ? 'application/json' : 'application/pdf');
-
-      await storeSignedDocument(env, {
-        signingRequestId,
-        kind: isAudit ? 'audit_trail' : 'signed_pdf',
-        data,
-        contentType,
-        docusealSubmitterId: submitterId ? String(submitterId) : null,
-        downloadedAt: true,
-      });
-      stored++;
-    } catch {
-      failed++;
-    }
-  }
-
-  // Audit trail is evidence; store it separately when DocuSeal exposes a URL.
-  if (submission.audit_log_url) {
-    try {
-      const response = await fetch(submission.audit_log_url, { method: 'GET' });
-      if (response.ok) {
-        const data = await response.arrayBuffer();
-        await storeSignedDocument(env, {
-          signingRequestId,
-          kind: 'audit_trail',
-          data,
-          contentType: response.headers.get('content-type') || 'application/pdf',
-          docusealSubmitterId: null,
-          downloadedAt: true,
-        });
-        stored++;
-      } else {
-        failed++;
-      }
-    } catch {
-      failed++;
-    }
-  }
-
-  return { stored, failed };
-}
-
 async function handleSubmissionCompleted(env: Bindings, ctx: WebhookEventContext): Promise<void> {
   const request = await findRequestBySubmission(env, ctx.submissionId);
   if (!request) return; // Unknown submission — recorded, nothing to do.
@@ -289,60 +211,9 @@ async function handleSubmissionCompleted(env: Bindings, ctx: WebhookEventContext
     throw err;
   }
 
-  const submitters = Array.isArray(submission?.submitters) ? submission.submitters : [];
-
-  for (const submitter of submitters) {
-    if (submitter?.id === undefined || submitter?.id === null) continue;
-    const status = normaliseStatus(submitter.status);
-    await env.DB.prepare(
-      `UPDATE signing_request_signers
-       SET status = ?,
-           completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
-           declined_at = CASE WHEN ? = 'declined' THEN CURRENT_TIMESTAMP ELSE declined_at END
-       WHERE signing_request_id = ? AND docuseal_submitter_id = ?`
-    )
-      .bind(status, status, status, request.id, String(submitter.id))
-      .run();
-  }
-
-  const { stored, failed } = await persistSubmissionDocuments(env, request.id, submission);
-
-  const allCompleted =
-    submitters.length > 0 && submitters.every((s) => normaliseStatus(s.status) === 'completed');
-  const anyDeclined = submitters.some((s) => normaliseStatus(s.status) === 'declined');
-
-  const nextStatus = anyDeclined ? 'declined' : allCompleted ? 'completed' : 'partially_signed';
-
-  await env.DB.prepare(
-    `UPDATE signing_requests SET
-       status = ?,
-       completed_at = CASE WHEN ? = 'completed' THEN CURRENT_TIMESTAMP ELSE completed_at END,
-       last_error = ?,
-       updated_at = CURRENT_TIMESTAMP
-     WHERE id = ?`
-  )
-    .bind(
-      nextStatus,
-      nextStatus,
-      failed > 0 ? `${failed} dokumen gagal diunduh pada ${new Date().toISOString()}` : null,
-      request.id
-    )
-    .run();
-
-  await env.DB.prepare(
-    `INSERT INTO audit_logs (id, tenant_id, user_id, action, entity_type, entity_id, new_values)
-     VALUES (?, 'default', NULL, 'SIGNING_COMPLETED', 'signing_requests', ?, ?)`
-  )
-    .bind(
-      `aud-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`,
-      request.id,
-      JSON.stringify({ stored_documents: stored, failed_documents: failed, status: nextStatus })
-    )
-    .run();
-
-  if (nextStatus === 'completed') {
-    await onSigningCompleted(env, request);
-  }
+  // Shared with the on-demand sync route so both paths agree on status,
+  // signer rows and stored documents.
+  await reconcileSubmission(env, request, submission);
 }
 
 async function handleSubmissionTerminal(env: Bindings, ctx: WebhookEventContext): Promise<void> {

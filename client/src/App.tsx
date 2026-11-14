@@ -22,6 +22,7 @@ import { HRShifts } from './pages/HRShifts';
 import { HRPayroll } from './pages/HRPayroll';
 import { HRKasbon } from './pages/HRKasbon';
 import { HRDocuments } from './pages/HRDocuments';
+import { SigningComplete } from './pages/SigningComplete';
 import { HRReports } from './pages/HRReports';
 import { HRSettings } from './pages/HRSettings';
 
@@ -72,6 +73,9 @@ export const App: React.FC = () => {
           <Route path="/login" element={<Login />} />
           <Route path="/reset-password" element={<ResetPassword />} />
           <Route path="/accept-invite" element={<ResetPassword />} />
+          {/* Public: DocuSeal redirects signers here, and they are usually
+              external parties with no openHR login. */}
+          <Route path="/signing/complete" element={<SigningComplete />} />
 
           {/* Root redirect */}
           <Route

@@ -31,6 +31,21 @@ function mockDocuSeal(options: {
       return new Response(JSON.stringify({ id: 4242 }), { status: 200 });
     }
 
+    if (url.includes('/api/submissions/')) {
+      return new Response(
+        JSON.stringify({
+          id: options.submissionId ?? 456,
+          status: 'completed',
+          submitters: [
+            { id: 900, role: 'Employee', status: 'completed' },
+            { id: 901, role: 'HR', status: 'completed' },
+          ],
+          documents: [],
+        }),
+        { status: 200 }
+      );
+    }
+
     if (url.includes('/api/submissions')) {
       if (options.failSubmission) {
         return new Response(JSON.stringify({ error: 'Submission rejected' }), { status: 422 });
@@ -48,21 +63,6 @@ function mockDocuSeal(options: {
             slug: `slug-${index}`,
             embed_src: `https://sign.example.com/s/${index}`,
           })),
-        }),
-        { status: 200 }
-      );
-    }
-
-    if (url.includes('/api/submissions/')) {
-      return new Response(
-        JSON.stringify({
-          id: options.submissionId ?? 456,
-          status: 'completed',
-          submitters: [
-            { id: 900, role: 'Employee', status: 'completed' },
-            { id: 901, role: 'HR', status: 'completed' },
-          ],
-          documents: [],
         }),
         { status: 200 }
       );
@@ -872,5 +872,196 @@ describe('One-off document signing', () => {
     const createdBody = (await created.json()) as any;
     assert.match(createdBody.error, /atasan langsung/);
     assert.equal(calls.length, 0, 'DocuSeal is never called for an unresolvable required signer');
+  });
+
+  it('redirects signers to a public completion page, not an auth-guarded route', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          templateVersion: 1,
+          sendEmail: false,
+          idempotencyKey: 'redirect-public-1',
+        }),
+      },
+      token
+    );
+    assert.equal(res.status, 201);
+
+    const submissionCall = calls.find((c) => c.url.includes('/api/submissions'));
+    const redirect = submissionCall?.body?.completed_redirect_url;
+    assert.ok(redirect, 'a completion redirect is sent to DocuSeal');
+    assert.match(redirect, /\/signing\/complete/, 'signers land on the public page');
+    assert.doesNotMatch(redirect, /\/documents/, 'never redirect to an auth-guarded route');
+  });
+
+  it('does not create a signer row for a role DocuSeal never created', async () => {
+    const { db, env } = createEnv();
+    const token = await adminToken();
+
+    // Uploaded PDF only has Employee and Manager fields; the offer_letter
+    // workflow also declares HR. DocuSeal therefore creates two submitters.
+    globalThis.fetch = (async (input: any, init: any = {}) => {
+      const url = String(input);
+      if (url.includes('/api/templates/')) {
+        return new Response(JSON.stringify({ id: 777 }), { status: 200 });
+      }
+      if (url.includes('/api/submissions')) {
+        return new Response(
+          JSON.stringify([
+            { id: 501, role: 'Employee', status: 'sent', submission_id: 88, embed_src: 'https://s/1' },
+            { id: 502, role: 'Manager', status: 'sent', submission_id: 88, embed_src: 'https://s/2' },
+          ]),
+          { status: 200 }
+        );
+      }
+      return new Response('{}', { status: 200 });
+    }) as any;
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          document: {
+            name: 'Kontrak - Agus',
+            code: 'offer_letter',
+            pdfBase64: Buffer.from('%PDF-1.4 x').toString('base64'),
+            fields: [
+              { name: 'Employee sig', type: 'signature', role: 'Employee', page: 1, x: 0.1, y: 0.8, w: 0.2, h: 0.06 },
+              { name: 'Manager sig', type: 'signature', role: 'Manager', page: 1, x: 0.4, y: 0.8, w: 0.2, h: 0.06 },
+              { name: 'HR sig', type: 'signature', role: 'HR', page: 1, x: 0.7, y: 0.8, w: 0.2, h: 0.06 },
+            ],
+          },
+          signers: [
+            { role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' },
+            { role: 'Manager', email: 'siti.rahma@nusantara.id', name: 'Siti Rahmawati' },
+            { role: 'HR', email: 'hr@nusantara.id', name: 'HR Nusantara' },
+          ],
+          sendEmail: false,
+          idempotencyKey: 'phantom-signer-1',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 201);
+
+    const signers = (
+      await db
+        .prepare(
+          `SELECT role, docuseal_submitter_id FROM signing_request_signers
+           WHERE signing_request_id = (SELECT id FROM signing_requests WHERE idempotency_key = 'phantom-signer-1')
+           ORDER BY role`
+        )
+        .all()
+    ).results as any[];
+    assert.equal(signers.length, 2, 'only submitters DocuSeal actually created are recorded');
+    assert.ok(
+      signers.every((r: any) => r.docuseal_submitter_id !== null),
+      'every recorded signer has a real DocuSeal submitter id'
+    );
+    assert.ok(
+      !signers.some((r: any) => r.role === 'HR'),
+      'no phantom HR signer that can never be signed'
+    );
+  });
+
+  it('rejects an upload when a signer has no field placed on the document', async () => {
+    const { env } = createEnv();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          document: {
+            name: 'Kontrak - Agus',
+            code: 'offer_letter',
+            pdfBase64: Buffer.from('%PDF-1.4 x').toString('base64'),
+            fields: [
+              { name: 'Employee sig', type: 'signature', role: 'Employee', page: 1, x: 0.1, y: 0.8, w: 0.2, h: 0.06 },
+            ],
+          },
+          signers: [
+            { role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' },
+            { role: 'Manager', email: 'siti.rahma@nusantara.id', name: 'Siti Rahmawati' },
+          ],
+          sendEmail: false,
+          idempotencyKey: 'missing-field-1',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as any;
+    assert.match(body.error, /Manager/, 'the error names the role without a field');
+  });
+
+  it('syncs signer status from DocuSeal without a webhook', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal({ submissionId: 456 });
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          templateVersion: 1,
+          sendEmail: false,
+          idempotencyKey: 'sync-1',
+        }),
+      },
+      token
+    );
+    assert.equal(created.status, 201);
+    const createdBody = (await created.json()) as any;
+
+    // Before sync: nobody has signed.
+    const before = (
+      await db
+        .prepare(`SELECT status FROM signing_request_signers WHERE signing_request_id = ?`)
+        .bind(createdBody.signingRequestId)
+        .all()
+    ).results as any[];
+    assert.ok(
+      before.length > 0 && before.every((r: any) => r.status !== 'completed'),
+      'no signer is completed before the sync'
+    );
+
+    const synced = await request(
+      env,
+      `/api/hr/signing-requests/${createdBody.signingRequestId}/sync`,
+      { method: 'POST' },
+      token
+    );
+    assert.equal(synced.status, 200);
+    const syncedBody = (await synced.json()) as any;
+
+    assert.ok(syncedBody.signersUpdated > 0, 'signer rows are updated from the live submission');
+    assert.ok(
+      syncedBody.signers.some((s: any) => s.status === 'completed'),
+      'a completed submitter is reflected on the signer row'
+    );
   });
 });

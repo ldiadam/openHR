@@ -108,6 +108,7 @@ export const HRDocuments: React.FC = () => {
   const [submitting, setSubmitting] = useState(false);
   const [signerPreview, setSignerPreview] = useState<any>(null);
   const [formError, setFormError] = useState<string | null>(null);
+  const [syncing, setSyncing] = useState(false);
 
   // Create-request form
   const [employeeId, setEmployeeId] = useState('');
@@ -176,6 +177,48 @@ export const HRDocuments: React.FC = () => {
       setMsg({ type: 'error', text: err.message });
     }
   }, []);
+
+  // DocuSeal's webhook is optional here, so pull the live status whenever a
+  // request is still open. Without this, signers show 0/3 forever.
+  const syncRequest = useCallback(
+    async (id: string, silent = true) => {
+      if (!silent) setSyncing(true);
+      try {
+        const res = await apiFetch(`/hr/signing-requests/${id}/sync`, { method: 'POST' });
+        if (!silent) {
+          setMsg({
+            type: 'success',
+            text: tr(
+              `Status diperbarui: ${res.status} · ${res.signersUpdated} penandatangan · ${res.documentsStored} dokumen tersimpan.`,
+              `Status refreshed: ${res.status} · ${res.signersUpdated} signers · ${res.documentsStored} documents stored.`
+            ),
+          });
+        }
+        await load(true);
+        await openDetail(id);
+        return res;
+      } catch (err: any) {
+        if (!silent) setMsg({ type: 'error', text: err.message });
+        return null;
+      } finally {
+        if (!silent) setSyncing(false);
+      }
+    },
+    [tr]
+  );
+
+  // Opening a request refreshes it from DocuSeal first, so the signer list is
+  // never stale just because no webhook is configured.
+  const openDetailSynced = useCallback(
+    async (id: string) => {
+      const res = await apiFetch(`/hr/signing-requests/${id}`);
+      setDetail(res);
+      if (['draft', 'sent', 'partially_signed', 'failed'].includes(res?.signingRequest?.status)) {
+        await syncRequest(id, true);
+      }
+    },
+    [syncRequest]
+  );
 
   const closeCreate = useCallback(() => {
     setShowCreate(false);
@@ -260,10 +303,21 @@ export const HRDocuments: React.FC = () => {
     }
   };
 
+  // A role with no field never becomes a DocuSeal submitter, so the request can
+  // never complete. Catch it before sending rather than after.
+  const rolesMissingFields = useMemo(() => {
+    const placed = new Set(oneOff.fields.map((f) => f.role.toLowerCase()));
+    return (signerPreview?.signers || [])
+      .filter((s: any) => s.resolved)
+      .map((s: any) => String(s.role))
+      .filter((role: string) => !placed.has(role.toLowerCase()));
+  }, [oneOff.fields, signerPreview]);
+
   const canSubmit =
     Boolean(employeeId) &&
     Boolean(oneOff.base64) &&
     oneOff.fields.length > 0 &&
+    rolesMissingFields.length === 0 &&
     Boolean(signerPreview) &&
     !signerPreview?.problem &&
     !submitting;
@@ -281,6 +335,17 @@ export const HRDocuments: React.FC = () => {
         tr(
           'Tempatkan minimal satu field tanda tangan pada dokumen.',
           'Place at least one signing field on the document.'
+        )
+      );
+      return;
+    }
+    if (rolesMissingFields.length > 0) {
+      setFormError(
+        tr(
+          `Tempatkan minimal satu field untuk setiap penandatangan. Belum ada field untuk: ${rolesMissingFields.join(
+            ', '
+          )}.`,
+          `Place at least one field for every signer. Missing a field for: ${rolesMissingFields.join(', ')}.`
         )
       );
       return;
@@ -331,7 +396,7 @@ export const HRDocuments: React.FC = () => {
       });
       closeCreate();
       await load(true);
-      if (res.signingRequestId) openDetail(res.signingRequestId);
+      if (res.signingRequestId) openDetailSynced(res.signingRequestId);
     } catch (err: any) {
       setFormError(err.message);
     } finally {
@@ -544,7 +609,7 @@ export const HRDocuments: React.FC = () => {
                       <tr
                         key={row.id}
                         className="cursor-pointer transition hover:bg-slate-50/80"
-                        onClick={() => openDetail(row.id)}
+                        onClick={() => openDetailSynced(row.id)}
                       >
                         <td className="px-5 py-3">
                           <div className="font-bold text-slate-900">{row.employee_name || row.employee_id}</div>
@@ -598,7 +663,7 @@ export const HRDocuments: React.FC = () => {
                             className="rounded-lg px-2.5 py-1 text-[10px] font-bold text-blue-600 hover:bg-blue-50"
                             onClick={(e) => {
                               e.stopPropagation();
-                              openDetail(row.id);
+                              openDetailSynced(row.id);
                             }}
                           >
                             {tr('Detail', 'Detail')}
@@ -615,7 +680,7 @@ export const HRDocuments: React.FC = () => {
               {filtered.map((row) => {
                 const progress = progressOf(row);
                 return (
-                  <div key={row.id} className="space-y-2 p-4 active:bg-slate-50" onClick={() => openDetail(row.id)}>
+                  <div key={row.id} className="space-y-2 p-4 active:bg-slate-50" onClick={() => openDetailSynced(row.id)}>
                     <div className="flex items-start justify-between gap-2">
                       <div className="min-w-0">
                         <div className="truncate text-sm font-bold text-slate-900">
@@ -939,6 +1004,10 @@ export const HRDocuments: React.FC = () => {
                       { done: Boolean(oneOff.base64), label: tr('Dokumen PDF', 'PDF document') },
                       { done: oneOff.fields.length > 0, label: tr('Field tanda tangan', 'Signing fields') },
                       {
+                        done: oneOff.fields.length > 0 && rolesMissingFields.length === 0,
+                        label: tr('Field tiap penandatangan', 'Field per signer'),
+                      },
+                      {
                         done: Boolean(signerPreview) && !signerPreview?.problem,
                         label: tr('Penandatangan lengkap', 'Signers resolved'),
                       },
@@ -1124,6 +1193,17 @@ export const HRDocuments: React.FC = () => {
 
             <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:pb-3">
               <div className="flex flex-wrap items-center gap-1.5">
+                {detail.signingRequest.docuseal_submission_id && (
+                  <button
+                    onClick={() => syncRequest(detail.signingRequest.id, false)}
+                    disabled={syncing}
+                    className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2.5 py-1.5 text-[11px] font-bold text-blue-700 transition hover:bg-blue-100 disabled:opacity-60"
+                    title={tr('Ambil status terbaru dari DocuSeal', 'Pull the latest status from DocuSeal')}
+                  >
+                    <RefreshCw size={11} className={syncing ? 'animate-spin' : ''} />
+                    {syncing ? tr('Menyinkron...', 'Syncing...') : tr('Sinkronkan', 'Sync')}
+                  </button>
+                )}
                 {OPEN_STATUSES.includes(detail.signingRequest.status) && (
                   <button
                     onClick={() => handleResend(detail.signingRequest)}
