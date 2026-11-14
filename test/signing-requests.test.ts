@@ -429,3 +429,448 @@ describe('Signing request RBAC', () => {
     assert.equal(denied.status, 403);
   });
 });
+
+describe('Signing CRUD', () => {
+  after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('updates template metadata but never its version', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/document-templates/doc-tpl-1',
+      {
+        method: 'PUT',
+        body: JSON.stringify({ name: 'Offer Letter 2027', retentionMonths: 84, active: 0 }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+    assert.equal(body.template.name, 'Offer Letter 2027');
+    assert.equal(body.template.retention_months, 84);
+    assert.equal(body.template.active, 0);
+    assert.equal(body.template.version, 1, 'version is immutable');
+  });
+
+  it('deletes an unused template', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(env, '/api/hr/document-templates/doc-tpl-1', { method: 'DELETE' }, token);
+    assert.equal(res.status, 200);
+
+    const row = await db
+      .prepare(`SELECT id FROM hr_document_templates WHERE id = 'doc-tpl-1'`)
+      .first();
+    assert.equal(row, null);
+  });
+
+  it('deletes a template whose requests were never signed, removing them too', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+          idempotencyKey: 'crud-del-1',
+        }),
+      },
+      token
+    );
+    const { signingRequestId } = (await created.json()) as any;
+
+    // The request is 'sent' but nobody signed it: not evidence, so both go.
+    const res = await request(env, '/api/hr/document-templates/doc-tpl-1', { method: 'DELETE' }, token);
+    assert.equal(res.status, 200);
+
+    assert.equal(
+      await db.prepare(`SELECT id FROM hr_document_templates WHERE id = 'doc-tpl-1'`).first(),
+      null
+    );
+    assert.equal(
+      await db.prepare(`SELECT id FROM signing_requests WHERE id = ?`).bind(signingRequestId).first(),
+      null,
+      'unsigned requests are removed with the template'
+    );
+  });
+
+  it('refuses to delete a template once a document was signed', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+          idempotencyKey: 'crud-signed-1',
+        }),
+      },
+      token
+    );
+    const { signingRequestId } = (await created.json()) as any;
+
+    db.exec(`
+      INSERT INTO signed_documents (id, tenant_id, signing_request_id, kind, storage_key, content_type, sha256)
+      VALUES ('sd-1', 'default', '${signingRequestId}', 'signed_pdf', 'k/sd-1.pdf', 'application/pdf', 'abc');
+    `);
+
+    const res = await request(env, '/api/hr/document-templates/doc-tpl-1', { method: 'DELETE' }, token);
+    assert.equal(res.status, 409, 'signed evidence blocks template deletion');
+    const body = (await res.json()) as any;
+    assert.match(body.error, /Nonaktifkan/);
+  });
+
+  it('deletes a draft signing request and its signers', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    db.exec(`
+      INSERT INTO signing_requests (
+        id, tenant_id, employee_id, template_id, template_code, template_version,
+        workflow, docuseal_template_id, status, idempotency_key
+      ) VALUES ('sr-draft-1', 'default', 'emp-004', 'doc-tpl-1', 'offer_letter', 1,
+        'offer_letter', '4242', 'draft', 'crud-draft-1');
+      INSERT INTO signing_request_signers (
+        id, tenant_id, signing_request_id, employee_id, role, email, name, status
+      ) VALUES ('srs-draft-1', 'default', 'sr-draft-1', 'emp-004', 'Employee', 'a@b.co', 'A', 'awaiting');
+    `);
+
+    const res = await request(env, '/api/hr/signing-requests/sr-draft-1', { method: 'DELETE' }, token);
+    assert.equal(res.status, 200);
+
+    const reqRow = await db.prepare(`SELECT id FROM signing_requests WHERE id = 'sr-draft-1'`).first();
+    assert.equal(reqRow, null);
+    const signerRow = await db
+      .prepare(`SELECT id FROM signing_request_signers WHERE signing_request_id = 'sr-draft-1'`)
+      .first();
+    assert.equal(signerRow, null, 'signers are removed with the request');
+  });
+
+  it('deletes a sent request that was never signed', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+          idempotencyKey: 'crud-sent-1',
+        }),
+      },
+      token
+    );
+    const { signingRequestId } = (await created.json()) as any;
+
+    const res = await request(env, `/api/hr/signing-requests/${signingRequestId}`, { method: 'DELETE' }, token);
+    assert.equal(res.status, 200, 'an unsigned sent request is removable');
+
+    assert.equal(
+      await db.prepare(`SELECT id FROM signing_requests WHERE id = ?`).bind(signingRequestId).first(),
+      null
+    );
+  });
+
+  it('refuses to delete a request that already has a signed document', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+          idempotencyKey: 'crud-sent-2',
+        }),
+      },
+      token
+    );
+    const { signingRequestId } = (await created.json()) as any;
+
+    db.exec(`
+      INSERT INTO signed_documents (id, tenant_id, signing_request_id, kind, storage_key, content_type, sha256)
+      VALUES ('sd-2', 'default', '${signingRequestId}', 'signed_pdf', 'k/sd-2.pdf', 'application/pdf', 'def');
+    `);
+
+    const res = await request(env, `/api/hr/signing-requests/${signingRequestId}`, { method: 'DELETE' }, token);
+    assert.equal(res.status, 409, 'signed requests are evidence and cannot be deleted');
+    const body = (await res.json()) as any;
+    assert.match(body.error, /Gantikan/);
+  });
+
+});
+
+describe('One-off document signing', () => {
+  after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('signs an uploaded document without registering a template', async () => {
+    const { db, env } = createEnv();
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          document: {
+            name: 'Employment Contract - Agus',
+            code: 'offer_letter',
+            pdfBase64: Buffer.from('%PDF-1.4 contract').toString('base64'),
+            fields: [
+              {
+                name: 'Employee signature',
+                type: 'signature',
+                role: 'Employee',
+                page: 1,
+                x: 0.1,
+                y: 0.8,
+                w: 0.25,
+                h: 0.06,
+              },
+            ],
+          },
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' }],
+          idempotencyKey: 'oneoff-1',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as any;
+    assert.equal(body.status, 'sent');
+    assert.equal(body.documentName, 'Employment Contract - Agus', 'document name is echoed back');
+    assert.ok(body.docusealSubmissionId, 'submission id is captured');
+
+    // DocuSeal document was created from the uploaded PDF, not resolved from the registry.
+    assert.ok(
+      calls.some((call) => call.url.includes('/api/templates/pdf')),
+      'uploaded PDF created a DocuSeal document'
+    );
+
+    const row = await db
+      .prepare(
+        `SELECT template_id, template_code, template_version, docuseal_template_id, document_name
+         FROM signing_requests WHERE id = ?`
+      )
+      .bind(body.signingRequestId)
+      .first();
+
+    assert.equal(row.template_id, null, 'no registry template is linked');
+    assert.equal(row.template_version, null);
+    assert.equal(row.template_code, 'offer_letter', 'workflow code is still recorded');
+    assert.equal(row.document_name, 'Employment Contract - Agus', 'document name is persisted for the list');
+    assert.ok(row.docuseal_template_id, 'the one-off DocuSeal document id is stored');
+  });
+
+  it('lists requests with signer progress for the documents table', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          templateVersion: 1,
+          sendEmail: false,
+          idempotencyKey: 'list-progress-1',
+        }),
+      },
+      token
+    );
+    assert.equal(created.status, 201);
+
+    const listed = await request(env, '/api/hr/signing-requests', {}, token);
+    assert.equal(listed.status, 200);
+    const body = (await listed.json()) as any;
+
+    assert.equal(body.signingRequests.length, 1);
+    const row = body.signingRequests[0];
+    assert.equal(row.signer_total, 3, 'all three workflow signers are counted');
+    assert.equal(row.signer_signed, 0, 'none have signed yet');
+    assert.equal(row.document_count, 0, 'no stored document until everyone signs');
+  });
+
+  it('rejects a one-off document without placed fields', async () => {
+    const { env } = createEnv();
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          document: { name: 'No fields', pdfBase64: Buffer.from('%PDF').toString('base64'), fields: [] },
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus' }],
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 400);
+    const body = (await res.json()) as any;
+    assert.match(body.error, /field tanda tangan/);
+  });
+
+  it('derives every workflow signer: employee, manager and company HR', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          templateVersion: 1,
+          sendEmail: false,
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 201);
+    const body = (await res.json()) as any;
+
+    const submissionCall = calls.find((call) => call.url.endsWith('/api/submissions'));
+    assert.ok(submissionCall, 'submission was created');
+
+    const byRole = Object.fromEntries(submissionCall!.body.submitters.map((s: any) => [s.role, s]));
+    assert.deepEqual(
+      submissionCall!.body.submitters.map((s: any) => s.role),
+      ['Employee', 'Manager', 'HR'],
+      'no workflow role is dropped'
+    );
+    assert.equal(byRole.Employee.email, 'agus.setiawan@nusantara.id');
+    assert.equal(byRole.Manager.email, 'siti.rahma@nusantara.id', 'manager comes from manager_id');
+    assert.equal(byRole.Manager.name, 'Siti Rahmawati');
+    assert.equal(byRole.HR.email, 'hr@nusantara.id', 'HR comes from the company record');
+    assert.equal(body.signers.length, 3);
+  });
+
+  it('previews the resolved signers without creating a request', async () => {
+    const { db, env } = createEnv();
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests/preview-signers',
+      { method: 'POST', body: JSON.stringify({ employeeId: 'emp-004', templateCode: 'offer_letter' }) },
+      token
+    );
+
+    assert.equal(res.status, 200);
+    const body = (await res.json()) as any;
+
+    assert.deepEqual(
+      body.signers.map((s: any) => [s.role, s.resolved]),
+      [
+        ['Employee', true],
+        ['Manager', true],
+        ['HR', true],
+      ]
+    );
+    assert.equal(body.problem, null);
+    assert.equal(calls.length, 0, 'preview never calls DocuSeal');
+
+    const rows: any = await db.prepare(`SELECT COUNT(*) AS n FROM signing_requests`).first();
+    assert.equal(rows.n, 0, 'preview does not persist a request');
+  });
+
+  it('flags a required manager signer that cannot be resolved', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    db.exec(`UPDATE employees SET manager_id = NULL WHERE id = 'emp-004';`);
+
+    const preview = await request(
+      env,
+      '/api/hr/signing-requests/preview-signers',
+      { method: 'POST', body: JSON.stringify({ employeeId: 'emp-004', templateCode: 'offboarding_clearance' }) },
+      token
+    );
+    assert.equal(preview.status, 200);
+    const previewBody = (await preview.json()) as any;
+    const manager = previewBody.signers.find((s: any) => s.role === 'Manager');
+    assert.equal(manager.resolved, false);
+    assert.match(previewBody.problem, /Manager/);
+
+    const created = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offboarding_clearance',
+          templateVersion: 1,
+          sendEmail: false,
+        }),
+      },
+      token
+    );
+    assert.equal(created.status, 400);
+    const createdBody = (await created.json()) as any;
+    assert.match(createdBody.error, /atasan langsung/);
+    assert.equal(calls.length, 0, 'DocuSeal is never called for an unresolvable required signer');
+  });
+});

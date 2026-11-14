@@ -142,3 +142,98 @@ describe('DocuSeal client', () => {
     );
   });
 });
+
+describe('DocuSeal field placement contract', () => {
+  after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('sends fields as areas with a 0-based page', async () => {
+    const calls = installFetch(() => new Response(JSON.stringify({ id: 5 }), { status: 200 }));
+
+    const client = createDocuSealClient(env());
+    await client.createTemplateFromPdf({
+      name: 'Offer Letter',
+      pdfBase64: Buffer.from('%PDF-1.4 x').toString('base64'),
+      fields: [
+        {
+          name: 'Employee Signature',
+          type: 'signature',
+          role: 'Employee',
+          required: true,
+          areas: [{ x: 0.1, y: 0.8, w: 0.25, h: 0.06, page: 0 }],
+        },
+      ],
+    });
+
+    const field = calls[0].body.documents[0].fields[0];
+    assert.ok(Array.isArray(field.areas), 'placement is sent as areas, not flat x/y/w/h');
+    assert.equal(field.areas[0].page, 0, 'page is 0-based for DocuSeal');
+    assert.equal(field.role, 'Employee', 'role drives the submitter name');
+    assert.equal(field.x, undefined, 'no flat coordinates are sent');
+  });
+});
+
+describe('DocuSeal submission response shapes', () => {
+  after(() => {
+    globalThis.fetch = originalFetch;
+  });
+
+  it('normalises the fork\u2019s bare-array response into { id, submitters }', async () => {
+    // This fork returns an ARRAY of submitters, not { id, submitters }.
+    installFetch(() =>
+      new Response(
+        JSON.stringify([
+          { id: 6, role: 'Employee', status: 'awaiting', submission_id: 5, embed_src: 'https://sign.example.com/s/a' },
+          { id: 7, role: 'HR', status: 'awaiting', submission_id: 5, embed_src: 'https://sign.example.com/s/b' },
+        ]),
+        { status: 200 }
+      )
+    );
+
+    const client = createDocuSealClient(env());
+    const submission = await client.createSubmission({
+      templateId: '9',
+      submitters: [
+        { role: 'Employee', email: 'e@example.com', name: 'E' },
+        { role: 'HR', email: 'hr@example.com', name: 'HR' },
+      ],
+    });
+
+    assert.equal(submission.id, 5, 'submission id is taken from submission_id, not array index');
+    assert.equal(submission.submitters?.length, 2);
+    assert.equal(submission.submitters?.[0].embed_src, 'https://sign.example.com/s/a');
+  });
+
+  it('still accepts an object-shaped response', async () => {
+    installFetch(() =>
+      new Response(JSON.stringify({ id: 42, submitters: [{ id: 1, role: 'Employee' }] }), { status: 200 })
+    );
+
+    const client = createDocuSealClient(env());
+    const submission = await client.createSubmission({
+      templateId: '9',
+      submitters: [{ role: 'Employee', email: 'e@example.com', name: 'E' }],
+    });
+
+    assert.equal(submission.id, 42);
+  });
+
+  it('fails loudly when the response carries no submission id', async () => {
+    installFetch(() => new Response(JSON.stringify([{ id: 1, role: 'Employee' }]), { status: 200 }));
+
+    const client = createDocuSealClient(env());
+    await assert.rejects(
+      () =>
+        client.createSubmission({
+          templateId: '9',
+          submitters: [{ role: 'Employee', email: 'e@example.com', name: 'E' }],
+        }),
+      (err: any) => {
+        assert.ok(err instanceof DocuSealError);
+        assert.equal(err.status, 502);
+        return true;
+      }
+    );
+  });
+});

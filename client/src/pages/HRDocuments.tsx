@@ -1,4 +1,4 @@
-import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   PenLine,
   Plus,
@@ -10,24 +10,34 @@ import {
   CheckCircle2,
   AlertTriangle,
   Clock,
-  Upload,
   Users,
   Send,
+  Trash2,
+  Upload,
+  Check,
+  Copy,
+  Link2,
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { TableSkeleton } from '../components/Skeleton';
+import { SigningFieldPlacer, PlacedField } from '../components/SigningFieldPlacer';
 
 const WORKFLOW_OPTIONS = [
-  { code: 'offer_letter', label: 'Offer Letter' },
-  { code: 'nda', label: 'NDA / IP' },
-  { code: 'handbook_ack', label: 'Buku Panduan' },
-  { code: 'policy_ack', label: 'Kebijakan' },
-  { code: 'offboarding_clearance', label: 'Exit Clearance' },
-  { code: 'pip_warning', label: 'PIP / Surat Peringatan' },
-  { code: 'salary_change', label: 'Perubahan Gaji / Promosi' },
+  { code: 'offer_letter', id: 'Surat Penawaran Kerja', en: 'Offer Letter' },
+  { code: 'nda', id: 'NDA / Hak Kekayaan Intelektual', en: 'NDA / IP' },
+  { code: 'handbook_ack', id: 'Peraturan Perusahaan', en: 'Company Handbook' },
+  { code: 'policy_ack', id: 'Persetujuan Kebijakan', en: 'Policy Acknowledgement' },
+  { code: 'offboarding_clearance', id: 'Exit Clearance & Serah Terima', en: 'Exit Clearance' },
+  { code: 'pip_warning', id: 'PIP / Surat Peringatan', en: 'PIP / Warning Letter' },
+  { code: 'salary_change', id: 'Perubahan Gaji / Promosi', en: 'Salary Change / Promotion' },
 ];
+
+const WORKFLOW_LABELS: Record<string, { id: string; en: string }> = Object.fromEntries(
+  WORKFLOW_OPTIONS.map((option) => [option.code, { id: option.id, en: option.en }])
+);
 
 const STATUS_STYLES: Record<string, string> = {
   draft: 'bg-slate-100 text-slate-700',
@@ -53,12 +63,39 @@ const STATUS_LABELS: Record<string, { id: string; en: string }> = {
   superseded: { id: 'Digantikan', en: 'Superseded' },
 };
 
+const SIGNER_STATUS_LABELS: Record<string, { id: string; en: string }> = {
+  awaiting: { id: 'Menunggu', en: 'Awaiting' },
+  sent: { id: 'Terkirim', en: 'Sent' },
+  opened: { id: 'Dibuka', en: 'Opened' },
+  completed: { id: 'Ditandatangani', en: 'Signed' },
+  declined: { id: 'Ditolak', en: 'Declined' },
+};
+
+const OPEN_STATUSES = ['draft', 'sent', 'partially_signed', 'failed'];
+const CLOSED_STATUSES = ['completed', 'declined', 'expired', 'archived', 'superseded'];
+
+/** Read a File into base64. Chunked so large PDFs cannot blow the call stack. */
+async function fileToBase64(file: File): Promise<string> {
+  const bytes = new Uint8Array(await file.arrayBuffer());
+  let binary = '';
+  const chunk = 0x8000;
+  for (let i = 0; i < bytes.length; i += chunk) {
+    binary += String.fromCharCode(...bytes.subarray(i, i + chunk));
+  }
+  return btoa(binary);
+}
+
+const formatBytes = (bytes: number) => {
+  if (bytes < 1024) return `${bytes} B`;
+  if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
 export const HRDocuments: React.FC = () => {
   const { isOwnerAdmin, isFinance } = useAuth();
   const { tr, formatDate } = useLanguage();
 
   const [requests, setRequests] = useState<any[]>([]);
-  const [templates, setTemplates] = useState<any[]>([]);
   const [employees, setEmployees] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [refreshing, setRefreshing] = useState(false);
@@ -66,24 +103,30 @@ export const HRDocuments: React.FC = () => {
   const [statusFilter, setStatusFilter] = useState('all');
 
   const [showCreate, setShowCreate] = useState(false);
-  const [showTemplateModal, setShowTemplateModal] = useState(false);
   const [detail, setDetail] = useState<any>(null);
   const [signingFrame, setSigningFrame] = useState<{ url: string; title: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
+  const [signerPreview, setSignerPreview] = useState<any>(null);
+  const [formError, setFormError] = useState<string | null>(null);
 
   // Create-request form
   const [employeeId, setEmployeeId] = useState('');
   const [templateCode, setTemplateCode] = useState('offer_letter');
   const [dueAt, setDueAt] = useState('');
-  const [sendEmail, setSendEmail] = useState(false);
+  const [sendEmail, setSendEmail] = useState(true);
   const [prefill, setPrefill] = useState('');
 
-  // Template upload form
-  const [templateForm, setTemplateForm] = useState({ code: 'offer_letter', name: '', version: '' });
-  const [templateFile, setTemplateFile] = useState<File | null>(null);
-  const fileInputRef = useRef<HTMLInputElement>(null);
+  // Every request carries its own document: upload the PDF for this employee,
+  // place the fields, send. There is no reusable template registry.
+  const [oneOff, setOneOff] = useState<{ file: File | null; base64: string; name: string; fields: PlacedField[] }>({
+    file: null,
+    base64: '',
+    name: '',
+    fields: [],
+  });
 
-  const canManageTemplates = isOwnerAdmin;
+  useLockBodyScroll(showCreate || Boolean(detail) || Boolean(signingFrame));
+
   const canCreate = isOwnerAdmin || isFinance;
 
   const load = async (silent = false) => {
@@ -91,13 +134,11 @@ export const HRDocuments: React.FC = () => {
     else setLoading(true);
 
     try {
-      const [requestRes, templateRes, employeeRes] = await Promise.all([
+      const [requestRes, employeeRes] = await Promise.all([
         apiFetch('/hr/signing-requests'),
-        apiFetch('/hr/document-templates'),
         apiFetch('/employees'),
       ]);
       setRequests(requestRes.signingRequests || []);
-      setTemplates(templateRes.templates || []);
       setEmployees(employeeRes.employees || []);
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
@@ -111,22 +152,21 @@ export const HRDocuments: React.FC = () => {
     load();
   }, []);
 
-  const templateOptions = useMemo(
-    () => templates.filter((tpl) => tpl.active === 1),
-    [templates]
-  );
-
-  const filtered = requests.filter((row) => statusFilter === 'all' || row.status === statusFilter);
-
   const counts = useMemo(
     () => ({
       all: requests.length,
-      sent: requests.filter((r) => r.status === 'sent').length,
+      open: requests.filter((r) => OPEN_STATUSES.includes(r.status)).length,
       completed: requests.filter((r) => r.status === 'completed').length,
       declined: requests.filter((r) => r.status === 'declined').length,
     }),
     [requests]
   );
+
+  const filtered = useMemo(() => {
+    if (statusFilter === 'open') return requests.filter((r) => OPEN_STATUSES.includes(r.status));
+    if (statusFilter === 'all') return requests;
+    return requests.filter((r) => r.status === statusFilter);
+  }, [requests, statusFilter]);
 
   const openDetail = useCallback(async (id: string) => {
     try {
@@ -137,10 +177,120 @@ export const HRDocuments: React.FC = () => {
     }
   }, []);
 
+  const closeCreate = useCallback(() => {
+    setShowCreate(false);
+    setFormError(null);
+    setPrefill('');
+    setOneOff({ file: null, base64: '', name: '', fields: [] });
+  }, []);
+
+  const openCreate = () => {
+    setEmployeeId(employees[0]?.id || '');
+    setTemplateCode('offer_letter');
+    setDueAt(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
+    setSendEmail(true);
+    setFormError(null);
+    setShowCreate(true);
+  };
+
+  // Escape closes whichever layer is on top.
+  useEffect(() => {
+    if (!showCreate && !detail && !signingFrame) return;
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key !== 'Escape') return;
+      if (signingFrame) setSigningFrame(null);
+      else if (detail) setDetail(null);
+      else closeCreate();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [showCreate, detail, signingFrame, closeCreate]);
+
+  // Who will actually sign, resolved from the employee's manager and the
+  // company record. Re-fetched whenever the employee or document type changes.
+  useEffect(() => {
+    if (!showCreate || !employeeId) {
+      setSignerPreview(null);
+      return;
+    }
+    let cancelled = false;
+    const timer = setTimeout(async () => {
+      try {
+        const res = await apiFetch('/hr/signing-requests/preview-signers', {
+          method: 'POST',
+          body: JSON.stringify({ employeeId, templateCode }),
+        });
+        if (!cancelled) setSignerPreview(res);
+      } catch {
+        if (!cancelled) setSignerPreview(null);
+      }
+    }, 250);
+
+    return () => {
+      cancelled = true;
+      clearTimeout(timer);
+    };
+  }, [showCreate, employeeId, templateCode]);
+
+  const documentLabel = (row: any) => {
+    if (row.document_name) return row.document_name;
+    const fallback = WORKFLOW_LABELS[row.template_code];
+    return fallback ? tr(fallback.id, fallback.en) : row.template_code || '-';
+  };
+
+  const handleFile = async (file: File | null) => {
+    setFormError(null);
+    if (!file) {
+      setOneOff({ file: null, base64: '', name: '', fields: [] });
+      return;
+    }
+    if (!/\.pdf$/i.test(file.name)) {
+      setFormError(tr('Dokumen harus berformat PDF.', 'The document must be a PDF.'));
+      return;
+    }
+    if (file.size > 15 * 1024 * 1024) {
+      setFormError(tr('Ukuran file maksimal 15 MB.', 'Maximum file size is 15 MB.'));
+      return;
+    }
+    try {
+      const base64 = await fileToBase64(file);
+      setOneOff({ file, base64, name: file.name.replace(/\.pdf$/i, ''), fields: [] });
+    } catch {
+      setFormError(tr('Gagal membaca file.', 'Failed to read the file.'));
+    }
+  };
+
+  const canSubmit =
+    Boolean(employeeId) &&
+    Boolean(oneOff.base64) &&
+    oneOff.fields.length > 0 &&
+    Boolean(signerPreview) &&
+    !signerPreview?.problem &&
+    !submitting;
+
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
+    setFormError(null);
+
+    if (!oneOff.base64) {
+      setFormError(tr('Pilih file PDF dokumen.', 'Choose the document PDF file.'));
+      return;
+    }
+    if (oneOff.fields.length === 0) {
+      setFormError(
+        tr(
+          'Tempatkan minimal satu field tanda tangan pada dokumen.',
+          'Place at least one signing field on the document.'
+        )
+      );
+      return;
+    }
+    if (signerPreview?.problem) {
+      setFormError(signerPreview.problem);
+      return;
+    }
+
     setSubmitting(true);
-    setMsg(null);
 
     try {
       let parsedPrefill: Record<string, unknown> | undefined;
@@ -152,11 +302,17 @@ export const HRDocuments: React.FC = () => {
         }
       }
 
+      const employeeName = employees.find((e) => e.id === employeeId)?.full_name || employeeId;
       const res = await apiFetch('/hr/signing-requests', {
         method: 'POST',
         body: JSON.stringify({
           employeeId,
-          templateCode,
+          document: {
+            name: oneOff.name || `${documentLabel({ template_code: templateCode })} - ${employeeName}`,
+            code: templateCode,
+            pdfBase64: oneOff.base64,
+            fields: oneOff.fields,
+          },
           dueAt: dueAt ? new Date(dueAt).toISOString() : undefined,
           sendEmail,
           prefill: parsedPrefill,
@@ -164,41 +320,20 @@ export const HRDocuments: React.FC = () => {
         }),
       });
 
-      setMsg({ type: 'success', text: tr('Pengajuan tanda tangan berhasil dibuat.', 'Signing request created.') });
-      setShowCreate(false);
-      setPrefill('');
+      setMsg({
+        type: 'success',
+        text: sendEmail
+          ? tr('Dokumen terkirim dan email tanda tangan dikirim.', 'Document sent and signing emails delivered.')
+          : tr(
+              'Dokumen terkirim. Bagikan tautan tanda tangan secara manual.',
+              'Document sent. Share the signing links manually.'
+            ),
+      });
+      closeCreate();
       await load(true);
       if (res.signingRequestId) openDetail(res.signingRequestId);
     } catch (err: any) {
-      setMsg({ type: 'error', text: err.message });
-    } finally {
-      setSubmitting(false);
-    }
-  };
-
-  const handleTemplateUpload = async (event: React.FormEvent) => {
-    event.preventDefault();
-    if (!templateFile) {
-      setMsg({ type: 'error', text: tr('Pilih file PDF atau DOCX.', 'Choose a PDF or DOCX file.') });
-      return;
-    }
-
-    setSubmitting(true);
-    try {
-      const form = new FormData();
-      form.append('file', templateFile);
-      form.append('code', templateForm.code);
-      form.append('name', templateForm.name || templateForm.code);
-      if (templateForm.version) form.append('version', templateForm.version);
-
-      await apiFetch('/hr/document-templates', { method: 'POST', body: form });
-      setMsg({ type: 'success', text: tr('Template berhasil didaftarkan.', 'Template registered.') });
-      setShowTemplateModal(false);
-      setTemplateFile(null);
-      setTemplateForm({ code: 'offer_letter', name: '', version: '' });
-      await load(true);
-    } catch (err: any) {
-      setMsg({ type: 'error', text: err.message });
+      setFormError(err.message);
     } finally {
       setSubmitting(false);
     }
@@ -215,6 +350,70 @@ export const HRDocuments: React.FC = () => {
     }
   };
 
+  const handleDeleteRequest = async (request: any) => {
+    if (
+      !window.confirm(
+        tr(
+          `Hapus pengajuan untuk ${request.employee_name || request.employee_id}?`,
+          `Delete the request for ${request.employee_name || request.employee_id}?`
+        )
+      )
+    ) {
+      return;
+    }
+    try {
+      await apiFetch(`/hr/signing-requests/${request.id}`, { method: 'DELETE' });
+      setMsg({ type: 'success', text: tr('Pengajuan dihapus.', 'Request deleted.') });
+      setDetail(null);
+      await load(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleSupersede = async (request: any) => {
+    const reason = window.prompt(tr('Alasan penggantian (wajib):', 'Reason for replacing (required):'));
+    if (!reason?.trim()) return;
+    try {
+      await apiFetch(`/hr/signing-requests/${request.id}/supersede`, {
+        method: 'POST',
+        body: JSON.stringify({ reason: reason.trim() }),
+      });
+      setMsg({ type: 'success', text: tr('Pengajuan ditandai digantikan.', 'Request marked superseded.') });
+      setDetail(null);
+      await load(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleResend = async (request: any) => {
+    try {
+      const res = await apiFetch(`/hr/signing-requests/${request.id}/resend`, { method: 'POST' });
+      setMsg({
+        type: 'success',
+        text: res.message || tr('Tautan tanda tangan diperbarui.', 'Signing links refreshed.'),
+      });
+      await load(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const statusLabel = (status: string) =>
+    STATUS_LABELS[status] ? tr(STATUS_LABELS[status].id, STATUS_LABELS[status].en) : status;
+
+  const progressOf = (row: any) => {
+    const total = Number(row.signer_total || 0);
+    const signed = Number(row.signer_signed || 0);
+    return { total, signed, complete: total > 0 && signed >= total };
+  };
+
+  const isOverdue = (row: any) =>
+    row.due_at && !CLOSED_STATUSES.includes(row.status)
+      ? new Date(row.due_at).getTime() < Date.now()
+      : false;
+
   return (
     <div className="space-y-5">
       <div className="flex flex-col justify-between gap-3 md:flex-row md:items-center">
@@ -224,8 +423,8 @@ export const HRDocuments: React.FC = () => {
           </h1>
           <p className="text-xs text-slate-500">
             {tr(
-              'Kelola template dokumen HR dan kirim permintaan tanda tangan elektronik.',
-              'Manage HR document templates and send electronic signing requests.'
+              'Unggah dokumen, tempatkan tanda tangan, lalu kirim untuk ditandatangani.',
+              'Upload a document, place the signatures, then send it for signing.'
             )}
           </p>
         </div>
@@ -236,24 +435,13 @@ export const HRDocuments: React.FC = () => {
             disabled={refreshing}
             className="rounded-xl border border-slate-200 bg-white p-2.5 text-slate-600 transition hover:bg-slate-50 disabled:opacity-60"
             title={tr('Muat ulang', 'Refresh')}
+            aria-label={tr('Muat ulang', 'Refresh')}
           >
             <RefreshCw size={15} className={refreshing ? 'animate-spin' : ''} />
           </button>
-          {canManageTemplates && (
-            <button
-              onClick={() => setShowTemplateModal(true)}
-              className="flex items-center gap-2 rounded-xl border border-slate-200 bg-white px-4 py-2.5 text-xs font-bold text-slate-700 transition hover:bg-slate-50"
-            >
-              <Upload size={15} />
-              {tr('Template Baru', 'New Template')}
-            </button>
-          )}
           {canCreate && (
             <button
-              onClick={() => {
-                setEmployeeId(employees[0]?.id || '');
-                setShowCreate(true);
-              }}
+              onClick={openCreate}
               className="flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-blue-700"
             >
               <Plus size={16} />
@@ -273,7 +461,9 @@ export const HRDocuments: React.FC = () => {
         >
           {msg.type === 'success' ? <CheckCircle2 size={16} /> : <AlertTriangle size={16} />}
           <span className="flex-1 font-medium">{msg.text}</span>
-          <button onClick={() => setMsg(null)} className="font-bold">✕</button>
+          <button onClick={() => setMsg(null)} className="font-bold" aria-label="Dismiss">
+            ✕
+          </button>
         </div>
       )}
 
@@ -281,7 +471,7 @@ export const HRDocuments: React.FC = () => {
         <div className="flex flex-wrap items-center gap-1.5 border-b border-slate-100 p-4">
           {[
             { key: 'all', label: tr('Semua', 'All'), count: counts.all },
-            { key: 'sent', label: tr('Terkirim', 'Sent'), count: counts.sent },
+            { key: 'open', label: tr('Perlu Tindakan', 'Action needed'), count: counts.open },
             { key: 'completed', label: tr('Selesai', 'Completed'), count: counts.completed },
             { key: 'declined', label: tr('Ditolak', 'Declined'), count: counts.declined },
           ].map((filter) => (
@@ -311,13 +501,27 @@ export const HRDocuments: React.FC = () => {
             <div className="mx-auto flex h-14 w-14 items-center justify-center rounded-3xl bg-blue-50 text-blue-600">
               <PenLine size={24} />
             </div>
-            <p className="mt-3 text-sm font-bold text-slate-900">{tr('Belum ada pengajuan', 'No signing requests yet')}</p>
-            <p className="mt-1 text-xs text-slate-500">
-              {tr(
-                'Daftarkan template lalu buat permintaan tanda tangan pertama.',
-                'Register a template, then create your first signing request.'
-              )}
+            <p className="mt-3 text-sm font-bold text-slate-900">
+              {statusFilter === 'all'
+                ? tr('Belum ada pengajuan', 'No signing requests yet')
+                : tr('Tidak ada pengajuan di filter ini', 'No requests in this filter')}
             </p>
+            <p className="mt-1 text-xs text-slate-500">
+              {statusFilter === 'all'
+                ? tr(
+                    'Unggah dokumen pertama untuk mulai meminta tanda tangan.',
+                    'Upload your first document to start collecting signatures.'
+                  )
+                : tr('Coba pilih filter lain.', 'Try a different filter.')}
+            </p>
+            {canCreate && statusFilter === 'all' && (
+              <button
+                onClick={openCreate}
+                className="mt-4 inline-flex items-center gap-2 rounded-xl bg-blue-600 px-4 py-2.5 text-xs font-bold text-white hover:bg-blue-700"
+              >
+                <Plus size={14} /> {tr('Minta Tanda Tangan', 'Request Signature')}
+              </button>
+            )}
           </div>
         ) : (
           <>
@@ -327,252 +531,452 @@ export const HRDocuments: React.FC = () => {
                   <tr>
                     <th className="px-5 py-3 font-bold">{tr('Karyawan', 'Employee')}</th>
                     <th className="px-3 py-3 font-bold">{tr('Dokumen', 'Document')}</th>
-                    <th className="px-3 py-3 text-center font-bold">{tr('Versi', 'Version')}</th>
+                    <th className="px-3 py-3 font-bold">{tr('Penandatangan', 'Signers')}</th>
                     <th className="px-3 py-3 font-bold">{tr('Batas Waktu', 'Due')}</th>
                     <th className="px-3 py-3 text-center font-bold">{tr('Status', 'Status')}</th>
                     <th className="px-5 py-3 text-right font-bold">{tr('Aksi', 'Action')}</th>
                   </tr>
                 </thead>
                 <tbody className="divide-y divide-slate-100">
-                  {filtered.map((row) => (
-                    <tr key={row.id} className="cursor-pointer transition hover:bg-slate-50/80" onClick={() => openDetail(row.id)}>
-                      <td className="px-5 py-3">
-                        <div className="font-bold text-slate-900">{row.employee_name || row.employee_id}</div>
-                        <div className="text-[10px] text-slate-400">{row.employee_nik || ''}</div>
-                      </td>
-                      <td className="px-3 py-3 font-medium text-slate-700">{row.template_code}</td>
-                      <td className="px-3 py-3 text-center text-slate-600">v{row.template_version}</td>
-                      <td className="whitespace-nowrap px-3 py-3 text-slate-600">
-                        {row.due_at ? formatDate(row.due_at) : '-'}
-                      </td>
-                      <td className="px-3 py-3 text-center">
-                        <span className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${STATUS_STYLES[row.status] || STATUS_STYLES.draft}`}>
-                          {STATUS_LABELS[row.status] ? tr(STATUS_LABELS[row.status].id, STATUS_LABELS[row.status].en) : row.status}
-                        </span>
-                      </td>
-                      <td className="px-5 py-3 text-right">
-                        <button
-                          className="rounded-lg px-2.5 py-1 text-[10px] font-bold text-blue-600 hover:bg-blue-50"
-                          onClick={(e) => {
-                            e.stopPropagation();
-                            openDetail(row.id);
-                          }}
-                        >
-                          {tr('Detail', 'Detail')}
-                        </button>
-                      </td>
-                    </tr>
-                  ))}
+                  {filtered.map((row) => {
+                    const progress = progressOf(row);
+                    return (
+                      <tr
+                        key={row.id}
+                        className="cursor-pointer transition hover:bg-slate-50/80"
+                        onClick={() => openDetail(row.id)}
+                      >
+                        <td className="px-5 py-3">
+                          <div className="font-bold text-slate-900">{row.employee_name || row.employee_id}</div>
+                          <div className="text-[10px] text-slate-400">{row.employee_nik || ''}</div>
+                        </td>
+                        <td className="px-3 py-3">
+                          <div className="flex items-center gap-2">
+                            <span className="flex h-6 w-6 shrink-0 items-center justify-center rounded-lg bg-slate-100 text-slate-500">
+                              <FileText size={12} />
+                            </span>
+                            <span className="font-medium text-slate-800">{documentLabel(row)}</span>
+                          </div>
+                        </td>
+                        <td className="px-3 py-3">
+                          {progress.total === 0 ? (
+                            <span className="text-slate-400">-</span>
+                          ) : (
+                            <div className="flex items-center gap-2">
+                              <div className="h-1.5 w-16 overflow-hidden rounded-full bg-slate-200">
+                                <div
+                                  className={`h-full rounded-full ${progress.complete ? 'bg-emerald-500' : 'bg-blue-500'}`}
+                                  style={{ width: `${(progress.signed / progress.total) * 100}%` }}
+                                />
+                              </div>
+                              <span className="whitespace-nowrap text-[10px] font-bold text-slate-600">
+                                {progress.signed}/{progress.total}
+                              </span>
+                            </div>
+                          )}
+                        </td>
+                        <td className="whitespace-nowrap px-3 py-3">
+                          {row.due_at ? (
+                            <span className={isOverdue(row) ? 'font-bold text-rose-600' : 'text-slate-600'}>
+                              {formatDate(row.due_at)}
+                            </span>
+                          ) : (
+                            <span className="text-slate-400">-</span>
+                          )}
+                        </td>
+                        <td className="px-3 py-3 text-center">
+                          <span
+                            className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                              STATUS_STYLES[row.status] || STATUS_STYLES.draft
+                            }`}
+                          >
+                            {statusLabel(row.status)}
+                          </span>
+                        </td>
+                        <td className="px-5 py-3 text-right">
+                          <button
+                            className="rounded-lg px-2.5 py-1 text-[10px] font-bold text-blue-600 hover:bg-blue-50"
+                            onClick={(e) => {
+                              e.stopPropagation();
+                              openDetail(row.id);
+                            }}
+                          >
+                            {tr('Detail', 'Detail')}
+                          </button>
+                        </td>
+                      </tr>
+                    );
+                  })}
                 </tbody>
               </table>
             </div>
 
             <div className="divide-y divide-slate-100 md:hidden">
-              {filtered.map((row) => (
-                <div key={row.id} className="space-y-2 p-4" onClick={() => openDetail(row.id)}>
-                  <div className="flex items-start justify-between gap-2">
-                    <div className="min-w-0">
-                      <div className="truncate text-sm font-bold text-slate-900">{row.employee_name || row.employee_id}</div>
-                      <div className="text-[11px] text-slate-500">
-                        {row.template_code} · v{row.template_version}
+              {filtered.map((row) => {
+                const progress = progressOf(row);
+                return (
+                  <div key={row.id} className="space-y-2 p-4 active:bg-slate-50" onClick={() => openDetail(row.id)}>
+                    <div className="flex items-start justify-between gap-2">
+                      <div className="min-w-0">
+                        <div className="truncate text-sm font-bold text-slate-900">
+                          {row.employee_name || row.employee_id}
+                        </div>
+                        <div className="truncate text-[11px] text-slate-500">{documentLabel(row)}</div>
                       </div>
+                      <span
+                        className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                          STATUS_STYLES[row.status] || STATUS_STYLES.draft
+                        }`}
+                      >
+                        {statusLabel(row.status)}
+                      </span>
                     </div>
-                    <span className={`shrink-0 rounded-full px-2.5 py-1 text-[10px] font-bold ${STATUS_STYLES[row.status] || STATUS_STYLES.draft}`}>
-                      {STATUS_LABELS[row.status] ? tr(STATUS_LABELS[row.status].id, STATUS_LABELS[row.status].en) : row.status}
-                    </span>
+                    <div className="flex items-center gap-3 text-[10px] text-slate-400">
+                      {progress.total > 0 && (
+                        <span className="font-bold text-slate-600">
+                          {progress.signed}/{progress.total} {tr('tanda tangan', 'signed')}
+                        </span>
+                      )}
+                      {row.due_at && (
+                        <span
+                          className={`inline-flex items-center gap-1 ${isOverdue(row) ? 'font-bold text-rose-600' : ''}`}
+                        >
+                          <Clock size={11} /> {formatDate(row.due_at)}
+                        </span>
+                      )}
+                    </div>
                   </div>
-                  {row.due_at && (
-                    <div className="flex items-center gap-1 text-[10px] text-slate-400">
-                      <Clock size={11} /> {tr('Batas', 'Due')} {formatDate(row.due_at)}
-                    </div>
-                  )}
-                </div>
-              ))}
+                );
+              })}
             </div>
           </>
         )}
       </div>
 
-      {/* CREATE REQUEST MODAL */}
+      {/* CREATE REQUEST MODAL — two panes: metadata on the left, the document
+          and field placer on the right. The placer needs real width, so this
+          dialog is deliberately wide and becomes a bottom sheet on phones. */}
       {showCreate && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] sm:items-center sm:p-4"
           onClick={(event) => {
-            if (event.target === event.currentTarget) setShowCreate(false);
+            if (event.target === event.currentTarget) closeCreate();
           }}
         >
-          <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                <PenLine size={18} />
+          <div
+            className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl"
+            role="dialog"
+            aria-modal="true"
+            aria-label={tr('Minta Tanda Tangan', 'Request Signature')}
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <PenLine size={18} />
+                </div>
+                <div>
+                  <h3 className="text-base font-bold text-slate-900">{tr('Minta Tanda Tangan', 'Request Signature')}</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {tr(
+                      'Pilih penerima, unggah dokumen, lalu letakkan tanda tangan.',
+                      'Pick the recipient, upload the document, then place the signatures.'
+                    )}
+                  </p>
+                </div>
               </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">{tr('Minta Tanda Tangan', 'Request Signature')}</h3>
-                <p className="text-[11px] text-slate-500">
-                  {tr('Penandatangan mengikuti alur dokumen yang dipilih.', 'Signers follow the selected document workflow.')}
-                </p>
-              </div>
+              <button
+                onClick={closeCreate}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close"
+              >
+                <X size={18} />
+              </button>
             </div>
 
-            <form onSubmit={handleCreate} className="space-y-3 text-xs">
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Karyawan *', 'Employee *')}</label>
-                <select
-                  required
-                  value={employeeId}
-                  onChange={(e) => setEmployeeId(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                >
-                  <option value="">{tr('Pilih karyawan', 'Select employee')}</option>
-                  {employees.map((emp) => (
-                    <option key={emp.id} value={emp.id}>
-                      {emp.full_name} ({emp.nik})
-                    </option>
-                  ))}
-                </select>
+            <form onSubmit={handleCreate} className="flex min-h-0 flex-1 flex-col">
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
+                <div className="grid gap-5 p-5 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
+                  {/* LEFT — metadata */}
+                  <div className="space-y-4 text-xs">
+                    <div>
+                      <label className="mb-1 block font-semibold text-slate-700">
+                        {tr('Karyawan', 'Employee')} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        required
+                        value={employeeId}
+                        onChange={(e) => setEmployeeId(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        <option value="">{tr('Pilih karyawan', 'Select employee')}</option>
+                        {employees.map((emp) => (
+                          <option key={emp.id} value={emp.id}>
+                            {emp.full_name} ({emp.nik})
+                          </option>
+                        ))}
+                      </select>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block font-semibold text-slate-700">
+                        {tr('Jenis Dokumen', 'Document Type')} <span className="text-rose-500">*</span>
+                      </label>
+                      <select
+                        value={templateCode}
+                        onChange={(e) => setTemplateCode(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      >
+                        {WORKFLOW_OPTIONS.map((option) => (
+                          <option key={option.code} value={option.code}>
+                            {tr(option.id, option.en)}
+                          </option>
+                        ))}
+                      </select>
+                      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
+                        {tr(
+                          'Jenis dokumen menentukan siapa saja yang harus menandatangani.',
+                          'The document type determines who has to sign.'
+                        )}
+                      </p>
+                    </div>
+
+                    {/* Signers — the question that caused the most confusion. */}
+                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
+                      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                        <Users size={12} /> {tr('Penandatangan', 'Signers')}
+                      </div>
+
+                      {!employeeId ? (
+                        <p className="text-[11px] text-slate-400">
+                          {tr('Pilih karyawan untuk melihat penandatangan.', 'Select an employee to see the signers.')}
+                        </p>
+                      ) : !signerPreview ? (
+                        <p className="text-[11px] text-slate-400">{tr('Memuat...', 'Loading...')}</p>
+                      ) : (
+                        <div className="space-y-2">
+                          {(signerPreview.signers || []).map((signer: any) => (
+                            <div key={signer.role} className="flex items-start gap-2">
+                              <span
+                                className={`mt-0.5 inline-flex w-16 shrink-0 justify-center rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                                  signer.resolved
+                                    ? 'bg-emerald-100 text-emerald-700'
+                                    : signer.required
+                                      ? 'bg-rose-100 text-rose-700'
+                                      : 'bg-slate-200 text-slate-500'
+                                }`}
+                              >
+                                {signer.role}
+                              </span>
+                              <div className="min-w-0 flex-1">
+                                {signer.resolved ? (
+                                  <>
+                                    <div className="truncate text-[11px] font-semibold text-slate-800">{signer.name}</div>
+                                    <div className="truncate text-[10px] text-slate-500">{signer.email}</div>
+                                  </>
+                                ) : (
+                                  <div className="text-[10px] leading-relaxed text-slate-500">
+                                    {signer.required
+                                      ? tr('Wajib, tetapi belum bisa ditentukan', 'Required, but cannot be determined')
+                                      : tr('Opsional, akan dilewati', 'Optional, will be skipped')}
+                                  </div>
+                                )}
+                              </div>
+                            </div>
+                          ))}
+                          {signerPreview.problem && (
+                            <p className="flex items-start gap-1.5 border-t border-slate-200 pt-2 text-[10px] font-medium leading-relaxed text-rose-600">
+                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                              {signerPreview.problem}
+                            </p>
+                          )}
+                        </div>
+                      )}
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block font-semibold text-slate-700">{tr('Batas Waktu', 'Due Date')}</label>
+                      <input
+                        type="date"
+                        value={dueAt}
+                        onChange={(e) => setDueAt(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 p-2.5">
+                      <input
+                        type="checkbox"
+                        checked={sendEmail}
+                        onChange={(e) => setSendEmail(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="block font-semibold text-slate-700">
+                          {tr('Kirim email tanda tangan', 'Send signing emails')}
+                        </span>
+                        <span className="block text-[10px] text-slate-500">
+                          {tr(
+                            'Penandatangan menerima tautan langsung dari DocuSeal.',
+                            'Signers receive the link directly from DocuSeal.'
+                          )}
+                        </span>
+                      </span>
+                    </label>
+
+                    <details className="rounded-xl border border-slate-200 p-2.5">
+                      <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">
+                        {tr('Isian otomatis (opsional)', 'Prefill values (optional)')}
+                      </summary>
+                      <textarea
+                        rows={3}
+                        value={prefill}
+                        onChange={(e) => setPrefill(e.target.value)}
+                        placeholder='{"Position":"Engineer","Start Date":"2026-12-01"}'
+                        className="mt-2 w-full rounded-lg border border-slate-300 p-2 font-mono text-[10px]"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {tr(
+                          'Pasangan nama field dan nilai dalam format JSON.',
+                          'Field name and value pairs in JSON format.'
+                        )}
+                      </p>
+                    </details>
+                  </div>
+
+                  {/* RIGHT — document and placement */}
+                  <div className="min-w-0 space-y-3">
+                    {!oneOff.file ? (
+                      <label
+                        onDragOver={(event) => event.preventDefault()}
+                        onDrop={(event) => {
+                          event.preventDefault();
+                          handleFile(event.dataTransfer.files?.[0] || null);
+                        }}
+                        className="flex cursor-pointer flex-col items-center justify-center rounded-2xl border-2 border-dashed border-slate-300 bg-slate-50 px-6 py-12 text-center transition hover:border-blue-400 hover:bg-blue-50/40"
+                      >
+                        <div className="flex h-12 w-12 items-center justify-center rounded-2xl bg-white text-blue-600 shadow-sm">
+                          <Upload size={20} />
+                        </div>
+                        <span className="mt-3 text-sm font-bold text-slate-800">
+                          {tr('Unggah dokumen PDF', 'Upload a PDF document')}
+                        </span>
+                        <span className="mt-1 text-[11px] text-slate-500">
+                          {tr(
+                            'Tarik file ke sini atau klik untuk memilih. Maks. 15 MB.',
+                            'Drag a file here or click to choose. Max 15 MB.'
+                          )}
+                        </span>
+                        <input
+                          type="file"
+                          accept=".pdf"
+                          className="hidden"
+                          onChange={(event) => handleFile(event.target.files?.[0] || null)}
+                        />
+                      </label>
+                    ) : (
+                      <div className="flex items-center gap-3 rounded-2xl border border-slate-200 bg-slate-50 p-3">
+                        <span className="flex h-9 w-9 shrink-0 items-center justify-center rounded-xl bg-white text-rose-600 shadow-sm">
+                          <FileText size={16} />
+                        </span>
+                        <div className="min-w-0 flex-1">
+                          <div className="truncate text-xs font-bold text-slate-900">{oneOff.file.name}</div>
+                          <div className="text-[10px] text-slate-500">{formatBytes(oneOff.file.size)}</div>
+                        </div>
+                        <label className="cursor-pointer rounded-lg border border-slate-300 bg-white px-2.5 py-1.5 text-[10px] font-bold text-slate-700 hover:bg-slate-100">
+                          {tr('Ganti', 'Change')}
+                          <input
+                            type="file"
+                            accept=".pdf"
+                            className="hidden"
+                            onChange={(event) => handleFile(event.target.files?.[0] || null)}
+                          />
+                        </label>
+                        <button
+                          type="button"
+                          onClick={() => handleFile(null)}
+                          className="rounded-lg p-1.5 text-slate-400 hover:bg-rose-50 hover:text-rose-600"
+                          aria-label={tr('Hapus file', 'Remove file')}
+                        >
+                          <Trash2 size={14} />
+                        </button>
+                      </div>
+                    )}
+
+                    {oneOff.file && (
+                      <div>
+                        <div className="mb-2 flex items-center justify-between">
+                          <label className="text-xs font-semibold text-slate-700">
+                            {tr('Penempatan Tanda Tangan', 'Signature Placement')}{' '}
+                            <span className="text-rose-500">*</span>
+                          </label>
+                          <span className="text-[10px] text-slate-400">
+                            {oneOff.fields.length} {tr('field', 'fields')}
+                          </span>
+                        </div>
+                        <SigningFieldPlacer
+                          file={oneOff.file}
+                          fields={oneOff.fields}
+                          onChange={(fields) => setOneOff({ ...oneOff, fields })}
+                        />
+                      </div>
+                    )}
+                  </div>
+                </div>
               </div>
 
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Jenis Dokumen *', 'Document Type *')}</label>
-                <select
-                  value={templateCode}
-                  onChange={(e) => setTemplateCode(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                >
-                  {WORKFLOW_OPTIONS.map((option) => (
-                    <option key={option.code} value={option.code}>
-                      {option.label}
-                      {templateOptions.some((t) => t.code === option.code) ? '' : ' — belum ada template'}
-                    </option>
-                  ))}
-                </select>
-              </div>
+              {/* Footer — readiness checklist plus the primary action. */}
+              <div className="shrink-0 border-t border-slate-200 bg-white px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:pb-3">
+                {formError && (
+                  <div className="mb-2 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 p-2.5 text-[11px] font-medium text-rose-800">
+                    <AlertTriangle size={13} className="mt-0.5 shrink-0" />
+                    <span className="flex-1">{formError}</span>
+                  </div>
+                )}
 
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Batas Waktu', 'Due Date')}</label>
-                <input
-                  type="date"
-                  value={dueAt}
-                  onChange={(e) => setDueAt(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                />
-              </div>
+                <div className="flex flex-wrap items-center justify-between gap-3">
+                  <div className="flex flex-wrap items-center gap-3 text-[10px]">
+                    {[
+                      { done: Boolean(oneOff.base64), label: tr('Dokumen PDF', 'PDF document') },
+                      { done: oneOff.fields.length > 0, label: tr('Field tanda tangan', 'Signing fields') },
+                      {
+                        done: Boolean(signerPreview) && !signerPreview?.problem,
+                        label: tr('Penandatangan lengkap', 'Signers resolved'),
+                      },
+                    ].map((item) => (
+                      <span
+                        key={item.label}
+                        className={`inline-flex items-center gap-1 font-semibold ${
+                          item.done ? 'text-emerald-600' : 'text-slate-400'
+                        }`}
+                      >
+                        {item.done ? (
+                          <Check size={11} />
+                        ) : (
+                          <span className="h-2.5 w-2.5 rounded-full border border-current" />
+                        )}
+                        {item.label}
+                      </span>
+                    ))}
+                  </div>
 
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">
-                  {tr('Prefill (JSON, opsional)', 'Prefill (JSON, optional)')}
-                </label>
-                <textarea
-                  rows={3}
-                  value={prefill}
-                  onChange={(e) => setPrefill(e.target.value)}
-                  placeholder='{"Position":"Engineer","Start Date":"2026-12-01"}'
-                  className="w-full rounded-xl border border-slate-300 p-2 font-mono text-[11px]"
-                />
-              </div>
-
-              <label className="flex items-center gap-2 font-medium text-slate-700">
-                <input type="checkbox" checked={sendEmail} onChange={(e) => setSendEmail(e.target.checked)} />
-                {tr('Kirim email tanda tangan dari DocuSeal', 'Send signing email from DocuSeal')}
-              </label>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowCreate(false)} className="rounded-xl px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100">
-                  {tr('Batal', 'Cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="rounded-xl bg-blue-600 px-5 py-2.5 font-bold text-white shadow-md transition hover:bg-blue-700 disabled:opacity-50"
-                >
-                  {submitting ? tr('Memproses...', 'Processing...') : tr('Kirim', 'Send')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
-
-      {/* TEMPLATE UPLOAD MODAL */}
-      {showTemplateModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setShowTemplateModal(false);
-          }}
-        >
-          <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-                <Upload size={18} />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">{tr('Template Dokumen Baru', 'New Document Template')}</h3>
-                <p className="text-[11px] text-slate-500">
-                  {tr('Unggah PDF atau DOCX. Versi baru dibuat otomatis.', 'Upload PDF or DOCX. A new version is created automatically.')}
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleTemplateUpload} className="space-y-3 text-xs">
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Kode *', 'Code *')}</label>
-                <select
-                  value={templateForm.code}
-                  onChange={(e) => setTemplateForm({ ...templateForm, code: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                >
-                  {WORKFLOW_OPTIONS.map((option) => (
-                    <option key={option.code} value={option.code}>
-                      {option.code}
-                    </option>
-                  ))}
-                </select>
-              </div>
-
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Nama *', 'Name *')}</label>
-                <input
-                  required
-                  value={templateForm.name}
-                  onChange={(e) => setTemplateForm({ ...templateForm, name: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Versi (opsional)', 'Version (optional)')}</label>
-                <input
-                  type="number"
-                  min={1}
-                  value={templateForm.version}
-                  onChange={(e) => setTemplateForm({ ...templateForm, version: e.target.value })}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                />
-              </div>
-
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('File PDF / DOCX *', 'PDF / DOCX File *')}</label>
-                <input
-                  ref={fileInputRef}
-                  type="file"
-                  accept=".pdf,.docx"
-                  onChange={(e) => setTemplateFile(e.target.files?.[0] || null)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button type="button" onClick={() => setShowTemplateModal(false)} className="rounded-xl px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100">
-                  {tr('Batal', 'Cancel')}
-                </button>
-                <button
-                  type="submit"
-                  disabled={submitting}
-                  className="rounded-xl bg-slate-900 px-5 py-2.5 font-bold text-white shadow-md transition hover:bg-slate-800 disabled:opacity-50"
-                >
-                  {submitting ? tr('Mengunggah...', 'Uploading...') : tr('Daftarkan', 'Register')}
-                </button>
+                  <div className="ml-auto flex items-center gap-2">
+                    <button
+                      type="button"
+                      onClick={closeCreate}
+                      className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
+                    >
+                      {tr('Batal', 'Cancel')}
+                    </button>
+                    <button
+                      type="submit"
+                      disabled={!canSubmit}
+                      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                    >
+                      <Send size={13} />
+                      {submitting ? tr('Mengirim...', 'Sending...') : tr('Kirim', 'Send')}
+                    </button>
+                  </div>
+                </div>
               </div>
             </form>
           </div>
@@ -582,92 +986,178 @@ export const HRDocuments: React.FC = () => {
       {/* DETAIL MODAL */}
       {detail && (
         <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
+          className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] sm:items-center sm:p-4"
           onClick={(event) => {
             if (event.target === event.currentTarget) setDetail(null);
           }}
         >
-          <div className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  {detail.signingRequest.employee?.full_name || detail.signingRequest.employee_id}
+          <div
+            className="flex max-h-[94vh] w-full max-w-lg flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
+              <div className="min-w-0">
+                <h3 className="truncate text-base font-bold text-slate-900">
+                  {documentLabel(detail.signingRequest)}
                 </h3>
-                <p className="text-[11px] text-slate-500">
-                  {detail.signingRequest.template_code} · v{detail.signingRequest.template_version} ·{' '}
-                  {STATUS_LABELS[detail.signingRequest.status]
-                    ? tr(STATUS_LABELS[detail.signingRequest.status].id, STATUS_LABELS[detail.signingRequest.status].en)
-                    : detail.signingRequest.status}
+                <p className="truncate text-[11px] text-slate-500">
+                  {detail.signingRequest.employee?.full_name || detail.signingRequest.employee_id}
                 </p>
               </div>
-              <button onClick={() => setDetail(null)} className="rounded-lg p-1.5 text-slate-400 hover:bg-slate-100">
+              <button
+                onClick={() => setDetail(null)}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close"
+              >
                 <X size={18} />
               </button>
             </div>
 
-            <div>
-              <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                <Users size={12} /> {tr('Penandatangan', 'Signers')}
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain p-5">
+              <div className="flex flex-wrap items-center gap-2">
+                <span
+                  className={`inline-flex rounded-full px-2.5 py-1 text-[10px] font-bold ${
+                    STATUS_STYLES[detail.signingRequest.status] || STATUS_STYLES.draft
+                  }`}
+                >
+                  {statusLabel(detail.signingRequest.status)}
+                </span>
+                {detail.signingRequest.due_at && (
+                  <span className="inline-flex items-center gap-1 text-[10px] text-slate-500">
+                    <Clock size={11} /> {tr('Batas', 'Due')} {formatDate(detail.signingRequest.due_at)}
+                  </span>
+                )}
               </div>
-              <div className="space-y-2">
-                {(detail.signers || []).map((signer: any) => (
-                  <div key={signer.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 p-3">
-                    <div className="min-w-0">
-                      <div className="truncate text-xs font-bold text-slate-900">
-                        {signer.name} <span className="font-normal text-slate-400">({signer.role})</span>
+
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                  <Users size={12} /> {tr('Penandatangan', 'Signers')}
+                </div>
+                <div className="space-y-2">
+                  {(detail.signers || []).map((signer: any) => (
+                    <div key={signer.id} className="rounded-xl border border-slate-200 p-3">
+                      <div className="flex items-start justify-between gap-2">
+                        <div className="min-w-0">
+                          <div className="truncate text-xs font-bold text-slate-900">
+                            {signer.name} <span className="font-normal text-slate-400">({signer.role})</span>
+                          </div>
+                          <div className="truncate text-[10px] text-slate-500">{signer.email}</div>
+                        </div>
+                        <span
+                          className={`shrink-0 rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            signer.status === 'completed'
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : signer.status === 'declined'
+                                ? 'bg-rose-100 text-rose-700'
+                                : signer.status === 'opened'
+                                  ? 'bg-indigo-100 text-indigo-700'
+                                  : 'bg-slate-100 text-slate-600'
+                          }`}
+                        >
+                          {SIGNER_STATUS_LABELS[signer.status]
+                            ? tr(SIGNER_STATUS_LABELS[signer.status].id, SIGNER_STATUS_LABELS[signer.status].en)
+                            : signer.status}
+                        </span>
                       </div>
-                      <div className="truncate text-[10px] text-slate-500">{signer.email}</div>
-                    </div>
-                    <div className="flex shrink-0 items-center gap-2">
-                      <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[10px] font-bold text-slate-600">
-                        {signer.status}
-                      </span>
                       {signer.signing_url && signer.status !== 'completed' && (
                         <button
-                          onClick={() => setSigningFrame({ url: signer.signing_url, title: `${signer.name} - ${detail.signingRequest.template_code}` })}
-                          className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 hover:bg-blue-100"
+                          onClick={() =>
+                            setSigningFrame({
+                              url: signer.signing_url,
+                              title: `${signer.name} · ${signer.role}`,
+                            })
+                          }
+                          className="mt-2 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"
                         >
-                          <ExternalLink size={11} /> {tr('Tanda tangan', 'Sign')}
+                          <Link2 size={11} /> {tr('Tautan tanda tangan', 'Signing link')}
                         </button>
                       )}
                     </div>
-                  </div>
-                ))}
-              </div>
-            </div>
-
-            <div>
-              <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
-                <FileText size={12} /> {tr('Dokumen Tersimpan', 'Stored Documents')}
-              </div>
-              {(detail.documents || []).length === 0 ? (
-                <p className="text-[11px] text-slate-400">
-                  {tr('Dokumen tersedia setelah semua pihak menandatangani.', 'Documents become available once everyone signs.')}
-                </p>
-              ) : (
-                <div className="space-y-1.5">
-                  {detail.documents.map((doc: any) => (
-                    <div key={doc.id} className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2">
-                      <div className="min-w-0">
-                        <div className="truncate text-[11px] font-bold text-slate-800">{doc.kind}</div>
-                        <div className="truncate font-mono text-[9px] text-slate-400">
-                          {doc.byteSize ? `${Math.round(doc.byteSize / 1024)} KB` : ''} {doc.sha256 ? `· ${doc.sha256.slice(0, 12)}…` : ''}
-                        </div>
-                      </div>
-                      <button
-                        onClick={() => handleDownload({ ...doc, signingRequestId: detail.signingRequest.id })}
-                        className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 hover:bg-emerald-100"
-                      >
-                        <Download size={11} /> {tr('Unduh', 'Download')}
-                      </button>
-                    </div>
                   ))}
                 </div>
+              </div>
+
+              <div>
+                <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                  <FileText size={12} /> {tr('Dokumen Tersimpan', 'Stored Documents')}
+                </div>
+                {(detail.documents || []).length === 0 ? (
+                  <p className="rounded-xl border border-dashed border-slate-200 p-3 text-[11px] leading-relaxed text-slate-400">
+                    {tr(
+                      'Dokumen tersedia setelah semua pihak menandatangani.',
+                      'Documents become available once everyone signs.'
+                    )}
+                  </p>
+                ) : (
+                  <div className="space-y-1.5">
+                    {detail.documents.map((doc: any) => (
+                      <div
+                        key={doc.id}
+                        className="flex items-center justify-between gap-2 rounded-xl border border-slate-200 px-3 py-2"
+                      >
+                        <div className="min-w-0">
+                          <div className="truncate text-[11px] font-bold text-slate-800">{doc.kind}</div>
+                          <div className="truncate font-mono text-[9px] text-slate-400">
+                            {doc.byteSize ? formatBytes(doc.byteSize) : ''}
+                            {doc.sha256 ? ` · ${doc.sha256.slice(0, 12)}…` : ''}
+                          </div>
+                        </div>
+                        <button
+                          onClick={() => handleDownload({ ...doc, signingRequestId: detail.signingRequest.id })}
+                          className="inline-flex shrink-0 items-center gap-1 rounded-lg bg-emerald-50 px-2 py-1 text-[10px] font-bold text-emerald-700 transition hover:bg-emerald-100"
+                        >
+                          <Download size={11} /> {tr('Unduh', 'Download')}
+                        </button>
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              {detail.signingRequest.last_error && (
+                <p className="rounded-xl border border-rose-200 bg-rose-50 p-2.5 text-[10px] font-medium text-rose-700">
+                  {detail.signingRequest.last_error}
+                </p>
               )}
             </div>
 
-            <div className="flex justify-end pt-1">
-              <button onClick={() => setDetail(null)} className="rounded-xl bg-slate-900 px-5 py-2 text-xs font-bold text-white hover:bg-slate-800">
+            <div className="flex shrink-0 flex-wrap items-center justify-between gap-2 border-t border-slate-200 px-5 pb-[calc(1rem+env(safe-area-inset-bottom))] pt-3 sm:pb-3">
+              <div className="flex flex-wrap items-center gap-1.5">
+                {OPEN_STATUSES.includes(detail.signingRequest.status) && (
+                  <button
+                    onClick={() => handleResend(detail.signingRequest)}
+                    className="rounded-lg bg-slate-100 px-2.5 py-1.5 text-[11px] font-bold text-slate-700 transition hover:bg-slate-200"
+                  >
+                    {tr('Kirim Ulang', 'Resend')}
+                  </button>
+                )}
+                {OPEN_STATUSES.includes(detail.signingRequest.status) && (
+                  <button
+                    onClick={() => handleSupersede(detail.signingRequest)}
+                    className="rounded-lg bg-amber-50 px-2.5 py-1.5 text-[11px] font-bold text-amber-700 transition hover:bg-amber-100"
+                  >
+                    {tr('Gantikan', 'Supersede')}
+                  </button>
+                )}
+                {detail.signingRequest.status !== 'completed' &&
+                  detail.signingRequest.status !== 'partially_signed' && (
+                    <button
+                      onClick={() => handleDeleteRequest(detail.signingRequest)}
+                      className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition hover:bg-rose-100"
+                      title={tr(
+                        'Hanya untuk pengajuan yang belum ditandatangani',
+                        'Only for requests that have not been signed'
+                      )}
+                    >
+                      <Trash2 size={11} /> {tr('Hapus', 'Delete')}
+                    </button>
+                  )}
+              </div>
+              <button
+                onClick={() => setDetail(null)}
+                className="rounded-xl bg-slate-900 px-5 py-2 text-xs font-bold text-white transition hover:bg-slate-800"
+              >
                 {tr('Tutup', 'Close')}
               </button>
             </div>
@@ -675,31 +1165,75 @@ export const HRDocuments: React.FC = () => {
         </div>
       )}
 
-      {/* IN-APP SIGNING IFRAME (uses DocuSeal embed_src) */}
+      {/* SIGNING LINK — DocuSeal refuses framing (x-frame-options: SAMEORIGIN),
+          so we hand the signer a real link instead of embedding an iframe. */}
       {signingFrame && (
-        <div className="fixed inset-0 z-60 flex flex-col bg-slate-900/80 p-2 md:p-6">
-          <div className="mx-auto flex h-full w-full max-w-4xl flex-col overflow-hidden rounded-2xl bg-white shadow-2xl">
-            <div className="flex items-center justify-between gap-2 border-b border-slate-200 px-4 py-2.5">
-              <div className="flex items-center gap-2 text-xs font-bold text-slate-800">
-                <Send size={14} className="text-blue-600" />
-                {signingFrame.title}
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] sm:items-center sm:p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setSigningFrame(null);
+          }}
+        >
+          <div
+            className="w-full max-w-md space-y-4 rounded-t-3xl bg-white p-6 shadow-2xl sm:rounded-3xl"
+            role="dialog"
+            aria-modal="true"
+          >
+            <div className="flex items-start justify-between gap-3">
+              <div className="flex items-center gap-3">
+                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <ExternalLink size={18} />
+                </div>
+                <div className="min-w-0">
+                  <h3 className="text-base font-bold text-slate-900">{tr('Tautan Tanda Tangan', 'Signing Link')}</h3>
+                  <p className="truncate text-[11px] text-slate-500">{signingFrame.title}</p>
+                </div>
               </div>
               <button
-                onClick={() => {
-                  setSigningFrame(null);
-                  if (detail) openDetail(detail.signingRequest.id);
-                }}
-                className="rounded-lg p-1.5 text-slate-500 hover:bg-slate-100"
+                onClick={() => setSigningFrame(null)}
+                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                aria-label="Close"
               >
                 <X size={18} />
               </button>
             </div>
-            <iframe
-              src={signingFrame.url}
-              title={signingFrame.title}
-              className="h-full w-full flex-1 border-0"
-              allow="camera; microphone; clipboard-write"
-            />
+
+            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800">
+              {tr(
+                'DocuSeal tidak dapat ditampilkan di dalam halaman ini, jadi tautan dibuka di tab baru. Kirim tautan ini ke penandatangan, atau buka sendiri.',
+                'DocuSeal cannot be embedded in this page, so the link opens in a new tab. Send it to the signer, or open it yourself.'
+              )}
+            </p>
+
+            <div className="break-all rounded-xl border border-slate-200 bg-slate-50 p-2.5 font-mono text-[10px] text-slate-600">
+              {signingFrame.url}
+            </div>
+
+            <div className="flex flex-wrap justify-end gap-2">
+              <button
+                type="button"
+                onClick={async () => {
+                  try {
+                    await navigator.clipboard.writeText(signingFrame.url);
+                    setMsg({ type: 'success', text: tr('Tautan disalin.', 'Link copied.') });
+                  } catch {
+                    setMsg({ type: 'error', text: tr('Gagal menyalin tautan.', 'Could not copy the link.') });
+                  }
+                }}
+                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
+              >
+                <Copy size={12} /> {tr('Salin tautan', 'Copy link')}
+              </button>
+              <a
+                href={signingFrame.url}
+                target="_blank"
+                rel="noreferrer noopener"
+                onClick={() => setSigningFrame(null)}
+                className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md transition hover:bg-blue-700"
+              >
+                <ExternalLink size={12} /> {tr('Buka di tab baru', 'Open in new tab')}
+              </a>
+            </div>
           </div>
         </div>
       )}

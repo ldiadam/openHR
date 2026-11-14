@@ -30,7 +30,7 @@ import {
   markDocumentDownloaded,
   readDocument,
 } from '../services/signed-documents';
-import { getWorkflow } from '../services/signing-workflows';
+import { WorkflowDef, getWorkflow } from '../services/signing-workflows';
 import { sendEmail, runInBackground } from '../services/smtp';
 import { getSigningRequestEmail } from '../services/email-templates';
 
@@ -39,6 +39,86 @@ export const signingRoutes = new Hono<{ Bindings: Bindings; Variables: AuthConte
 signingRoutes.use('*', authMiddleware);
 
 const SIGNER_ROLES = ['Employee', 'Manager', 'HR'];
+
+const ALLOWED_FIELD_TYPES = [
+  'text', 'signature', 'initials', 'date', 'datenow', 'image', 'file',
+  'checkbox', 'radio', 'select', 'multiple', 'payment', 'stamp', 'phone',
+  'verification', 'kba',
+];
+
+/**
+ * Validate and normalize signature field placement.
+ *
+ * DocuSeal only honours `areas` (never flat x/y/w/h) and its page is 0-based,
+ * while clients send a friendlier 1-based page. Doing the conversion in one place
+ * guarantees a document can never be created without usable fields.
+ */
+function normalizeSigningFields(
+  input: unknown
+): { fields: any[] } | { error: string } {
+  let parsed: any = input;
+
+  if (typeof input === 'string') {
+    if (!input.trim()) return { fields: [] };
+    try {
+      parsed = JSON.parse(input);
+    } catch {
+      return { error: 'Format fields tidak valid (harus JSON).' };
+    }
+  }
+
+  if (parsed === undefined || parsed === null) return { fields: [] };
+  if (!Array.isArray(parsed)) return { error: 'fields harus berupa array.' };
+
+  const fields: any[] = [];
+  for (let i = 0; i < parsed.length; i++) {
+    const field = parsed[i];
+    if (!field || typeof field !== 'object') return { error: `fields[${i}] tidak valid.` };
+
+    const type = String(field.type || '').toLowerCase();
+    if (!ALLOWED_FIELD_TYPES.includes(type)) {
+      return { error: `fields[${i}].type "${field.type}" tidak didukung.` };
+    }
+
+    const role = String(field.role || '').trim();
+    if (!SIGNER_ROLES.includes(role)) {
+      return { error: `fields[${i}].role harus salah satu dari: ${SIGNER_ROLES.join(', ')}.` };
+    }
+
+    // Already-normalized shape (areas) is accepted as-is.
+    if (Array.isArray(field.areas) && field.areas.length > 0) {
+      fields.push({ ...field, role, type });
+      continue;
+    }
+
+    const x = Number(field.x);
+    const y = Number(field.y);
+    const w = Number(field.w);
+    const h = Number(field.h);
+    const page = Number(field.page || 1);
+
+    if ([x, y, w, h].some((v) => !Number.isFinite(v) || v < 0 || v > 1)) {
+      return { error: `fields[${i}] koordinat harus 0..1.` };
+    }
+    if (w === 0 || h === 0) return { error: `fields[${i}] lebar/tinggi harus lebih dari 0.` };
+    if (!Number.isInteger(page) || page < 1) {
+      return { error: `fields[${i}].page harus bilangan bulat >= 1.` };
+    }
+
+    fields.push({
+      name: String(field.name || `${role} ${type}`),
+      type,
+      role,
+      required: field.required !== false,
+      ...(field.default_value !== undefined ? { default_value: String(field.default_value) } : {}),
+      areas: [{ x, y, w, h, page: page - 1 }],
+    });
+  }
+
+  return { fields };
+}
+
+
 
 interface SignerInput {
   role: string;
@@ -74,6 +154,84 @@ async function loadEmployee(db: D1Database, employeeId: string) {
     )
     .bind(employeeId)
     .first<any>();
+}
+
+/**
+ * Resolve a workflow's role list to real people for a given employee.
+ * Manager comes from the employee's manager_id; HR from the company record.
+ * A required role that cannot be resolved returns a `problem` message instead
+ * of being dropped, so a submission never silently loses a signer.
+ */
+async function resolveWorkflowSigners(
+  db: D1Database,
+  employee: any,
+  workflow: WorkflowDef
+): Promise<{ signers: SignerInput[]; problem?: string }> {
+  const company = await db.prepare(`SELECT name, legal_name, email FROM companies LIMIT 1`).first<any>();
+  const signers: SignerInput[] = [];
+
+  for (const definition of workflow.signers) {
+    let signer: SignerInput | null = null;
+
+    if (definition.resolve === 'employee') {
+      signer = {
+        role: definition.role,
+        email: String(employee.company_email || employee.personal_email || '').toLowerCase(),
+        name: employee.full_name,
+        employeeId: employee.id,
+      };
+    } else if (definition.resolve === 'manager') {
+      if (employee.manager_id) {
+        const manager = await loadEmployee(db, employee.manager_id);
+        if (manager) {
+          signer = {
+            role: definition.role,
+            email: String(manager.company_email || manager.personal_email || '').toLowerCase(),
+            name: manager.full_name,
+            employeeId: manager.id,
+          };
+        }
+      }
+    } else if (definition.resolve === 'company_hr') {
+      const email = String(company?.email || '').toLowerCase();
+      if (email) {
+        signer = {
+          role: definition.role,
+          email,
+          name: company?.legal_name || company?.name || 'HR',
+          employeeId: null,
+        };
+      }
+    }
+
+    const missingReason =
+      definition.resolve === 'manager'
+        ? 'atasan langsung belum diatur untuk karyawan ini'
+        : definition.resolve === 'company_hr'
+          ? 'email perusahaan belum diisi di Pengaturan Perusahaan'
+          : `email ${definition.role.toLowerCase()} belum diisi`;
+
+    if (!signer) {
+      if (definition.required) {
+        return { signers, problem: `Penandatangan ${definition.role} tidak dapat ditentukan: ${missingReason}.` };
+      }
+      continue;
+    }
+
+    if (!signer.email) {
+      if (definition.required) {
+        return {
+          signers,
+          problem: `Email penandatangan ${definition.role} belum diisi untuk ${signer.name}.`,
+        };
+      }
+      continue;
+    }
+
+    signers.push(signer);
+  }
+
+  return { signers };
 }
 
 async function loadRequestContext(db: D1Database, requestId: string) {
@@ -160,6 +318,10 @@ signingRoutes.post('/document-templates', async (c) => {
   const buffer = await file.arrayBuffer();
   const base64 = Buffer.from(buffer).toString('base64');
 
+  const normalized = normalizeSigningFields(form['fields']);
+  if ('error' in normalized) return badRequest(c, normalized.error);
+  const fields = normalized.fields;
+
   try {
     const template = await registerTemplate(c.env, {
       code,
@@ -167,6 +329,7 @@ signingRoutes.post('/document-templates', async (c) => {
       version,
       pdfBase64: isPdf ? base64 : undefined,
       docxBase64: isDocx ? base64 : undefined,
+      fields,
       effectiveFrom: (form['effective_from'] as string) || null,
       createdBy: user.userId,
     });
@@ -201,6 +364,118 @@ signingRoutes.post('/document-templates/:id/deactivate', async (c) => {
   }
 });
 
+// Update a template's metadata (name / active / retention / effective_from).
+// The underlying DocuSeal template and its version are immutable: legal content
+// must change through a new version, never by editing an existing one.
+signingRoutes.put('/document-templates/:id', async (c) => {
+  const user = c.get('user');
+  if (!canManageTemplates(user)) {
+    return c.json({ error: 'Forbidden: hanya Admin HR yang dapat mengubah template' }, 403);
+  }
+
+  const templateId = c.req.param('id');
+  const template = await c.env.DB.prepare(`SELECT * FROM hr_document_templates WHERE id = ?`)
+    .bind(templateId)
+    .first<any>();
+  if (!template) return badRequest(c, 'Template tidak ditemukan.', 404);
+
+  const body = await c.req.json().catch(() => null);
+  if (!body || typeof body !== 'object') return badRequest(c, 'Body JSON tidak valid.');
+
+  const name = body.name !== undefined ? String(body.name).trim() : null;
+  if (name !== null && !name) return badRequest(c, 'Nama template tidak boleh kosong.');
+
+  const active =
+    body.active === undefined ? null : body.active === true || body.active === 1 ? 1 : 0;
+
+  const retention =
+    body.retentionMonths === undefined ? null : Number(body.retentionMonths);
+  if (retention !== null && (!Number.isInteger(retention) || retention < 1)) {
+    return badRequest(c, 'retentionMonths harus bilangan bulat >= 1.');
+  }
+
+  const effectiveFrom =
+    body.effectiveFrom === undefined ? null : body.effectiveFrom ? String(body.effectiveFrom) : null;
+
+  await c.env.DB.prepare(
+    `UPDATE hr_document_templates SET
+       name = COALESCE(?, name),
+       active = COALESCE(?, active),
+       retention_months = COALESCE(?, retention_months),
+       effective_from = COALESCE(?, effective_from),
+       updated_at = CURRENT_TIMESTAMP
+     WHERE id = ?`
+  )
+    .bind(name, active, retention, effectiveFrom, templateId)
+    .run();
+
+  await audit(c.env.DB, user.userId, 'UPDATE_DOCUMENT_TEMPLATE', templateId, {
+    name,
+    active,
+    retentionMonths: retention,
+    effectiveFrom,
+  });
+
+  const updated = await c.env.DB.prepare(`SELECT * FROM hr_document_templates WHERE id = ?`)
+    .bind(templateId)
+    .first<any>();
+  return c.json({ template: updated });
+});
+
+// Delete a template version. Refused while any signing request still references it,
+// so evidence of what someone signed can never be orphaned.
+signingRoutes.delete('/document-templates/:id', async (c) => {
+  const user = c.get('user');
+  if (!canManageTemplates(user)) {
+    return c.json({ error: 'Forbidden: hanya Admin HR yang dapat menghapus template' }, 403);
+  }
+
+  const templateId = c.req.param('id');
+  const template = await c.env.DB.prepare(`SELECT * FROM hr_document_templates WHERE id = ?`)
+    .bind(templateId)
+    .first<any>();
+  if (!template) return badRequest(c, 'Template tidak ditemukan.', 404);
+
+  // Only unsigned, unfinished requests block deletion. A request that was never
+  // signed (no stored documents) is not evidence — it can be removed with the
+  // template instead of leaving the operator stuck with an undeletable version.
+  const blocking = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM signing_requests
+     WHERE template_id = ?
+       AND (status IN ('completed', 'partially_signed', 'declined', 'expired', 'archived')
+            OR EXISTS (SELECT 1 FROM signed_documents sd WHERE sd.signing_request_id = signing_requests.id))`
+  )
+    .bind(templateId)
+    .first<{ n: number }>();
+
+  if (Number(blocking?.n || 0) > 0) {
+    return c.json(
+      {
+        error: `Template masih dipakai oleh ${blocking?.n} pengajuan yang sudah diproses penandatangan. Nonaktifkan saja agar riwayat tetap utuh.`,
+      },
+      409
+    );
+  }
+
+  // Nothing was signed: remove the in-flight/draft requests with the template so
+  // no orphaned references are left behind.
+  await c.env.DB.batch([
+    c.env.DB.prepare(
+      `DELETE FROM signing_request_signers
+       WHERE signing_request_id IN (SELECT id FROM signing_requests WHERE template_id = ?)`
+    ).bind(templateId),
+    c.env.DB.prepare(`DELETE FROM signing_requests WHERE template_id = ?`).bind(templateId),
+    c.env.DB.prepare(`DELETE FROM hr_document_templates WHERE id = ?`).bind(templateId),
+  ]);
+
+  await audit(c.env.DB, user.userId, 'DELETE_DOCUMENT_TEMPLATE', templateId, {
+    code: template.code,
+    version: template.version,
+  });
+
+  return c.json({ message: 'Template berhasil dihapus.' });
+});
+
 /* ------------------------------------------------------------------ */
 /* Signing requests                                                    */
 /* ------------------------------------------------------------------ */
@@ -219,8 +494,13 @@ signingRoutes.post('/signing-requests', async (c) => {
   const templateCode = String(body.templateCode || '').trim();
   const templateVersion = body.templateVersion ? Number(body.templateVersion) : undefined;
 
+  // One-off document mode: this fork's DocuSeal "template" is really a single
+  // document, so a contract can be uploaded and sent directly for one employee
+  // without registering it in the reusable template registry.
+  const oneOff = body.document && typeof body.document === 'object' ? body.document : null;
+
   if (!employeeId) return badRequest(c, 'employeeId wajib diisi.');
-  if (!templateCode) return badRequest(c, 'templateCode wajib diisi.');
+  if (!oneOff && !templateCode) return badRequest(c, 'templateCode wajib diisi.');
 
   const employee = await loadEmployee(c.env.DB, employeeId);
   if (!employee) return badRequest(c, 'Karyawan tidak ditemukan.', 404);
@@ -230,7 +510,7 @@ signingRoutes.post('/signing-requests', async (c) => {
   }
 
   // Signers: explicit payload wins, otherwise derive from the workflow definition.
-  const workflow = getWorkflow(templateCode);
+  const workflow = getWorkflow(templateCode || body.document?.code);
   let signers: SignerInput[] = [];
 
   if (Array.isArray(body.signers) && body.signers.length > 0) {
@@ -241,22 +521,9 @@ signingRoutes.post('/signing-requests', async (c) => {
       employeeId: s.employeeId || null,
     }));
   } else if (workflow) {
-    signers = workflow.signers
-      .map((definition) => {
-        if (definition.resolve === 'employee') {
-          return {
-            role: definition.role,
-            email: String(employee.company_email || employee.personal_email || '').toLowerCase(),
-            name: employee.full_name,
-            employeeId: employee.id,
-          };
-        }
-        if (definition.resolve === 'company_hr') {
-          return null;
-        }
-        return null;
-      })
-      .filter(Boolean) as SignerInput[];
+    const resolution = await resolveWorkflowSigners(c.env.DB, employee, workflow);
+    if (resolution.problem) return badRequest(c, resolution.problem);
+    signers = resolution.signers;
   }
 
   if (signers.length === 0) {
@@ -291,12 +558,59 @@ signingRoutes.post('/signing-requests', async (c) => {
     }
   }
 
-  // Template must exist and be active; never auto-create.
-  let template;
-  try {
-    template = await resolveTemplate(c.env, templateCode, templateVersion);
-  } catch (err: any) {
-    return mapDocuSealError(c, err);
+  // Resolve the document to sign.
+  //  - Registered template: reused by code + version (registry mode).
+  //  - One-off document: uploaded here and used exactly once (this fork's
+  //    "template" is a single document, so no registry entry is created).
+  let template: { id: string | null; code: string | null; version: number | null; docuseal_template_id: string | null };
+  let documentName = templateCode;
+
+  if (oneOff) {
+    const pdfBase64 = String(oneOff.pdfBase64 || '').trim();
+    const docName = String(oneOff.name || '').trim();
+    if (!pdfBase64) return badRequest(c, 'Dokumen: pdfBase64 wajib diisi.');
+    if (!docName) return badRequest(c, 'Dokumen: name wajib diisi.');
+
+    const normalizedOff = normalizeSigningFields(oneOff.fields);
+    if ('error' in normalizedOff) return badRequest(c, normalizedOff.error);
+    const fields = normalizedOff.fields;
+    if (fields.length === 0) {
+      return badRequest(c, 'Dokumen: minimal satu field tanda tangan diperlukan.');
+    }
+
+    try {
+      const created = await createDocuSealClient(c.env).createTemplateFromPdf({
+        name: docName,
+        externalId: `oneoff-${employeeId}-${Date.now()}`,
+        pdfBase64,
+        fields,
+      });
+
+      if (!created?.id) return badRequest(c, 'DocuSeal tidak mengembalikan dokumen id.', 502);
+
+      template = {
+        id: null,
+        code: oneOff.code ? String(oneOff.code) : null,
+        version: null,
+        docuseal_template_id: String(created.id),
+      };
+      documentName = docName;
+    } catch (err: any) {
+      return mapDocuSealError(c, err);
+    }
+  } else {
+    try {
+      const resolved = await resolveTemplate(c.env, templateCode, templateVersion);
+      template = {
+        id: resolved.id,
+        code: resolved.code,
+        version: resolved.version,
+        docuseal_template_id: resolved.docuseal_template_id,
+      };
+      documentName = resolved.name;
+    } catch (err: any) {
+      return mapDocuSealError(c, err);
+    }
   }
 
   const requestId = `sr-${Date.now()}-${Math.random().toString(36).slice(2, 7)}`;
@@ -313,8 +627,8 @@ signingRoutes.post('/signing-requests', async (c) => {
       `INSERT INTO signing_requests (
          id, tenant_id, employee_id, template_id, template_code, template_version, workflow,
          docuseal_template_id, status, requested_by, due_at, external_reference,
-         idempotency_key, prefill_json, completed_redirect_url
-       ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?)`
+         idempotency_key, prefill_json, completed_redirect_url, document_name
+       ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'draft', ?, ?, ?, ?, ?, ?, ?)`
     )
       .bind(
         requestId,
@@ -329,7 +643,8 @@ signingRoutes.post('/signing-requests', async (c) => {
         body.externalReference || null,
         idempotencyKey,
         prefill ? JSON.stringify(prefill) : null,
-        completedRedirectUrl
+        completedRedirectUrl,
+        documentName
       )
       .run();
   } catch (err: any) {
@@ -445,7 +760,7 @@ signingRoutes.post('/signing-requests', async (c) => {
         for (const signer of ctx.signers) {
           const content = getSigningRequestEmail({
             signerName: signer.name,
-            documentName: template.name,
+            documentName,
             employeeName: ctx.employee?.full_name || employeeId,
             requestedBy: user.name,
             signingUrl: signer.signing_url || completedRedirectUrl,
@@ -454,7 +769,7 @@ signingRoutes.post('/signing-requests', async (c) => {
           });
           await sendEmail(c.env, {
             to: signer.email,
-            subject: `Tanda tangan diminta: ${template.name}`,
+            subject: `Tanda tangan diminta: ${documentName}`,
             text: content.text,
             html: content.html,
             type: 'signing_request',
@@ -473,6 +788,7 @@ function buildRequestResponse(request: any, signers: any[]) {
     docusealSubmissionId: request.docuseal_submission_id ? Number(request.docuseal_submission_id) || request.docuseal_submission_id : null,
     status: request.status,
     employeeId: request.employee_id,
+    documentName: request.document_name,
     templateCode: request.template_code,
     templateVersion: request.template_version,
     dueAt: request.due_at,
@@ -514,7 +830,10 @@ signingRoutes.get('/signing-requests', async (c) => {
     where.push(`COALESCE(sr.workflow, '') NOT IN ('pip_warning', 'salary_change')`);
   }
 
-  const sql = `SELECT sr.*, e.full_name AS employee_name, e.nik AS employee_nik
+  const sql = `SELECT sr.*, e.full_name AS employee_name, e.nik AS employee_nik,
+                      (SELECT COUNT(*) FROM signing_request_signers s WHERE s.signing_request_id = sr.id) AS signer_total,
+                      (SELECT COUNT(*) FROM signing_request_signers s WHERE s.signing_request_id = sr.id AND s.status = 'completed') AS signer_signed,
+                      (SELECT COUNT(*) FROM signed_documents d WHERE d.signing_request_id = sr.id) AS document_count
                FROM signing_requests sr
                LEFT JOIN employees e ON sr.employee_id = e.id
                ${where.length ? `WHERE ${where.join(' AND ')}` : ''}
@@ -559,6 +878,48 @@ signingRoutes.get('/signing-requests/:id', async (c) => {
       createdAt: doc.created_at,
       downloadedAt: doc.downloaded_at,
     })),
+  });
+});
+
+signingRoutes.post('/signing-requests/preview-signers', async (c) => {
+  const user = c.get('user');
+
+  if (!canCreateSigningRequests(user)) {
+    return c.json({ error: 'Forbidden: Anda tidak dapat membuat pengajuan tanda tangan' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => null);
+  if (!body) return badRequest(c, 'Body JSON tidak valid.');
+
+  const employeeId = String(body.employeeId || '').trim();
+  const code = String(body.templateCode || body.document?.code || '').trim();
+  if (!employeeId) return badRequest(c, 'employeeId wajib diisi.');
+
+  const employee = await loadEmployee(c.env.DB, employeeId);
+  if (!employee) return badRequest(c, 'Karyawan tidak ditemukan.', 404);
+  if (!canCreateRequestFor(user, employee)) {
+    return c.json({ error: 'Forbidden: Anda hanya dapat membuat pengajuan untuk bawahan langsung Anda' }, 403);
+  }
+
+  const workflow = getWorkflow(code);
+  if (!workflow) return badRequest(c, `Jenis dokumen "${code}" tidak dikenal.`);
+
+  const resolution = await resolveWorkflowSigners(c.env.DB, employee, workflow);
+
+  return c.json({
+    employeeId,
+    templateCode: workflow.code,
+    signers: workflow.signers.map((definition) => {
+      const matched = resolution.signers.find((signer) => signer.role === definition.role);
+      return {
+        role: definition.role,
+        required: definition.required,
+        resolved: Boolean(matched),
+        name: matched?.name ?? null,
+        email: matched?.email ?? null,
+      };
+    }),
+    problem: resolution.problem ?? null,
   });
 });
 
@@ -626,6 +987,52 @@ signingRoutes.post('/signing-requests/:id/supersede', async (c) => {
 
   await audit(c.env.DB, user.userId, 'SUPERSEDE_SIGNING_REQUEST', ctx.request.id, { new_request_id: newRequestId, reason });
   return c.json({ message: 'Pengajuan lama ditandai digantikan.' });
+});
+
+// Delete a signing request.
+// Only drafts and failed requests (nothing ever sent to a signer) may be deleted.
+// Anything that reached a signer is retained as evidence — use supersede instead.
+signingRoutes.delete('/signing-requests/:id', async (c) => {
+  const user = c.get('user');
+  if (!isHrOperator(user)) return c.json({ error: 'Forbidden' }, 403);
+
+  const ctx = await loadRequestContext(c.env.DB, c.req.param('id'));
+  if (!ctx.request) return badRequest(c, 'Pengajuan tanda tangan tidak ditemukan.', 404);
+
+  // A request that was never signed is not evidence: drafts, failures and any
+  // request with no stored document may be removed. Once a signed document or an
+  // audit trail exists, supersede instead so the record survives.
+  const signedDoc = await c.env.DB.prepare(
+    `SELECT COUNT(*) AS n FROM signed_documents WHERE signing_request_id = ?`
+  )
+    .bind(ctx.request.id)
+    .first<{ n: number }>();
+
+  const hasEvidence =
+    Number(signedDoc?.n || 0) > 0 ||
+    ['completed', 'partially_signed'].includes(ctx.request.status);
+
+  if (hasEvidence) {
+    return c.json(
+      {
+        error: `Pengajuan berstatus "${ctx.request.status}" sudah memiliki dokumen/bukti tanda tangan, jadi tidak dapat dihapus. Gunakan "Gantikan" agar riwayatnya tetap utuh.`,
+      },
+      409
+    );
+  }
+
+  await c.env.DB.batch([
+    c.env.DB.prepare(`DELETE FROM signed_documents WHERE signing_request_id = ?`).bind(ctx.request.id),
+    c.env.DB.prepare(`DELETE FROM signing_request_signers WHERE signing_request_id = ?`).bind(ctx.request.id),
+    c.env.DB.prepare(`DELETE FROM signing_requests WHERE id = ?`).bind(ctx.request.id),
+  ]);
+
+  await audit(c.env.DB, user.userId, 'DELETE_SIGNING_REQUEST', ctx.request.id, {
+    template_code: ctx.request.template_code,
+    status: ctx.request.status,
+  });
+
+  return c.json({ message: 'Pengajuan tanda tangan berhasil dihapus.' });
 });
 
 /* ------------------------------------------------------------------ */

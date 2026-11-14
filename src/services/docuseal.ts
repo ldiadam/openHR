@@ -43,12 +43,13 @@ export interface DocuSealField {
   role?: string;
   required?: boolean;
   default_value?: string;
-  // PDF coordinate placement (normalized 0..1, origin top-left, 1-based page)
-  x?: number;
-  y?: number;
-  w?: number;
-  h?: number;
-  page?: number;
+  /**
+   * Placement. DocuSeal expects a list of `areas`:
+   *   x/y/w/h normalized 0..1 (origin top-left), page is 0-BASED.
+   * Sending flat x/y/w/h is silently ignored and the template ends up with no
+   * fields (submitter falls back to "First Party"), so this is the only shape we send.
+   */
+  areas?: Array<{ x: number; y: number; w: number; h: number; page?: number }>;
   options?: string[];
   [key: string]: unknown;
 }
@@ -98,10 +99,13 @@ export interface DocuSealSubmitterResult {
   name?: string;
   role?: string;
   status?: string;
+  /** Present in this fork's createSubmission response (bare-array shape). */
+  submission_id?: number | string;
   embed_src?: string;
   signing_url?: string;
   declined_at?: string | null;
   completed_at?: string | null;
+  fields?: unknown[];
   [key: string]: unknown;
 }
 
@@ -266,7 +270,7 @@ export function createDocuSealClient(env: Bindings): DocuSealClient {
         throw new DocuSealError(400, 'Minimal satu penandatangan diperlukan.');
       }
 
-      return request('POST', '/api/submissions', {
+      const raw = await request<any>('POST', '/api/submissions', {
         template_id: input.templateId,
         send_email: input.sendEmail !== false,
         order: input.order || 'preserved',
@@ -283,6 +287,20 @@ export function createDocuSealClient(env: Bindings): DocuSealClient {
           completed_redirect_url: submitter.completed_redirect_url,
         })),
       });
+
+      // This fork returns a BARE ARRAY of submitters (not { id, submitters }).
+      // Normalise so callers always get { id, submitters } and, critically, a real
+      // submission id — reading `.id` off the array silently stored null before.
+      if (Array.isArray(raw)) {
+        const submitters = raw as DocuSealSubmitterResult[];
+        const submissionId = submitters.find((s) => s?.submission_id !== undefined)?.submission_id;
+        if (submissionId === undefined || submissionId === null) {
+          throw new DocuSealError(502, 'DocuSeal tidak mengembalikan submission id.', raw);
+        }
+        return { id: submissionId, status: 'pending', submitters };
+      }
+
+      return raw as DocuSealSubmissionResult;
     },
 
     async getSubmission(submissionId) {
