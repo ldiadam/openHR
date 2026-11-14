@@ -3,6 +3,7 @@ import {
   PenLine,
   Plus,
   ChevronDown,
+  ChevronRight,
   X,
   RefreshCw,
   FileText,
@@ -73,22 +74,68 @@ const SIGNER_STATUS_LABELS: Record<string, { id: string; en: string }> = {
 const OPEN_STATUSES = ['draft', 'sent', 'partially_signed', 'failed'];
 const CLOSED_STATUSES = ['completed', 'declined', 'expired', 'archived', 'superseded'];
 
-/** A signer is whoever the operator names — employee or external guest. */
+/** A signer is picked from the directory, or typed in for an outsider. */
 interface SignerRow {
   id: string;
   role: string;
+  /** directory = chosen from employees, guest = typed by hand. */
+  kind: 'directory' | 'guest';
+  employeeId?: string;
   name: string;
   email: string;
-  /** True while the role is being typed instead of picked from the list. */
-  customRole?: boolean;
 }
 
 const ROLE_OPTIONS = ['Employee', 'Manager', 'HR', 'Guest', 'Witness'];
 
+/** The request flow is asked one question at a time. */
+const WIZARD_STEPS = [
+  {
+    id: 'Siapa yang menandatangani?',
+    en: 'Who needs to sign?',
+    shortId: 'Penandatangan',
+    shortEn: 'Signers',
+  },
+  {
+    id: 'Dokumen apa yang perlu ditandatangani?',
+    en: 'Which document needs signing?',
+    shortId: 'Dokumen',
+    shortEn: 'Document',
+  },
+  {
+    id: 'Di mana tanda tangannya?',
+    en: 'Where do the signatures go?',
+    shortId: 'Penempatan',
+    shortEn: 'Placement',
+  },
+  {
+    id: 'Periksa dan kirim',
+    en: 'Review and send',
+    shortId: 'Kirim',
+    shortEn: 'Send',
+  },
+] as const;
+
+const ROLE_DESCRIPTIONS: Record<string, { id: string; en: string }> = {
+  Employee: { id: 'Karyawan yang menerima dokumen', en: 'The employee this document is for' },
+  Manager: { id: 'Atasan langsung', en: 'Their direct manager' },
+  HR: { id: 'Tim HR perusahaan', en: 'Company HR' },
+  Guest: { id: 'Orang di luar perusahaan', en: 'Someone outside the company' },
+  Witness: { id: 'Saksi', en: 'A witness' },
+};
+
+/** Which directory members make sense for a role. */
+function matchesRole(emp: any, role: string): boolean {
+  const key = role.trim().toLowerCase();
+  if (key === 'manager') return emp.user_role === 'manager';
+  if (key === 'hr') return emp.user_role === 'owner_admin' || emp.user_role === 'finance';
+  return true;
+}
+
 let signerSeq = 0;
-const emptySigner = (role: string): SignerRow => ({
+const emptySigner = (role: string, kind: 'directory' | 'guest' = 'directory'): SignerRow => ({
   id: `signer-${++signerSeq}`,
   role,
+  kind,
   name: '',
   email: '',
 });
@@ -108,6 +155,110 @@ const formatBytes = (bytes: number) => {
   if (bytes < 1024) return `${bytes} B`;
   if (bytes < 1024 * 1024) return `${Math.round(bytes / 1024)} KB`;
   return `${(bytes / 1024 / 1024).toFixed(1)} MB`;
+};
+
+/**
+ * One signer. A role picks people from the directory — choosing "Manager"
+ * lists managers, "HR" lists HR — and only Guest/Witness ask for a typed email.
+ */
+const SignerCard: React.FC<{
+  signer: SignerRow;
+  employees: any[];
+  canRemove: boolean;
+  tr: (id: string, en: string) => string;
+  onChangeRole: (role: string) => void;
+  onPickEmployee: (employeeId: string) => void;
+  onSetGuest: () => void;
+  onPatch: (patch: Partial<SignerRow>) => void;
+  onRemove: () => void;
+}> = ({ signer, employees, canRemove, tr, onChangeRole, onPickEmployee, onSetGuest, onPatch, onRemove }) => {
+  const candidates = employees.filter((emp) => matchesRole(emp, signer.role));
+  const description = ROLE_DESCRIPTIONS[signer.role];
+
+  return (
+    <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+      <div className="flex items-center gap-1.5">
+        <select
+          value={signer.role}
+          onChange={(event) => onChangeRole(event.target.value)}
+          className="rounded-lg border border-slate-200 bg-slate-50 px-2 py-1 text-[11px] font-bold text-slate-700 focus:border-blue-500 focus:outline-none"
+        >
+          {ROLE_OPTIONS.map((role) => (
+            <option key={role} value={role}>
+              {role}
+            </option>
+          ))}
+        </select>
+
+        {/* Directory members are picked; outsiders are typed. */}
+        {signer.kind === 'directory' ? (
+          <select
+            value={signer.employeeId || ''}
+            onChange={(event) => onPickEmployee(event.target.value)}
+            className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium text-slate-700 focus:border-blue-500 focus:outline-none"
+          >
+            <option value="">
+              {candidates.length > 0
+                ? tr('Pilih orang…', 'Choose a person…')
+                : tr('Tidak ada kandidat', 'No candidates')}
+            </option>
+            {candidates.map((emp) => (
+              <option key={emp.id} value={emp.id}>
+                {emp.full_name}
+                {emp.job_title ? ` · ${emp.job_title}` : ''}
+              </option>
+            ))}
+          </select>
+        ) : (
+          <input
+            value={signer.name}
+            onChange={(event) => onPatch({ name: event.target.value })}
+            placeholder={tr('Nama lengkap', 'Full name')}
+            className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] font-medium focus:border-blue-500 focus:outline-none"
+          />
+        )}
+
+        {canRemove && (
+          <button
+            type="button"
+            onClick={onRemove}
+            className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+            aria-label={tr('Hapus penandatangan', 'Remove signer')}
+          >
+            <Trash2 size={12} />
+          </button>
+        )}
+      </div>
+
+      {signer.kind === 'directory' ? (
+        <div className="mt-1 flex items-center gap-1.5 pl-1">
+          <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">
+            {signer.email || (description ? tr(description.id, description.en) : '')}
+          </span>
+          <button
+            type="button"
+            onClick={onSetGuest}
+            className="shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold text-blue-600 hover:bg-blue-50"
+          >
+            {tr('Bukan karyawan?', 'Not an employee?')}
+          </button>
+        </div>
+      ) : (
+        <div className="mt-1.5 flex items-center gap-1.5">
+          <input
+            type="email"
+            value={signer.email}
+            onChange={(event) => onPatch({ email: event.target.value })}
+            placeholder={tr('email@contoh.com', 'email@example.com')}
+            className="min-w-0 flex-1 rounded-lg border border-slate-200 px-2 py-1 text-[11px] focus:border-blue-500 focus:outline-none"
+          />
+          <span className="shrink-0 rounded bg-amber-100 px-1.5 py-0.5 text-[9px] font-bold text-amber-700">
+            {tr('Tamu', 'Guest')}
+          </span>
+        </div>
+      )}
+    </div>
+  );
 };
 
 export const HRDocuments: React.FC = () => {
@@ -144,8 +295,11 @@ export const HRDocuments: React.FC = () => {
     fields: [],
   });
 
-  // Signers are free-form: an employee from the directory, or any guest email.
+  // Signers are picked from the directory, or typed in for an outsider.
   const [signers, setSigners] = useState<SignerRow[]>(() => [emptySigner('Employee')]);
+
+  /** Wizard position: 0 people, 1 document, 2 placement, 3 review. */
+  const [step, setStep] = useState(0);
 
   useLockBodyScroll(showCreate || Boolean(detail) || Boolean(signingFrame));
 
@@ -247,6 +401,7 @@ export const HRDocuments: React.FC = () => {
     setPrefill('');
     setOneOff({ file: null, base64: '', name: '', fields: [] });
     setSigners([emptySigner('Employee')]);
+    setStep(0);
   }, []);
 
   const openCreate = () => {
@@ -256,6 +411,7 @@ export const HRDocuments: React.FC = () => {
     setSendEmail(true);
     setFormError(null);
     setSigners([emptySigner('Employee')]);
+    setStep(0);
     setShowCreate(true);
   };
 
@@ -280,8 +436,7 @@ export const HRDocuments: React.FC = () => {
     return () => window.removeEventListener('keydown', onKey);
   }, [showCreate, detail, signingFrame, closeCreate, closeSigningFrame]);
 
-  // Picking an employee prefills the first signer row with them. Everything else
-  // is typed in by hand, so a guest outside the directory signs just as easily.
+  // Picking the document's employee fills the Employee signer with them.
   useEffect(() => {
     if (!employeeId) return;
     const employee = employees.find((e) => e.id === employeeId);
@@ -289,9 +444,12 @@ export const HRDocuments: React.FC = () => {
     setSigners((prev) => {
       const next = [...prev];
       if (next.length === 0) next.push(emptySigner('Employee'));
+      // Only the row that is meant to hold the employee gets overwritten.
       next[0] = {
         ...next[0],
         role: next[0].role || 'Employee',
+        kind: 'directory',
+        employeeId: employee.id,
         name: employee.full_name || '',
         email: employee.company_email || employee.personal_email || '',
       };
@@ -318,10 +476,65 @@ export const HRDocuments: React.FC = () => {
     }
   };
 
+  /** The obvious person for a role, so the operator rarely has to pick twice. */
+  const preferredForRole = useCallback(
+    (role: string): any | undefined => {
+      if (role.trim().toLowerCase() === 'guest') return undefined;
+      const candidates = employees.filter((emp) => matchesRole(emp, role));
+      const owner = employees.find((e) => e.id === employeeId);
+      if (role.toLowerCase() === 'manager' && owner?.manager_id) {
+        const manager = candidates.find((emp) => emp.id === owner.manager_id);
+        if (manager) return manager;
+      }
+      return candidates.length === 1 ? candidates[0] : undefined;
+    },
+    [employees, employeeId]
+  );
+
   const addSigner = () => {
     const used = new Set(signers.map((s) => s.role.trim().toLowerCase()));
-    const suggestion = ROLE_OPTIONS.find((role) => !used.has(role.toLowerCase())) || 'Guest';
-    setSigners((prev) => [...prev, emptySigner(suggestion)]);
+    const role = ROLE_OPTIONS.find((r) => !used.has(r.toLowerCase())) || 'Witness';
+    const preferred = preferredForRole(role);
+    setSigners((prev) => [
+      ...prev,
+      {
+        ...emptySigner(role, role.toLowerCase() === 'guest' ? 'guest' : 'directory'),
+        employeeId: preferred?.id,
+        name: preferred?.full_name || '',
+        email: preferred?.company_email || preferred?.personal_email || '',
+      },
+    ]);
+  };
+
+  /** Choosing a role switches the row between directory picking and free text. */
+  const changeSignerRole = (index: number, role: string) => {
+    if (role.trim().toLowerCase() === 'guest') {
+      updateSigner(index, { role, kind: 'guest', employeeId: undefined, name: '', email: '' });
+      return;
+    }
+
+    const preferred = preferredForRole(role);
+    updateSigner(index, {
+      role,
+      kind: 'directory',
+      employeeId: preferred?.id,
+      name: preferred?.full_name || '',
+      email: preferred?.company_email || preferred?.personal_email || '',
+    });
+  };
+
+  /** Picking someone from the directory fills the row from their record. */
+  const pickDirectoryEmployee = (index: number, employeeId: string) => {
+    const employee = employees.find((e) => e.id === employeeId);
+    if (!employee) {
+      updateSigner(index, { employeeId: undefined, name: '', email: '' });
+      return;
+    }
+    updateSigner(index, {
+      employeeId: employee.id,
+      name: employee.full_name || '',
+      email: employee.company_email || employee.personal_email || '',
+    });
   };
 
   const removeSigner = (index: number) => {
@@ -395,6 +608,56 @@ export const HRDocuments: React.FC = () => {
     duplicateRoles.length === 0 &&
     rolesMissingFields.length === 0 &&
     !submitting;
+
+  /** What still blocks leaving each step, shown instead of a dead button. */
+  const stepProblems = useMemo(() => {
+    const people: string[] = [];
+    if (!employeeId) people.push(tr('Pilih karyawan pemilik dokumen.', 'Choose the employee this is for.'));
+    if (incompleteSigners.length > 0) {
+      people.push(
+        tr(
+          'Lengkapi nama dan email setiap penandatangan.',
+          'Complete every signer’s name and email.'
+        )
+      );
+    }
+    if (duplicateRoles.length > 0) {
+      people.push(
+        tr(`Peran duplikat: ${duplicateRoles.join(', ')}.`, `Duplicate roles: ${duplicateRoles.join(', ')}.`)
+      );
+    }
+
+    const document: string[] = [];
+    if (!oneOff.base64) document.push(tr('Unggah file PDF.', 'Upload a PDF file.'));
+
+    const placement: string[] = [];
+    if (oneOff.base64 && rolesMissingFields.length > 0) {
+      placement.push(
+        tr(
+          `Belum ada field untuk: ${rolesMissingFields.join(', ')}.`,
+          `No field yet for: ${rolesMissingFields.join(', ')}.`
+        )
+      );
+    }
+
+    return [people, document, placement, []];
+  }, [employeeId, incompleteSigners, duplicateRoles, oneOff.base64, rolesMissingFields, tr]);
+
+  const canAdvance = stepProblems[step].length === 0;
+
+  const goNext = () => {
+    if (!canAdvance) {
+      setFormError(stepProblems[step][0]);
+      return;
+    }
+    setFormError(null);
+    setStep((s) => Math.min(WIZARD_STEPS.length - 1, s + 1));
+  };
+
+  const goBack = () => {
+    setFormError(null);
+    setStep((s) => Math.max(0, s - 1));
+  };
 
   const handleCreate = async (event: React.FormEvent) => {
     event.preventDefault();
@@ -817,9 +1080,8 @@ export const HRDocuments: React.FC = () => {
         )}
       </div>
 
-      {/* CREATE REQUEST MODAL — two panes: metadata on the left, the document
-          and field placer on the right. The placer needs real width, so this
-          dialog is deliberately wide and becomes a bottom sheet on phones. */}
+      {/* CREATE REQUEST WIZARD — one question per step, so nothing has to be
+          understood all at once. Opens wide because step 3 needs the page. */}
       {showCreate && (
         <div
           className="fixed inset-0 z-[60] flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] sm:items-center sm:p-4"
@@ -828,22 +1090,24 @@ export const HRDocuments: React.FC = () => {
           }}
         >
           <div
-            className="flex max-h-[94vh] w-full max-w-5xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl"
+            className="flex max-h-[94vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:max-h-[92vh] sm:rounded-3xl"
             role="dialog"
             aria-modal="true"
             aria-label={tr('Minta Tanda Tangan', 'Request Signature')}
           >
-            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 p-5">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-200 px-5 py-4">
               <div className="flex items-center gap-3">
                 <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
                   <PenLine size={18} />
                 </div>
                 <div>
-                  <h3 className="text-base font-bold text-slate-900">{tr('Minta Tanda Tangan', 'Request Signature')}</h3>
+                  <h3 className="text-base font-bold text-slate-900">
+                    {tr(WIZARD_STEPS[step].id, WIZARD_STEPS[step].en)}
+                  </h3>
                   <p className="text-[11px] text-slate-500">
                     {tr(
-                      'Pilih penerima, unggah dokumen, lalu letakkan tanda tangan.',
-                      'Pick the recipient, upload the document, then place the signatures.'
+                      `Langkah ${step + 1} dari ${WIZARD_STEPS.length}`,
+                      `Step ${step + 1} of ${WIZARD_STEPS.length}`
                     )}
                   </p>
                 </div>
@@ -857,14 +1121,54 @@ export const HRDocuments: React.FC = () => {
               </button>
             </div>
 
+            {/* Progress rail — clickable back to any step already reached. */}
+            <div className="flex shrink-0 items-center gap-1 px-5 py-2.5">
+              {WIZARD_STEPS.map((item, index) => (
+                <button
+                  key={item.en}
+                  type="button"
+                  onClick={() => {
+                    if (index <= step) setStep(index);
+                  }}
+                  disabled={index > step}
+                  className={`group flex flex-1 items-center gap-1.5 ${
+                    index <= step ? 'cursor-pointer' : 'cursor-default'
+                  }`}
+                >
+                  <span
+                    className={`flex h-5 w-5 shrink-0 items-center justify-center rounded-full text-[9px] font-black transition ${
+                      index === step
+                        ? 'bg-slate-900 text-white'
+                        : index < step
+                          ? 'bg-emerald-500 text-white'
+                          : 'bg-slate-200 text-slate-500'
+                    }`}
+                  >
+                    {index < step ? <Check size={10} /> : index + 1}
+                  </span>
+                  <span
+                    className={`hidden truncate text-[10px] font-bold sm:block ${
+                      index === step ? 'text-slate-900' : 'text-slate-400'
+                    }`}
+                  >
+                    {tr(item.shortId, item.shortEn)}
+                  </span>
+                  {index < WIZARD_STEPS.length - 1 && (
+                    <span className="h-px flex-1 bg-slate-200" />
+                  )}
+                </button>
+              ))}
+            </div>
+
             <form onSubmit={handleCreate} className="flex min-h-0 flex-1 flex-col">
-              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain">
-                <div className="grid gap-5 p-5 md:grid-cols-[minmax(0,20rem)_minmax(0,1fr)]">
-                  {/* LEFT — metadata */}
+              <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain px-5 py-4">
+                {/* STEP 1 — who signs */}
+                {step === 0 && (
                   <div className="space-y-4 text-xs">
                     <div>
                       <label className="mb-1 block font-semibold text-slate-700">
-                        {tr('Karyawan', 'Employee')} <span className="text-rose-500">*</span>
+                        {tr('Dokumen ini untuk siapa?', 'Who is this document for?')}{' '}
+                        <span className="text-rose-500">*</span>
                       </label>
                       <select
                         required
@@ -882,143 +1186,42 @@ export const HRDocuments: React.FC = () => {
                     </div>
 
                     <div>
-                      <label className="mb-1 block font-semibold text-slate-700">
-                        {tr('Jenis Dokumen', 'Document Type')} <span className="text-rose-500">*</span>
-                      </label>
-                      <select
-                        value={templateCode}
-                        onChange={(e) => setTemplateCode(e.target.value)}
-                        className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      >
-                        {WORKFLOW_OPTIONS.map((option) => (
-                          <option key={option.code} value={option.code}>
-                            {tr(option.id, option.en)}
-                          </option>
-                        ))}
-                      </select>
-                      <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
-                        {tr(
-                          'Anda dapat menambah karyawan atau tamu dari luar perusahaan.',
-                          'Add employees, or guests from outside the company.'
-                        )}
-                      </p>
-                    </div>
-
-                    {/* Signers — free-form: an employee or any guest email. */}
-                    <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-2 flex items-center justify-between gap-2">
-                        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                          <Users size={12} /> {tr('Penandatangan', 'Signers')}
-                        </div>
+                      <div className="mb-1.5 flex items-center justify-between gap-2">
+                        <span className="font-semibold text-slate-700">
+                          {tr('Siapa saja yang menandatangani?', 'Who has to sign?')}
+                        </span>
                         <button
                           type="button"
                           onClick={addSigner}
-                          className="inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[10px] font-bold text-blue-700 shadow-sm transition hover:bg-blue-50"
+                          className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"
                         >
                           <Plus size={11} /> {tr('Tambah', 'Add')}
                         </button>
                       </div>
 
-                      <div className="space-y-1.5">
-                        {signers.map((signer, index) => {
-                          const employeeEmail = String(
-                            employees.find((e) => e.id === employeeId)?.company_email ||
-                              employees.find((e) => e.id === employeeId)?.personal_email ||
-                              ''
-                          ).toLowerCase();
-                          const isEmployee =
-                            signer.email.trim() !== '' &&
-                            signer.email.trim().toLowerCase() === employeeEmail;
-                          // A role outside the preset list is edited as free text.
-                          const isCustomRole = signer.customRole || !ROLE_OPTIONS.includes(signer.role);
+                      <div className="space-y-2">
+                        {signers.map((signer, index) => (
+                          <SignerCard
+                            key={signer.id}
+                            signer={signer}
+                            employees={employees}
+                            canRemove={signers.length > 1}
+                            tr={tr}
+                            onChangeRole={(role) => changeSignerRole(index, role)}
+                            onPickEmployee={(id) => pickDirectoryEmployee(index, id)}
+                            onSetGuest={() =>
+                              updateSigner(index, { kind: 'guest', employeeId: undefined, name: '', email: '' })
+                            }
+                            onPatch={(patch) => updateSigner(index, patch)}
+                            onRemove={() => removeSigner(index)}
+                          />
+                        ))}
 
-                          return (
-                            <div
-                              key={signer.id}
-                              className="rounded-lg border border-slate-200 bg-white p-2"
-                            >
-                              <div className="flex items-center gap-1.5">
-                                <span
-                                  className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold ${
-                                    isEmployee
-                                      ? 'bg-blue-100 text-blue-700'
-                                      : 'bg-amber-100 text-amber-700'
-                                  }`}
-                                >
-                                  {isEmployee ? tr('Karyawan', 'Employee') : tr('Tamu', 'Guest')}
-                                </span>
-                                {isCustomRole ? (
-                                  <>
-                                    <input
-                                      autoFocus
-                                      value={signer.role}
-                                      onChange={(e) => updateSigner(index, { role: e.target.value })}
-                                      placeholder={tr('Peran khusus', 'Custom role')}
-                                      className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 focus:border-blue-500 focus:outline-none"
-                                    />
-                                    <button
-                                      type="button"
-                                      onClick={() => updateSigner(index, { role: 'Employee', customRole: false })}
-                                      className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                                      title={tr('Kembali ke daftar peran', 'Back to the role list')}
-                                    >
-                                      <ChevronDown size={12} />
-                                    </button>
-                                  </>
-                                ) : (
-                                  <select
-                                    value={signer.role}
-                                    onChange={(e) => {
-                                      const value = e.target.value;
-                                      // Keep the current role until the first keystroke
-                                      // replaces it, so placed fields are not orphaned.
-                                      if (value === '__custom__') {
-                                        updateSigner(index, { customRole: true });
-                                      } else {
-                                        updateSigner(index, { role: value, customRole: false });
-                                      }
-                                    }}
-                                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 focus:border-blue-500 focus:outline-none"
-                                  >
-                                    {ROLE_OPTIONS.map((role) => (
-                                      <option key={role} value={role}>
-                                        {role}
-                                      </option>
-                                    ))}
-                                    <option value="__custom__">
-                                      {tr('+ Peran lain…', '+ Other role…')}
-                                    </option>
-                                  </select>
-                                )}
-                                {signers.length > 1 && (
-                                  <button
-                                    type="button"
-                                    onClick={() => removeSigner(index)}
-                                    className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                                    aria-label={tr('Hapus penandatangan', 'Remove signer')}
-                                  >
-                                    <Trash2 size={12} />
-                                  </button>
-                                )}
-                              </div>
-                              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
-                                <input
-                                  value={signer.name}
-                                  onChange={(e) => updateSigner(index, { name: e.target.value })}
-                                  placeholder={tr('Nama lengkap', 'Full name')}
-                                  className="min-w-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium focus:border-blue-500 focus:outline-none"
-                                />
-                                <input
-                                  type="email"
-                                  value={signer.email}
-                                  onChange={(e) => updateSigner(index, { email: e.target.value })}
-                                  placeholder={tr('email@contoh.com', 'email@example.com')}
-                                  className="min-w-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] focus:border-blue-500 focus:outline-none"
-                                />
-                              </div>
-                            </div>
-                          );
-                        })}
+                        <datalist id="signer-role-options">
+                          {ROLE_OPTIONS.map((role) => (
+                            <option key={role} value={role} />
+                          ))}
+                        </datalist>
 
                         {duplicateRoles.length > 0 && (
                           <p className="flex items-start gap-1.5 text-[10px] font-medium leading-relaxed text-rose-600">
@@ -1031,59 +1234,29 @@ export const HRDocuments: React.FC = () => {
                         )}
                       </div>
                     </div>
+                  </div>
+                )}
 
+                {/* STEP 2 — what is being signed */}
+                {step === 1 && (
+                  <div className="space-y-4 text-xs">
                     <div>
-                      <label className="mb-1 block font-semibold text-slate-700">{tr('Batas Waktu', 'Due Date')}</label>
-                      <input
-                        type="date"
-                        value={dueAt}
-                        onChange={(e) => setDueAt(e.target.value)}
+                      <label className="mb-1 block font-semibold text-slate-700">
+                        {tr('Jenis Dokumen', 'Document Type')}
+                      </label>
+                      <select
+                        value={templateCode}
+                        onChange={(e) => setTemplateCode(e.target.value)}
                         className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
-                      />
+                      >
+                        {WORKFLOW_OPTIONS.map((option) => (
+                          <option key={option.code} value={option.code}>
+                            {tr(option.id, option.en)}
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
-                    <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 p-2.5">
-                      <input
-                        type="checkbox"
-                        checked={sendEmail}
-                        onChange={(e) => setSendEmail(e.target.checked)}
-                        className="mt-0.5"
-                      />
-                      <span>
-                        <span className="block font-semibold text-slate-700">
-                          {tr('Kirim email tanda tangan', 'Send signing emails')}
-                        </span>
-                        <span className="block text-[10px] text-slate-500">
-                          {tr(
-                            'Penandatangan menerima tautan dari email openHR.',
-                            'Signers receive the link from openHR email.'
-                          )}
-                        </span>
-                      </span>
-                    </label>
-
-                    <details className="rounded-xl border border-slate-200 p-2.5">
-                      <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">
-                        {tr('Isian otomatis (opsional)', 'Prefill values (optional)')}
-                      </summary>
-                      <textarea
-                        rows={3}
-                        value={prefill}
-                        onChange={(e) => setPrefill(e.target.value)}
-                        placeholder='{"Position":"Engineer","Start Date":"2026-12-01"}'
-                        className="mt-2 w-full rounded-lg border border-slate-300 p-2 font-mono text-[10px]"
-                      />
-                      <p className="mt-1 text-[10px] text-slate-500">
-                        {tr(
-                          'Pasangan nama field dan nilai dalam format JSON.',
-                          'Field name and value pairs in JSON format.'
-                        )}
-                      </p>
-                    </details>
-                  </div>
-
-                  {/* RIGHT — document and placement */}
-                  <div className="min-w-0 space-y-3">
                     {!oneOff.file ? (
                       <label
                         onDragOver={(event) => event.preventDefault()}
@@ -1140,28 +1313,107 @@ export const HRDocuments: React.FC = () => {
                         </button>
                       </div>
                     )}
-
-                    {oneOff.file && (
-                      <div>
-                        <div className="mb-2 flex items-center justify-between">
-                          <label className="text-xs font-semibold text-slate-700">
-                            {tr('Penempatan Tanda Tangan', 'Signature Placement')}{' '}
-                            <span className="text-rose-500">*</span>
-                          </label>
-                          <span className="text-[10px] text-slate-400">
-                            {oneOff.fields.length} {tr('field', 'fields')}
-                          </span>
-                        </div>
-                        <SigningFieldPlacer
-                          file={oneOff.file}
-                          fields={oneOff.fields}
-                          roles={signers.map((s) => s.role.trim()).filter(Boolean)}
-                          onChange={(fields) => setOneOff({ ...oneOff, fields })}
-                        />
-                      </div>
-                    )}
                   </div>
-                </div>
+                )}
+
+                {/* STEP 3 — where the signatures go */}
+                {step === 2 && (
+                  <div className="space-y-3">
+                    <SigningFieldPlacer
+                      file={oneOff.file}
+                      fields={oneOff.fields}
+                      roles={signers.map((s) => s.role.trim()).filter(Boolean)}
+                      onChange={(fields) => setOneOff({ ...oneOff, fields })}
+                    />
+                  </div>
+                )}
+
+                {/* STEP 4 — review and send */}
+                {step === 3 && (
+                  <div className="space-y-4 text-xs">
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        <Users size={12} /> {tr('Penandatangan', 'Signers')}
+                      </div>
+                      <div className="space-y-1">
+                        {signers.map((signer) => (
+                          <div key={signer.id} className="flex items-baseline gap-2">
+                            <span className="w-16 shrink-0 rounded bg-slate-100 px-1.5 py-0.5 text-center text-[9px] font-bold text-slate-600">
+                              {signer.role || '—'}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate font-semibold text-slate-800">
+                              {signer.name || '—'}
+                            </span>
+                            <span className="min-w-0 flex-1 truncate text-[10px] text-slate-500">
+                              {signer.email || '—'}
+                            </span>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+
+                    <div className="rounded-xl border border-slate-200 p-3">
+                      <div className="mb-1 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-400">
+                        <FileText size={12} /> {tr('Dokumen', 'Document')}
+                      </div>
+                      <div className="truncate font-semibold text-slate-800">
+                        {oneOff.name || documentLabel({ template_code: templateCode })}
+                      </div>
+                      <div className="text-[10px] text-slate-500">
+                        {oneOff.file?.name} · {oneOff.fields.length} {tr('field', 'fields')}
+                      </div>
+                    </div>
+
+                    <div>
+                      <label className="mb-1 block font-semibold text-slate-700">{tr('Batas Waktu', 'Due Date')}</label>
+                      <input
+                        type="date"
+                        value={dueAt}
+                        onChange={(e) => setDueAt(e.target.value)}
+                        className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-100"
+                      />
+                    </div>
+
+                    <label className="flex cursor-pointer items-start gap-2 rounded-xl border border-slate-200 p-2.5">
+                      <input
+                        type="checkbox"
+                        checked={sendEmail}
+                        onChange={(e) => setSendEmail(e.target.checked)}
+                        className="mt-0.5"
+                      />
+                      <span>
+                        <span className="block font-semibold text-slate-700">
+                          {tr('Kirim email tanda tangan', 'Send signing emails')}
+                        </span>
+                        <span className="block text-[10px] text-slate-500">
+                          {tr(
+                            'Penandatangan menerima tautan dari email openHR.',
+                            'Signers receive the link from openHR email.'
+                          )}
+                        </span>
+                      </span>
+                    </label>
+
+                    <details className="rounded-xl border border-slate-200 p-2.5">
+                      <summary className="cursor-pointer text-[11px] font-semibold text-slate-600">
+                        {tr('Isian otomatis (opsional)', 'Prefill values (optional)')}
+                      </summary>
+                      <textarea
+                        rows={3}
+                        value={prefill}
+                        onChange={(e) => setPrefill(e.target.value)}
+                        placeholder='{"Position":"Engineer","Start Date":"2026-12-01"}'
+                        className="mt-2 w-full rounded-lg border border-slate-300 p-2 font-mono text-[10px]"
+                      />
+                      <p className="mt-1 text-[10px] text-slate-500">
+                        {tr(
+                          'Pasangan nama field dan nilai dalam format JSON.',
+                          'Field name and value pairs in JSON format.'
+                        )}
+                      </p>
+                    </details>
+                  </div>
+                )}
               </div>
 
               {/* Footer — readiness checklist plus the primary action. */}
@@ -1174,51 +1426,46 @@ export const HRDocuments: React.FC = () => {
                 )}
 
                 <div className="flex flex-wrap items-center justify-between gap-3">
-                  <div className="flex flex-wrap items-center gap-3 text-[10px]">
-                    {[
-                      { done: Boolean(oneOff.base64), label: tr('Dokumen PDF', 'PDF document') },
-                      { done: oneOff.fields.length > 0, label: tr('Field tanda tangan', 'Signing fields') },
-                      {
-                        done: oneOff.fields.length > 0 && rolesMissingFields.length === 0,
-                        label: tr('Field tiap penandatangan', 'Field per signer'),
-                      },
-                      {
-                        done: signers.length > 0 && incompleteSigners.length === 0,
-                        label: tr('Penandatangan lengkap', 'Signers resolved'),
-                      },
-                    ].map((item) => (
-                      <span
-                        key={item.label}
-                        className={`inline-flex items-center gap-1 font-semibold ${
-                          item.done ? 'text-emerald-600' : 'text-slate-400'
-                        }`}
-                      >
-                        {item.done ? (
-                          <Check size={11} />
-                        ) : (
-                          <span className="h-2.5 w-2.5 rounded-full border border-current" />
-                        )}
-                        {item.label}
+                  <div className="flex flex-wrap items-center gap-2 text-[10px]">
+                    {/* Show what is missing right where the decision is made. */}
+                    {stepProblems[step].length > 0 ? (
+                      <span className="inline-flex items-center gap-1 font-semibold text-slate-400">
+                        <span className="h-2.5 w-2.5 rounded-full border border-current" />
+                        {stepProblems[step][0]}
                       </span>
-                    ))}
+                    ) : (
+                      <span className="inline-flex items-center gap-1 font-semibold text-emerald-600">
+                        <Check size={11} /> {tr('Siap', 'Ready')}
+                      </span>
+                    )}
                   </div>
 
                   <div className="ml-auto flex items-center gap-2">
                     <button
                       type="button"
-                      onClick={closeCreate}
+                      onClick={step === 0 ? closeCreate : goBack}
                       className="rounded-xl px-4 py-2 text-xs font-semibold text-slate-600 transition hover:bg-slate-100"
                     >
-                      {tr('Batal', 'Cancel')}
+                      {step === 0 ? tr('Batal', 'Cancel') : tr('Kembali', 'Back')}
                     </button>
-                    <button
-                      type="submit"
-                      disabled={!canSubmit}
-                      className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
-                    >
-                      <Send size={13} />
-                      {submitting ? tr('Mengirim...', 'Sending...') : tr('Kirim', 'Send')}
-                    </button>
+                    {step < WIZARD_STEPS.length - 1 ? (
+                      <button
+                        type="button"
+                        onClick={goNext}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-slate-900 px-5 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-slate-800"
+                      >
+                        {tr('Lanjut', 'Next')} <ChevronRight size={13} />
+                      </button>
+                    ) : (
+                      <button
+                        type="submit"
+                        disabled={!canSubmit}
+                        className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2.5 text-xs font-bold text-white shadow-md transition hover:bg-blue-700 disabled:cursor-not-allowed disabled:bg-slate-300 disabled:shadow-none"
+                      >
+                        <Send size={13} />
+                        {submitting ? tr('Mengirim...', 'Sending...') : tr('Kirim', 'Send')}
+                      </button>
+                    )}
                   </div>
                 </div>
               </div>
