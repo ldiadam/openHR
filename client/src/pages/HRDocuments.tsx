@@ -2,6 +2,7 @@ import React, { useCallback, useEffect, useMemo, useState } from 'react';
 import {
   PenLine,
   Plus,
+  ChevronDown,
   X,
   RefreshCw,
   FileText,
@@ -21,7 +22,7 @@ import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { TableSkeleton } from '../components/Skeleton';
-import { SigningFieldPlacer, PlacedField, SUGGESTED_ROLES } from '../components/SigningFieldPlacer';
+import { SigningFieldPlacer, PlacedField } from '../components/SigningFieldPlacer';
 
 const WORKFLOW_OPTIONS = [
   { code: 'offer_letter', id: 'Surat Penawaran Kerja', en: 'Offer Letter' },
@@ -74,12 +75,23 @@ const CLOSED_STATUSES = ['completed', 'declined', 'expired', 'archived', 'supers
 
 /** A signer is whoever the operator names — employee or external guest. */
 interface SignerRow {
+  id: string;
   role: string;
   name: string;
   email: string;
+  /** True while the role is being typed instead of picked from the list. */
+  customRole?: boolean;
 }
 
-const emptySigner = (role: string): SignerRow => ({ role, name: '', email: '' });
+const ROLE_OPTIONS = ['Employee', 'Manager', 'HR', 'Guest', 'Witness'];
+
+let signerSeq = 0;
+const emptySigner = (role: string): SignerRow => ({
+  id: `signer-${++signerSeq}`,
+  role,
+  name: '',
+  email: '',
+});
 
 /** Read a File into base64. Chunked so large PDFs cannot blow the call stack. */
 async function fileToBase64(file: File): Promise<string> {
@@ -133,7 +145,7 @@ export const HRDocuments: React.FC = () => {
   });
 
   // Signers are free-form: an employee from the directory, or any guest email.
-  const [signers, setSigners] = useState<SignerRow[]>([{ role: 'Employee', name: '', email: '' }]);
+  const [signers, setSigners] = useState<SignerRow[]>(() => [emptySigner('Employee')]);
 
   useLockBodyScroll(showCreate || Boolean(detail) || Boolean(signingFrame));
 
@@ -278,6 +290,7 @@ export const HRDocuments: React.FC = () => {
       const next = [...prev];
       if (next.length === 0) next.push(emptySigner('Employee'));
       next[0] = {
+        ...next[0],
         role: next[0].role || 'Employee',
         name: employee.full_name || '',
         email: employee.company_email || employee.personal_email || '',
@@ -288,11 +301,26 @@ export const HRDocuments: React.FC = () => {
 
   const updateSigner = (index: number, patch: Partial<SignerRow>) => {
     setSigners((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+
+    // Renaming a role must carry its placed fields along, or the boxes silently
+    // become orphans that no submitter will ever see.
+    const previousRole = signers[index]?.role?.trim();
+    const nextRole = patch.role?.trim();
+    if (previousRole && nextRole && previousRole !== nextRole) {
+      setOneOff((prev) => ({
+        ...prev,
+        fields: prev.fields.map((field) =>
+          field.role === previousRole
+            ? { ...field, role: nextRole, name: `${nextRole} ${field.type}` }
+            : field
+        ),
+      }));
+    }
   };
 
   const addSigner = () => {
     const used = new Set(signers.map((s) => s.role.trim().toLowerCase()));
-    const suggestion = SUGGESTED_ROLES.find((role) => !used.has(role.toLowerCase())) || 'Guest';
+    const suggestion = ROLE_OPTIONS.find((role) => !used.has(role.toLowerCase())) || 'Guest';
     setSigners((prev) => [...prev, emptySigner(suggestion)]);
   };
 
@@ -891,72 +919,106 @@ export const HRDocuments: React.FC = () => {
                         </button>
                       </div>
 
-                      <div className="space-y-2">
-                        {signers.map((signer, index) => (
-                          <div key={index} className="rounded-lg border border-slate-200 bg-white p-2">
-                            <div className="mb-1.5 flex items-center gap-1.5">
-                              <input
-                                list="signer-role-options"
-                                value={signer.role}
-                                onChange={(e) => updateSigner(index, { role: e.target.value })}
-                                placeholder={tr('Peran', 'Role')}
-                                className="w-24 shrink-0 rounded-md border border-slate-300 px-1.5 py-1 text-[10px] font-bold"
-                              />
-                              {(() => {
-                                const isEmployee =
-                                  signer.email.trim().toLowerCase() !== '' &&
-                                  signer.email.trim().toLowerCase() ===
-                                    String(
-                                      employees.find((e) => e.id === employeeId)?.company_email ||
-                                        employees.find((e) => e.id === employeeId)?.personal_email ||
-                                        ''
-                                    ).toLowerCase();
-                                return (
-                                  <span
-                                    className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
-                                      isEmployee
-                                        ? 'bg-blue-100 text-blue-700'
-                                        : 'bg-amber-100 text-amber-700'
-                                    }`}
-                                  >
-                                    {isEmployee ? tr('Karyawan', 'Employee') : tr('Tamu', 'Guest')}
-                                  </span>
-                                );
-                              })()}
-                              {signers.length > 1 && (
-                                <button
-                                  type="button"
-                                  onClick={() => removeSigner(index)}
-                                  className="ml-auto rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
-                                  aria-label={tr('Hapus penandatangan', 'Remove signer')}
-                                >
-                                  <Trash2 size={11} />
-                                </button>
-                              )}
-                            </div>
-                            <div className="space-y-1.5">
-                              <input
-                                value={signer.name}
-                                onChange={(e) => updateSigner(index, { name: e.target.value })}
-                                placeholder={tr('Nama lengkap', 'Full name')}
-                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium"
-                              />
-                              <input
-                                type="email"
-                                value={signer.email}
-                                onChange={(e) => updateSigner(index, { email: e.target.value })}
-                                placeholder={tr('email@contoh.com', 'email@example.com')}
-                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-[11px]"
-                              />
-                            </div>
-                          </div>
-                        ))}
+                      <div className="space-y-1.5">
+                        {signers.map((signer, index) => {
+                          const employeeEmail = String(
+                            employees.find((e) => e.id === employeeId)?.company_email ||
+                              employees.find((e) => e.id === employeeId)?.personal_email ||
+                              ''
+                          ).toLowerCase();
+                          const isEmployee =
+                            signer.email.trim() !== '' &&
+                            signer.email.trim().toLowerCase() === employeeEmail;
+                          // A role outside the preset list is edited as free text.
+                          const isCustomRole = signer.customRole || !ROLE_OPTIONS.includes(signer.role);
 
-                        <datalist id="signer-role-options">
-                          {SUGGESTED_ROLES.map((role) => (
-                            <option key={role} value={role} />
-                          ))}
-                        </datalist>
+                          return (
+                            <div
+                              key={signer.id}
+                              className="rounded-lg border border-slate-200 bg-white p-2"
+                            >
+                              <div className="flex items-center gap-1.5">
+                                <span
+                                  className={`shrink-0 rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                                    isEmployee
+                                      ? 'bg-blue-100 text-blue-700'
+                                      : 'bg-amber-100 text-amber-700'
+                                  }`}
+                                >
+                                  {isEmployee ? tr('Karyawan', 'Employee') : tr('Tamu', 'Guest')}
+                                </span>
+                                {isCustomRole ? (
+                                  <>
+                                    <input
+                                      autoFocus
+                                      value={signer.role}
+                                      onChange={(e) => updateSigner(index, { role: e.target.value })}
+                                      placeholder={tr('Peran khusus', 'Custom role')}
+                                      className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 focus:border-blue-500 focus:outline-none"
+                                    />
+                                    <button
+                                      type="button"
+                                      onClick={() => updateSigner(index, { role: 'Employee', customRole: false })}
+                                      className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                                      title={tr('Kembali ke daftar peran', 'Back to the role list')}
+                                    >
+                                      <ChevronDown size={12} />
+                                    </button>
+                                  </>
+                                ) : (
+                                  <select
+                                    value={signer.role}
+                                    onChange={(e) => {
+                                      const value = e.target.value;
+                                      // Keep the current role until the first keystroke
+                                      // replaces it, so placed fields are not orphaned.
+                                      if (value === '__custom__') {
+                                        updateSigner(index, { customRole: true });
+                                      } else {
+                                        updateSigner(index, { role: value, customRole: false });
+                                      }
+                                    }}
+                                    className="min-w-0 flex-1 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-bold text-slate-700 focus:border-blue-500 focus:outline-none"
+                                  >
+                                    {ROLE_OPTIONS.map((role) => (
+                                      <option key={role} value={role}>
+                                        {role}
+                                      </option>
+                                    ))}
+                                    <option value="__custom__">
+                                      {tr('+ Peran lain…', '+ Other role…')}
+                                    </option>
+                                  </select>
+                                )}
+                                {signers.length > 1 && (
+                                  <button
+                                    type="button"
+                                    onClick={() => removeSigner(index)}
+                                    className="shrink-0 rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                                    aria-label={tr('Hapus penandatangan', 'Remove signer')}
+                                  >
+                                    <Trash2 size={12} />
+                                  </button>
+                                )}
+                              </div>
+                              <div className="mt-1.5 grid grid-cols-2 gap-1.5">
+                                <input
+                                  value={signer.name}
+                                  onChange={(e) => updateSigner(index, { name: e.target.value })}
+                                  placeholder={tr('Nama lengkap', 'Full name')}
+                                  className="min-w-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] font-medium focus:border-blue-500 focus:outline-none"
+                                />
+                                <input
+                                  type="email"
+                                  value={signer.email}
+                                  onChange={(e) => updateSigner(index, { email: e.target.value })}
+                                  placeholder={tr('email@contoh.com', 'email@example.com')}
+                                  className="min-w-0 rounded-md border border-slate-200 px-2 py-1 text-[11px] focus:border-blue-500 focus:outline-none"
+                                />
+                              </div>
+                            </div>
+                          );
+                        })}
 
                         {duplicateRoles.length > 0 && (
                           <p className="flex items-start gap-1.5 text-[10px] font-medium leading-relaxed text-rose-600">

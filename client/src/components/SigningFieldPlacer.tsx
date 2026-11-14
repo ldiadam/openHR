@@ -1,5 +1,5 @@
 import React, { useCallback, useEffect, useMemo, useRef, useState } from 'react';
-import { Loader2, Move, Trash2, Plus, AlertTriangle } from 'lucide-react';
+import { Loader2, Trash2, AlertTriangle, Check, CheckCircle2, Clock, Plus } from 'lucide-react';
 import { useLanguage } from '../context/LanguageContext';
 
 /**
@@ -263,6 +263,12 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
     dragRef.current = null;
   };
 
+  // Keep the draft role pointing at a signer that still exists.
+  useEffect(() => {
+    if (!roles || roles.length === 0) return;
+    if (!roles.includes(draftRole)) setDraftRole(roles[0]);
+  }, [roles, draftRole]);
+
   const selected = fields.find((field) => field.id === selectedId) || null;
 
   // Offer the signer roles first, then any role already used on the document.
@@ -272,30 +278,47 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
     return Array.from(set).filter(Boolean);
   }, [roles, fields]);
 
+  // Roles the operator still has to place at least one field for.
+  const missingRoles = useMemo(
+    () => (roles || []).filter((role) => !fields.some((field) => field.role === role)),
+    [roles, fields]
+  );
+
   return (
     <div className="space-y-3">
-      <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-[11px]">
-        <div>
-          <label className="mb-0.5 block font-semibold text-slate-500">{tr('Peran', 'Role')}</label>
-          <input
-            list="signing-role-options"
-            value={draftRole}
-            onChange={(e) => setDraftRole(e.target.value)}
-            placeholder={tr('mis. Tamu / Auditor', 'e.g. Guest / Auditor')}
-            className="w-32 rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-semibold"
-          />
-          <datalist id="signing-role-options">
-            {availableRoles.map((role) => (
-              <option key={role} value={role} />
-            ))}
-          </datalist>
+      {/* Step 1 — who signs here. Role is chosen with taps, never typed. */}
+      <div className="rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-[11px]">
+        <div className="mb-1.5 font-bold uppercase tracking-wide text-slate-500">
+          {tr('Buat field untuk', 'Place a field for')}
         </div>
-        <div>
-          <label className="mb-0.5 block font-semibold text-slate-500">{tr('Tipe', 'Type')}</label>
+        <div className="flex flex-wrap gap-1.5">
+          {availableRoles.map((role) => {
+            const active = draftRole === role;
+            return (
+              <button
+                key={role}
+                type="button"
+                onClick={() => setDraftRole(role)}
+                aria-pressed={active}
+                className={`inline-flex items-center gap-1.5 rounded-lg border px-2.5 py-1.5 font-bold transition ${
+                  active
+                    ? 'border-slate-900 bg-slate-900 text-white shadow-sm'
+                    : `border-slate-200 bg-white hover:border-slate-400 ${roleStyle(role).chip}`
+                }`}
+              >
+                {active && <Check size={11} />}
+                {role}
+              </button>
+            );
+          })}
+        </div>
+
+        <div className="mt-2 flex flex-wrap items-center gap-2 border-t border-slate-200 pt-2">
+          <label className="font-semibold text-slate-500">{tr('Jenis', 'Type')}</label>
           <select
             value={draftType}
             onChange={(e) => setDraftType(e.target.value as PlacementFieldType)}
-            className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-semibold"
+            className="rounded-lg border border-slate-300 bg-white px-2 py-1 font-semibold text-slate-700"
           >
             {PLACEMENT_FIELD_TYPES.map((type) => (
               <option key={type} value={type}>
@@ -303,17 +326,10 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
               </option>
             ))}
           </select>
+          <span className="ml-auto text-[10px] text-slate-400">
+            {tr('Klik dokumen untuk menaruh', 'Click the document to place')}
+          </span>
         </div>
-        <span className="rounded-lg bg-white px-2 py-1.5 font-medium text-slate-500">
-          {tr('Klik pada halaman untuk menaruh field', 'Click the page to place a field')}
-        </span>
-        <span className="ml-auto flex flex-wrap items-center gap-1.5 font-bold">
-          {availableRoles.map((role) => (
-            <span key={role} className={`rounded px-1.5 py-0.5 ${roleStyle(role).chip}`}>
-              {role}
-            </span>
-          ))}
-        </span>
       </div>
 
       {!file && (
@@ -410,14 +426,22 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
           </div>
 
           {selected && (
-            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2.5 text-[11px]">
+            <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-900/15 bg-slate-50 p-2.5 text-[11px]">
               <span className="font-bold text-slate-700">{tr('Field terpilih:', 'Selected field:')}</span>
-              <input
-                list="signing-role-options"
+              <select
                 value={selected.role}
                 onChange={(e) => updateField(selected.id, { role: e.target.value })}
-                className="w-28 rounded-lg border border-slate-300 px-2 py-1 font-semibold"
-              />
+                className="rounded-lg border border-slate-300 px-2 py-1 font-semibold"
+              >
+                {availableRoles.map((role) => (
+                  <option key={role} value={role}>
+                    {role}
+                  </option>
+                ))}
+                {!availableRoles.includes(selected.role) && (
+                  <option value={selected.role}>{selected.role}</option>
+                )}
+              </select>
               <select
                 value={selected.type}
                 onChange={(e) => updateField(selected.id, { type: e.target.value as PlacementFieldType })}
@@ -449,36 +473,51 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
         </>
       )}
 
-      {fields.length > 0 && (
-        <div className="max-h-32 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2 text-[10px]">
-          {fields.map((field) => (
-            <div key={field.id} className="flex items-center gap-2">
-              <span className={`rounded px-1.5 py-0.5 font-bold ${roleStyle(field.role).chip}`}>{field.role}</span>
-              <span className="font-semibold text-slate-700">{field.type}</span>
-              <span className="text-slate-400">
-                {tr('hal', 'p')} {field.page} · {(field.x * 100).toFixed(0)}%, {(field.y * 100).toFixed(0)}%
-              </span>
-              <button
-                type="button"
-                onClick={() => {
-                  setPage(field.page);
-                  setSelectedId(field.id);
-                }}
-                className="ml-auto text-slate-400 hover:text-slate-700"
-                title={tr('Pilih', 'Select')}
-              >
-                <Move size={11} />
-              </button>
-              <button
-                type="button"
-                onClick={() => removeField(field.id)}
-                className="text-rose-500 hover:text-rose-700"
-                title={tr('Hapus', 'Remove')}
-              >
-                <Trash2 size={11} />
-              </button>
-            </div>
-          ))}
+      {/* Step 2 — per-signer status, so nobody has to count boxes. */}
+      {roles && roles.length > 0 && (
+        <div className="rounded-xl border border-slate-200 bg-white p-2.5">
+          <div className="mb-1.5 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+            {missingRoles.length === 0 ? (
+              <CheckCircle2 size={12} className="text-emerald-600" />
+            ) : (
+              <Clock size={12} className="text-amber-600" />
+            )}
+            {missingRoles.length === 0
+              ? tr('Semua penandatangan punya field', 'Every signer has a field')
+              : tr(
+                  `${missingRoles.length} penandatangan belum punya field`,
+                  `${missingRoles.length} signer(s) still need a field`
+                )}
+          </div>
+          <div className="flex flex-wrap gap-1.5">
+            {roles.map((role) => {
+              const count = fields.filter((field) => field.role === role).length;
+              return (
+                <button
+                  key={role}
+                  type="button"
+                  onClick={() => {
+                    const first = fields.find((field) => field.role === role);
+                    if (first) {
+                      setPage(first.page);
+                      setSelectedId(first.id);
+                    } else {
+                      setDraftRole(role);
+                    }
+                  }}
+                  className={`inline-flex items-center gap-1 rounded-md px-1.5 py-1 text-[10px] font-bold transition ${
+                    count > 0
+                      ? 'bg-emerald-50 text-emerald-700 hover:bg-emerald-100'
+                      : 'bg-amber-50 text-amber-700 hover:bg-amber-100'
+                  }`}
+                >
+                  {count > 0 ? <Check size={11} /> : <Plus size={11} />}
+                  {role}
+                  <span className="opacity-60">{count > 0 ? count : tr('0', '0')}</span>
+                </button>
+              );
+            })}
+          </div>
         </div>
       )}
     </div>
