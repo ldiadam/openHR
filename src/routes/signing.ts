@@ -8,6 +8,7 @@ import {
   canManageTemplates,
   canViewEmployeeDocuments,
   canViewSigningRequest,
+  isHrAdmin,
   isHrOperator,
 } from '../middleware/signing-access';
 import {
@@ -32,6 +33,7 @@ import {
   readDocument,
 } from '../services/signed-documents';
 import { WorkflowDef, getWorkflow } from '../services/signing-workflows';
+import { deleteFile } from '../services/storage';
 import { sendEmail, runInBackground } from '../services/smtp';
 import { getSigningRequestEmail } from '../services/email-templates';
 
@@ -39,7 +41,16 @@ export const signingRoutes = new Hono<{ Bindings: Bindings; Variables: AuthConte
 
 signingRoutes.use('*', authMiddleware);
 
-const SIGNER_ROLES = ['Employee', 'Manager', 'HR'];
+/** Suggested labels only — any role string is accepted. */
+const SUGGESTED_SIGNER_ROLES = ['Employee', 'Manager', 'HR'];
+const MAX_ROLE_LENGTH = 80;
+
+/** Roles are free-form labels; they only need to be non-empty and match fields. */
+function normalizeRole(value: unknown): string | null {
+  const role = String(value ?? '').trim();
+  if (!role || role.length > MAX_ROLE_LENGTH) return null;
+  return role;
+}
 
 const ALLOWED_FIELD_TYPES = [
   'text', 'signature', 'initials', 'date', 'datenow', 'image', 'file',
@@ -81,9 +92,9 @@ function normalizeSigningFields(
       return { error: `fields[${i}].type "${field.type}" tidak didukung.` };
     }
 
-    const role = String(field.role || '').trim();
-    if (!SIGNER_ROLES.includes(role)) {
-      return { error: `fields[${i}].role harus salah satu dari: ${SIGNER_ROLES.join(', ')}.` };
+    const role = normalizeRole(field.role);
+    if (!role) {
+      return { error: `fields[${i}].role wajib diisi (maks. ${MAX_ROLE_LENGTH} karakter).` };
     }
 
     // Already-normalized shape (areas) is accepted as-is.
@@ -535,12 +546,20 @@ signingRoutes.post('/signing-requests', async (c) => {
     if (!signer.role || !signer.email || !signer.name) {
       return badRequest(c, 'Setiap penandatangan wajib memiliki role, email, dan nama.');
     }
-    if (!SIGNER_ROLES.includes(signer.role)) {
-      return badRequest(c, `Role penandatangan harus salah satu dari: ${SIGNER_ROLES.join(', ')}.`);
+    if (!normalizeRole(signer.role)) {
+      return badRequest(c, `Role penandatangan wajib diisi (maks. ${MAX_ROLE_LENGTH} karakter).`);
     }
     if (!/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(signer.email)) {
       return badRequest(c, `Email penandatangan tidak valid: ${signer.email}`);
     }
+  }
+
+  // DocuSeal keys submitters by role, so two signers cannot share one.
+  const duplicateRole = signers
+    .map((signer) => signer.role.trim().toLowerCase())
+    .find((role, index, all) => all.indexOf(role) !== index);
+  if (duplicateRole) {
+    return badRequest(c, `Setiap penandatangan harus punya role unik. Duplikat: ${duplicateRole}.`);
   }
 
   // Idempotency: same key returns the existing request untouched.
@@ -635,6 +654,8 @@ signingRoutes.post('/signing-requests', async (c) => {
   const dueAt = body.dueAt || (workflow ? new Date(Date.now() + workflow.defaultDueDays * 86400000).toISOString() : null);
   const prefill = body.prefill && typeof body.prefill === 'object' ? body.prefill : null;
   const order = body.order === 'random' ? 'random' : 'preserved';
+  // openHR owns email delivery; DocuSeal is never allowed to send its own.
+  // This keeps one sending domain, one outbox and one audit trail.
   const sendEmailRequested = body.sendEmail !== false;
   // Must be public: the signer is usually an external party with no openHR
   // session, so pointing at /documents bounced them to /login.
@@ -694,7 +715,7 @@ signingRoutes.post('/signing-requests', async (c) => {
         values: prefill || undefined,
         completed_redirect_url: completedRedirectUrl,
       })),
-      sendEmail: sendEmailRequested,
+      sendEmail: false,
       order,
       message: body.message || undefined,
       completedRedirectUrl,
@@ -787,8 +808,9 @@ signingRoutes.post('/signing-requests', async (c) => {
 
   const ctx = await loadRequestContext(c.env.DB, requestId);
 
-  // Optional in-app notification fallback when DocuSeal email is disabled.
-  if (!sendEmailRequested) {
+  // openHR always delivers the signing email — DocuSeal is configured with
+  // send_email: false above, so this is the only delivery path.
+  if (sendEmailRequested) {
     runInBackground(
       c,
       (async () => {
@@ -1062,11 +1084,13 @@ signingRoutes.post('/signing-requests/:id/supersede', async (c) => {
 
 // Delete a signing request.
 // Only drafts and failed requests (nothing ever sent to a signer) may be deleted.
-// Anything that reached a signer is retained as evidence — use supersede instead.
+// Anything that reached a signer is retained as evidence — use supersede instead,
+// unless an HR admin explicitly forces the delete (?force=true).
 signingRoutes.delete('/signing-requests/:id', async (c) => {
   const user = c.get('user');
   if (!isHrOperator(user)) return c.json({ error: 'Forbidden' }, 403);
 
+  const force = c.req.query('force') === 'true';
   const ctx = await loadRequestContext(c.env.DB, c.req.param('id'));
   if (!ctx.request) return badRequest(c, 'Pengajuan tanda tangan tidak ditemukan.', 404);
 
@@ -1083,13 +1107,19 @@ signingRoutes.delete('/signing-requests/:id', async (c) => {
     Number(signedDoc?.n || 0) > 0 ||
     ['completed', 'partially_signed'].includes(ctx.request.status);
 
-  if (hasEvidence) {
+  // Forcing a delete destroys signed evidence, so only the HR admin may do it.
+  if (hasEvidence && !(force && isHrAdmin(user))) {
     return c.json(
       {
         error: `Pengajuan berstatus "${ctx.request.status}" sudah memiliki dokumen/bukti tanda tangan, jadi tidak dapat dihapus. Gunakan "Gantikan" agar riwayatnya tetap utuh.`,
       },
       409
     );
+  }
+
+  const documents = await listDocumentsForRequest(c.env, ctx.request.id);
+  for (const document of documents) {
+    await deleteFile(c.env, document.storage_key);
   }
 
   await c.env.DB.batch([
@@ -1101,6 +1131,9 @@ signingRoutes.delete('/signing-requests/:id', async (c) => {
   await audit(c.env.DB, user.userId, 'DELETE_SIGNING_REQUEST', ctx.request.id, {
     template_code: ctx.request.template_code,
     status: ctx.request.status,
+    forced: hasEvidence,
+    docuseal_submission_id: ctx.request.docuseal_submission_id,
+    documents_removed: documents.length,
   });
 
   return c.json({ message: 'Pengajuan tanda tangan berhasil dihapus.' });
@@ -1257,7 +1290,8 @@ signingRoutes.post('/signing-requests/bulk-policy-ack', async (c) => {
       const submission = await client.createSubmission({
         templateId: template.docuseal_template_id as string,
         submitters: [{ role: 'Employee', email, name: employee.full_name }],
-        sendEmail: body.sendEmail !== false,
+        // openHR delivers these emails itself, same as single requests.
+        sendEmail: false,
         order: 'preserved',
         expireAt: body.dueAt || undefined,
       });
@@ -1289,6 +1323,35 @@ signingRoutes.post('/signing-requests/bulk-policy-ack', async (c) => {
         .run();
 
       results.push({ employeeId: employee.id, status: 'sent', signingRequestId: requestId });
+
+      // DocuSeal never emails for this fork; deliver through openHR instead.
+      if (body.sendEmail !== false) {
+        const signingUrl = resolveSigningUrl(submitter || {}) || `${hrAppUrl(c.env)}/signing/complete?request=${requestId}`;
+        runInBackground(
+          c,
+          (async () => {
+            const company = await c.env.DB.prepare(
+              `SELECT COALESCE(NULLIF(legal_name, ''), name) AS name FROM companies LIMIT 1`
+            ).first<any>();
+            const content = getSigningRequestEmail({
+              signerName: employee.full_name,
+              documentName: template.name,
+              employeeName: employee.full_name,
+              requestedBy: user.name,
+              signingUrl,
+              dueAt: body.dueAt || undefined,
+              companyName: company?.name,
+            });
+            await sendEmail(c.env, {
+              to: email,
+              subject: `Tanda tangan diminta: ${template.name}`,
+              text: content.text,
+              html: content.html,
+              type: 'signing_request',
+            });
+          })()
+        );
+      }
     } catch (err: any) {
       await c.env.DB.prepare(
         `UPDATE signing_requests SET status = 'failed', last_error = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`

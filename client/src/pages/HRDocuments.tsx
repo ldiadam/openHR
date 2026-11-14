@@ -15,15 +15,13 @@ import {
   Trash2,
   Upload,
   Check,
-  Copy,
-  Link2,
 } from 'lucide-react';
 import { apiFetch, downloadFile } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { useLockBodyScroll } from '../hooks/useLockBodyScroll';
 import { TableSkeleton } from '../components/Skeleton';
-import { SigningFieldPlacer, PlacedField } from '../components/SigningFieldPlacer';
+import { SigningFieldPlacer, PlacedField, SUGGESTED_ROLES } from '../components/SigningFieldPlacer';
 
 const WORKFLOW_OPTIONS = [
   { code: 'offer_letter', id: 'Surat Penawaran Kerja', en: 'Offer Letter' },
@@ -74,6 +72,15 @@ const SIGNER_STATUS_LABELS: Record<string, { id: string; en: string }> = {
 const OPEN_STATUSES = ['draft', 'sent', 'partially_signed', 'failed'];
 const CLOSED_STATUSES = ['completed', 'declined', 'expired', 'archived', 'superseded'];
 
+/** A signer is whoever the operator names — employee or external guest. */
+interface SignerRow {
+  role: string;
+  name: string;
+  email: string;
+}
+
+const emptySigner = (role: string): SignerRow => ({ role, name: '', email: '' });
+
 /** Read a File into base64. Chunked so large PDFs cannot blow the call stack. */
 async function fileToBase64(file: File): Promise<string> {
   const bytes = new Uint8Array(await file.arrayBuffer());
@@ -106,7 +113,6 @@ export const HRDocuments: React.FC = () => {
   const [detail, setDetail] = useState<any>(null);
   const [signingFrame, setSigningFrame] = useState<{ url: string; title: string } | null>(null);
   const [submitting, setSubmitting] = useState(false);
-  const [signerPreview, setSignerPreview] = useState<any>(null);
   const [formError, setFormError] = useState<string | null>(null);
   const [syncing, setSyncing] = useState(false);
 
@@ -125,6 +131,9 @@ export const HRDocuments: React.FC = () => {
     name: '',
     fields: [],
   });
+
+  // Signers are free-form: an employee from the directory, or any guest email.
+  const [signers, setSigners] = useState<SignerRow[]>([{ role: 'Employee', name: '', email: '' }]);
 
   useLockBodyScroll(showCreate || Boolean(detail) || Boolean(signingFrame));
 
@@ -225,6 +234,7 @@ export const HRDocuments: React.FC = () => {
     setFormError(null);
     setPrefill('');
     setOneOff({ file: null, base64: '', name: '', fields: [] });
+    setSigners([emptySigner('Employee')]);
   }, []);
 
   const openCreate = () => {
@@ -233,47 +243,62 @@ export const HRDocuments: React.FC = () => {
     setDueAt(new Date(Date.now() + 14 * 86400000).toISOString().slice(0, 10));
     setSendEmail(true);
     setFormError(null);
+    setSigners([emptySigner('Employee')]);
     setShowCreate(true);
   };
+
+  // Closing the signing frame re-reads the request: the signer may have just
+  // finished inside the iframe, and there is no webhook to tell us otherwise.
+  const closeSigningFrame = useCallback(() => {
+    const requestId = detail?.signingRequest?.id;
+    setSigningFrame(null);
+    if (requestId) void syncRequest(requestId, true);
+  }, [detail, syncRequest]);
 
   // Escape closes whichever layer is on top.
   useEffect(() => {
     if (!showCreate && !detail && !signingFrame) return;
     const onKey = (event: KeyboardEvent) => {
       if (event.key !== 'Escape') return;
-      if (signingFrame) setSigningFrame(null);
+      if (signingFrame) closeSigningFrame();
       else if (detail) setDetail(null);
       else closeCreate();
     };
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [showCreate, detail, signingFrame, closeCreate]);
+  }, [showCreate, detail, signingFrame, closeCreate, closeSigningFrame]);
 
-  // Who will actually sign, resolved from the employee's manager and the
-  // company record. Re-fetched whenever the employee or document type changes.
+  // Picking an employee prefills the first signer row with them. Everything else
+  // is typed in by hand, so a guest outside the directory signs just as easily.
   useEffect(() => {
-    if (!showCreate || !employeeId) {
-      setSignerPreview(null);
-      return;
-    }
-    let cancelled = false;
-    const timer = setTimeout(async () => {
-      try {
-        const res = await apiFetch('/hr/signing-requests/preview-signers', {
-          method: 'POST',
-          body: JSON.stringify({ employeeId, templateCode }),
-        });
-        if (!cancelled) setSignerPreview(res);
-      } catch {
-        if (!cancelled) setSignerPreview(null);
-      }
-    }, 250);
+    if (!employeeId) return;
+    const employee = employees.find((e) => e.id === employeeId);
+    if (!employee) return;
+    setSigners((prev) => {
+      const next = [...prev];
+      if (next.length === 0) next.push(emptySigner('Employee'));
+      next[0] = {
+        role: next[0].role || 'Employee',
+        name: employee.full_name || '',
+        email: employee.company_email || employee.personal_email || '',
+      };
+      return next;
+    });
+  }, [employeeId, employees]);
 
-    return () => {
-      cancelled = true;
-      clearTimeout(timer);
-    };
-  }, [showCreate, employeeId, templateCode]);
+  const updateSigner = (index: number, patch: Partial<SignerRow>) => {
+    setSigners((prev) => prev.map((row, i) => (i === index ? { ...row, ...patch } : row)));
+  };
+
+  const addSigner = () => {
+    const used = new Set(signers.map((s) => s.role.trim().toLowerCase()));
+    const suggestion = SUGGESTED_ROLES.find((role) => !used.has(role.toLowerCase())) || 'Guest';
+    setSigners((prev) => [...prev, emptySigner(suggestion)]);
+  };
+
+  const removeSigner = (index: number) => {
+    setSigners((prev) => (prev.length <= 1 ? prev : prev.filter((_, i) => i !== index)));
+  };
 
   const documentLabel = (row: any) => {
     if (row.document_name) return row.document_name;
@@ -304,22 +329,43 @@ export const HRDocuments: React.FC = () => {
   };
 
   // A role with no field never becomes a DocuSeal submitter, so the request can
-  // never complete. Catch it before sending rather than after.
+  // never complete. Only the signers actually being sent need a field.
   const rolesMissingFields = useMemo(() => {
     const placed = new Set(oneOff.fields.map((f) => f.role.toLowerCase()));
-    return (signerPreview?.signers || [])
-      .filter((s: any) => s.resolved)
-      .map((s: any) => String(s.role))
-      .filter((role: string) => !placed.has(role.toLowerCase()));
-  }, [oneOff.fields, signerPreview]);
+    return signers
+      .map((s) => s.role.trim())
+      .filter((role) => role && !placed.has(role.toLowerCase()));
+  }, [oneOff.fields, signers]);
+
+  // Signers need a role, a name and a plausible email before we can send.
+  const incompleteSigners = useMemo(
+    () =>
+      signers.filter(
+        (s) => !s.role.trim() || !s.name.trim() || !/^[^@\s]+@[^@\s]+\.[^@\s]+$/.test(s.email.trim())
+      ),
+    [signers]
+  );
+
+  const duplicateRoles = useMemo(() => {
+    const seen = new Set<string>();
+    const dupes = new Set<string>();
+    for (const signer of signers) {
+      const role = signer.role.trim().toLowerCase();
+      if (!role) continue;
+      if (seen.has(role)) dupes.add(signer.role.trim());
+      seen.add(role);
+    }
+    return Array.from(dupes);
+  }, [signers]);
 
   const canSubmit =
     Boolean(employeeId) &&
     Boolean(oneOff.base64) &&
     oneOff.fields.length > 0 &&
+    signers.length > 0 &&
+    incompleteSigners.length === 0 &&
+    duplicateRoles.length === 0 &&
     rolesMissingFields.length === 0 &&
-    Boolean(signerPreview) &&
-    !signerPreview?.problem &&
     !submitting;
 
   const handleCreate = async (event: React.FormEvent) => {
@@ -350,8 +396,22 @@ export const HRDocuments: React.FC = () => {
       );
       return;
     }
-    if (signerPreview?.problem) {
-      setFormError(signerPreview.problem);
+    if (incompleteSigners.length > 0) {
+      setFormError(
+        tr(
+          'Setiap penandatangan wajib punya nama, email yang valid, dan peran.',
+          'Every signer needs a name, a valid email and a role.'
+        )
+      );
+      return;
+    }
+    if (duplicateRoles.length > 0) {
+      setFormError(
+        tr(
+          `Peran penandatangan harus unik. Duplikat: ${duplicateRoles.join(', ')}.`,
+          `Signer roles must be unique. Duplicate: ${duplicateRoles.join(', ')}.`
+        )
+      );
       return;
     }
 
@@ -368,6 +428,11 @@ export const HRDocuments: React.FC = () => {
       }
 
       const employeeName = employees.find((e) => e.id === employeeId)?.full_name || employeeId;
+      // Fields placed for a role that is not being sent would create a DocuSeal
+      // role with no submitter, so only the chosen roles' fields go along.
+      const chosenRoleKeys = new Set(signers.map((s) => s.role.trim().toLowerCase()));
+      const sentFields = oneOff.fields.filter((f) => chosenRoleKeys.has(f.role.toLowerCase()));
+
       const res = await apiFetch('/hr/signing-requests', {
         method: 'POST',
         body: JSON.stringify({
@@ -376,9 +441,15 @@ export const HRDocuments: React.FC = () => {
             name: oneOff.name || `${documentLabel({ template_code: templateCode })} - ${employeeName}`,
             code: templateCode,
             pdfBase64: oneOff.base64,
-            fields: oneOff.fields,
+            fields: sentFields,
           },
           dueAt: dueAt ? new Date(dueAt).toISOString() : undefined,
+          // Exactly the signers listed in the form — employee or guest.
+          signers: signers.map((s) => ({
+            role: s.role.trim(),
+            email: s.email.trim(),
+            name: s.name.trim(),
+          })),
           sendEmail,
           prefill: parsedPrefill,
           idempotencyKey: `${templateCode}-${employeeId}-${Date.now()}`,
@@ -415,19 +486,19 @@ export const HRDocuments: React.FC = () => {
     }
   };
 
-  const handleDeleteRequest = async (request: any) => {
-    if (
-      !window.confirm(
-        tr(
-          `Hapus pengajuan untuk ${request.employee_name || request.employee_id}?`,
-          `Delete the request for ${request.employee_name || request.employee_id}?`
+  const handleDeleteRequest = async (request: any, force = false) => {
+    const label = request.employee_name || request.employee_id;
+    const confirmation = force
+      ? tr(
+          `Hapus pengajuan untuk ${label}? Dokumen bertanda tangan dan bukti auditnya akan ikut dihapus permanen.`,
+          `Delete the request for ${label}? Signed documents and audit evidence will be permanently removed.`
         )
-      )
-    ) {
+      : tr(`Hapus pengajuan untuk ${label}?`, `Delete the request for ${label}?`);
+    if (!window.confirm(confirmation)) {
       return;
     }
     try {
-      await apiFetch(`/hr/signing-requests/${request.id}`, { method: 'DELETE' });
+      await apiFetch(`/hr/signing-requests/${request.id}${force ? '?force=true' : ''}`, { method: 'DELETE' });
       setMsg({ type: 'success', text: tr('Pengajuan dihapus.', 'Request deleted.') });
       setDetail(null);
       await load(true);
@@ -799,63 +870,104 @@ export const HRDocuments: React.FC = () => {
                       </select>
                       <p className="mt-1 text-[10px] leading-relaxed text-slate-500">
                         {tr(
-                          'Jenis dokumen menentukan siapa saja yang harus menandatangani.',
-                          'The document type determines who has to sign.'
+                          'Anda dapat menambah karyawan atau tamu dari luar perusahaan.',
+                          'Add employees, or guests from outside the company.'
                         )}
                       </p>
                     </div>
 
-                    {/* Signers — the question that caused the most confusion. */}
+                    {/* Signers — free-form: an employee or any guest email. */}
                     <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
-                      <div className="mb-2 flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
-                        <Users size={12} /> {tr('Penandatangan', 'Signers')}
+                      <div className="mb-2 flex items-center justify-between gap-2">
+                        <div className="flex items-center gap-1.5 text-[10px] font-bold uppercase tracking-wide text-slate-500">
+                          <Users size={12} /> {tr('Penandatangan', 'Signers')}
+                        </div>
+                        <button
+                          type="button"
+                          onClick={addSigner}
+                          className="inline-flex items-center gap-1 rounded-lg bg-white px-2 py-1 text-[10px] font-bold text-blue-700 shadow-sm transition hover:bg-blue-50"
+                        >
+                          <Plus size={11} /> {tr('Tambah', 'Add')}
+                        </button>
                       </div>
 
-                      {!employeeId ? (
-                        <p className="text-[11px] text-slate-400">
-                          {tr('Pilih karyawan untuk melihat penandatangan.', 'Select an employee to see the signers.')}
-                        </p>
-                      ) : !signerPreview ? (
-                        <p className="text-[11px] text-slate-400">{tr('Memuat...', 'Loading...')}</p>
-                      ) : (
-                        <div className="space-y-2">
-                          {(signerPreview.signers || []).map((signer: any) => (
-                            <div key={signer.role} className="flex items-start gap-2">
-                              <span
-                                className={`mt-0.5 inline-flex w-16 shrink-0 justify-center rounded px-1.5 py-0.5 text-[9px] font-bold ${
-                                  signer.resolved
-                                    ? 'bg-emerald-100 text-emerald-700'
-                                    : signer.required
-                                      ? 'bg-rose-100 text-rose-700'
-                                      : 'bg-slate-200 text-slate-500'
-                                }`}
-                              >
-                                {signer.role}
-                              </span>
-                              <div className="min-w-0 flex-1">
-                                {signer.resolved ? (
-                                  <>
-                                    <div className="truncate text-[11px] font-semibold text-slate-800">{signer.name}</div>
-                                    <div className="truncate text-[10px] text-slate-500">{signer.email}</div>
-                                  </>
-                                ) : (
-                                  <div className="text-[10px] leading-relaxed text-slate-500">
-                                    {signer.required
-                                      ? tr('Wajib, tetapi belum bisa ditentukan', 'Required, but cannot be determined')
-                                      : tr('Opsional, akan dilewati', 'Optional, will be skipped')}
-                                  </div>
-                                )}
-                              </div>
+                      <div className="space-y-2">
+                        {signers.map((signer, index) => (
+                          <div key={index} className="rounded-lg border border-slate-200 bg-white p-2">
+                            <div className="mb-1.5 flex items-center gap-1.5">
+                              <input
+                                list="signer-role-options"
+                                value={signer.role}
+                                onChange={(e) => updateSigner(index, { role: e.target.value })}
+                                placeholder={tr('Peran', 'Role')}
+                                className="w-24 shrink-0 rounded-md border border-slate-300 px-1.5 py-1 text-[10px] font-bold"
+                              />
+                              {(() => {
+                                const isEmployee =
+                                  signer.email.trim().toLowerCase() !== '' &&
+                                  signer.email.trim().toLowerCase() ===
+                                    String(
+                                      employees.find((e) => e.id === employeeId)?.company_email ||
+                                        employees.find((e) => e.id === employeeId)?.personal_email ||
+                                        ''
+                                    ).toLowerCase();
+                                return (
+                                  <span
+                                    className={`rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                                      isEmployee
+                                        ? 'bg-blue-100 text-blue-700'
+                                        : 'bg-amber-100 text-amber-700'
+                                    }`}
+                                  >
+                                    {isEmployee ? tr('Karyawan', 'Employee') : tr('Tamu', 'Guest')}
+                                  </span>
+                                );
+                              })()}
+                              {signers.length > 1 && (
+                                <button
+                                  type="button"
+                                  onClick={() => removeSigner(index)}
+                                  className="ml-auto rounded p-1 text-slate-400 transition hover:bg-rose-50 hover:text-rose-600"
+                                  aria-label={tr('Hapus penandatangan', 'Remove signer')}
+                                >
+                                  <Trash2 size={11} />
+                                </button>
+                              )}
                             </div>
+                            <div className="space-y-1.5">
+                              <input
+                                value={signer.name}
+                                onChange={(e) => updateSigner(index, { name: e.target.value })}
+                                placeholder={tr('Nama lengkap', 'Full name')}
+                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-[11px] font-medium"
+                              />
+                              <input
+                                type="email"
+                                value={signer.email}
+                                onChange={(e) => updateSigner(index, { email: e.target.value })}
+                                placeholder={tr('email@contoh.com', 'email@example.com')}
+                                className="w-full rounded-md border border-slate-300 px-2 py-1 text-[11px]"
+                              />
+                            </div>
+                          </div>
+                        ))}
+
+                        <datalist id="signer-role-options">
+                          {SUGGESTED_ROLES.map((role) => (
+                            <option key={role} value={role} />
                           ))}
-                          {signerPreview.problem && (
-                            <p className="flex items-start gap-1.5 border-t border-slate-200 pt-2 text-[10px] font-medium leading-relaxed text-rose-600">
-                              <AlertTriangle size={12} className="mt-0.5 shrink-0" />
-                              {signerPreview.problem}
-                            </p>
-                          )}
-                        </div>
-                      )}
+                        </datalist>
+
+                        {duplicateRoles.length > 0 && (
+                          <p className="flex items-start gap-1.5 text-[10px] font-medium leading-relaxed text-rose-600">
+                            <AlertTriangle size={12} className="mt-0.5 shrink-0" />
+                            {tr(
+                              `Peran harus unik. Duplikat: ${duplicateRoles.join(', ')}.`,
+                              `Roles must be unique. Duplicate: ${duplicateRoles.join(', ')}.`
+                            )}
+                          </p>
+                        )}
+                      </div>
                     </div>
 
                     <div>
@@ -881,8 +993,8 @@ export const HRDocuments: React.FC = () => {
                         </span>
                         <span className="block text-[10px] text-slate-500">
                           {tr(
-                            'Penandatangan menerima tautan langsung dari DocuSeal.',
-                            'Signers receive the link directly from DocuSeal.'
+                            'Penandatangan menerima tautan dari email openHR.',
+                            'Signers receive the link from openHR email.'
                           )}
                         </span>
                       </span>
@@ -981,6 +1093,7 @@ export const HRDocuments: React.FC = () => {
                         <SigningFieldPlacer
                           file={oneOff.file}
                           fields={oneOff.fields}
+                          roles={signers.map((s) => s.role.trim()).filter(Boolean)}
                           onChange={(fields) => setOneOff({ ...oneOff, fields })}
                         />
                       </div>
@@ -1008,7 +1121,7 @@ export const HRDocuments: React.FC = () => {
                         label: tr('Field tiap penandatangan', 'Field per signer'),
                       },
                       {
-                        done: Boolean(signerPreview) && !signerPreview?.problem,
+                        done: signers.length > 0 && incompleteSigners.length === 0,
                         label: tr('Penandatangan lengkap', 'Signers resolved'),
                       },
                     ].map((item) => (
@@ -1139,7 +1252,7 @@ export const HRDocuments: React.FC = () => {
                           }
                           className="mt-2 inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 text-[10px] font-bold text-blue-700 transition hover:bg-blue-100"
                         >
-                          <Link2 size={11} /> {tr('Tautan tanda tangan', 'Signing link')}
+                          <PenLine size={11} /> {tr('Tanda tangani', 'Sign')}
                         </button>
                       )}
                     </div>
@@ -1220,19 +1333,31 @@ export const HRDocuments: React.FC = () => {
                     {tr('Gantikan', 'Supersede')}
                   </button>
                 )}
-                {detail.signingRequest.status !== 'completed' &&
-                  detail.signingRequest.status !== 'partially_signed' && (
+                {(() => {
+                  const status = detail.signingRequest.status;
+                  const isEvidence = status === 'completed' || status === 'partially_signed';
+                  // Signed requests are evidence: only an HR admin may destroy them.
+                  if (isEvidence && !isOwnerAdmin) return null;
+                  return (
                     <button
-                      onClick={() => handleDeleteRequest(detail.signingRequest)}
+                      onClick={() => handleDeleteRequest(detail.signingRequest, isEvidence)}
                       className="inline-flex items-center gap-1 rounded-lg bg-rose-50 px-2.5 py-1.5 text-[11px] font-bold text-rose-700 transition hover:bg-rose-100"
-                      title={tr(
-                        'Hanya untuk pengajuan yang belum ditandatangani',
-                        'Only for requests that have not been signed'
-                      )}
+                      title={
+                        isEvidence
+                          ? tr(
+                              'Hapus permanen termasuk dokumen bertanda tangan',
+                              'Permanently delete including signed documents'
+                            )
+                          : tr(
+                              'Hanya untuk pengajuan yang belum ditandatangani',
+                              'Only for requests that have not been signed'
+                            )
+                      }
                     >
                       <Trash2 size={11} /> {tr('Hapus', 'Delete')}
                     </button>
-                  )}
+                  );
+                })()}
               </div>
               <button
                 onClick={() => setDetail(null)}
@@ -1245,75 +1370,58 @@ export const HRDocuments: React.FC = () => {
         </div>
       )}
 
-      {/* SIGNING LINK — DocuSeal refuses framing (x-frame-options: SAMEORIGIN),
-          so we hand the signer a real link instead of embedding an iframe. */}
+      {/* SIGNING FRAME — DocuSeal is framed directly so the signer can sign
+          without leaving the HR app. */}
       {signingFrame && (
         <div
           className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-900/50 backdrop-blur-[2px] sm:items-center sm:p-4"
           onClick={(event) => {
-            if (event.target === event.currentTarget) setSigningFrame(null);
+            if (event.target === event.currentTarget) closeSigningFrame();
           }}
         >
           <div
-            className="w-full max-w-md space-y-4 rounded-t-3xl bg-white p-6 shadow-2xl sm:rounded-3xl"
+            className="flex h-[92vh] w-full max-w-3xl flex-col overflow-hidden rounded-t-3xl bg-white shadow-2xl sm:h-[88vh] sm:rounded-3xl"
             role="dialog"
             aria-modal="true"
           >
-            <div className="flex items-start justify-between gap-3">
-              <div className="flex items-center gap-3">
-                <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
-                  <ExternalLink size={18} />
+            <div className="flex shrink-0 items-center justify-between gap-3 border-b border-slate-200 px-5 py-3">
+              <div className="flex min-w-0 items-center gap-3">
+                <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-2xl bg-blue-50 text-blue-600">
+                  <PenLine size={16} />
                 </div>
                 <div className="min-w-0">
-                  <h3 className="text-base font-bold text-slate-900">{tr('Tautan Tanda Tangan', 'Signing Link')}</h3>
+                  <h3 className="truncate text-sm font-bold text-slate-900">
+                    {tr('Tanda Tangan Dokumen', 'Sign Document')}
+                  </h3>
                   <p className="truncate text-[11px] text-slate-500">{signingFrame.title}</p>
                 </div>
               </div>
-              <button
-                onClick={() => setSigningFrame(null)}
-                className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
-                aria-label="Close"
-              >
-                <X size={18} />
-              </button>
+              <div className="flex shrink-0 items-center gap-1">
+                <a
+                  href={signingFrame.url}
+                  target="_blank"
+                  rel="noreferrer noopener"
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  title={tr('Buka di tab baru', 'Open in new tab')}
+                >
+                  <ExternalLink size={16} />
+                </a>
+                <button
+                  onClick={closeSigningFrame}
+                  className="rounded-lg p-1.5 text-slate-400 transition hover:bg-slate-100 hover:text-slate-700"
+                  aria-label="Close"
+                >
+                  <X size={18} />
+                </button>
+              </div>
             </div>
 
-            <p className="rounded-xl border border-amber-200 bg-amber-50 p-3 text-[11px] leading-relaxed text-amber-800">
-              {tr(
-                'DocuSeal tidak dapat ditampilkan di dalam halaman ini, jadi tautan dibuka di tab baru. Kirim tautan ini ke penandatangan, atau buka sendiri.',
-                'DocuSeal cannot be embedded in this page, so the link opens in a new tab. Send it to the signer, or open it yourself.'
-              )}
-            </p>
-
-            <div className="break-all rounded-xl border border-slate-200 bg-slate-50 p-2.5 font-mono text-[10px] text-slate-600">
-              {signingFrame.url}
-            </div>
-
-            <div className="flex flex-wrap justify-end gap-2">
-              <button
-                type="button"
-                onClick={async () => {
-                  try {
-                    await navigator.clipboard.writeText(signingFrame.url);
-                    setMsg({ type: 'success', text: tr('Tautan disalin.', 'Link copied.') });
-                  } catch {
-                    setMsg({ type: 'error', text: tr('Gagal menyalin tautan.', 'Could not copy the link.') });
-                  }
-                }}
-                className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 transition hover:bg-slate-50"
-              >
-                <Copy size={12} /> {tr('Salin tautan', 'Copy link')}
-              </button>
-              <a
-                href={signingFrame.url}
-                target="_blank"
-                rel="noreferrer noopener"
-                onClick={() => setSigningFrame(null)}
-                className="inline-flex items-center gap-1.5 rounded-xl bg-blue-600 px-5 py-2 text-xs font-bold text-white shadow-md transition hover:bg-blue-700"
-              >
-                <ExternalLink size={12} /> {tr('Buka di tab baru', 'Open in new tab')}
-              </a>
-            </div>
+            <iframe
+              src={signingFrame.url}
+              title={signingFrame.title}
+              className="min-h-0 flex-1 border-0 bg-slate-50"
+              allow="camera; microphone; clipboard-write"
+            />
           </div>
         </div>
       )}

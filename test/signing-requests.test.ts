@@ -207,6 +207,149 @@ describe('Signing requests', () => {
     assert.ok(signers.results.every((s: any) => s.status === 'sent'));
   });
 
+  it('creates a one-off offer letter with a single signer and one field', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' }],
+          document: {
+            name: 'Offer Letter - Agus',
+            code: 'offer_letter',
+            pdfBase64: Buffer.from('%PDF-1.4 test').toString('base64'),
+            fields: [
+              { name: 'Employee signature', type: 'signature', role: 'Employee', page: 1, x: 0.1, y: 0.8, w: 0.2, h: 0.05 },
+            ],
+          },
+          sendEmail: false,
+          idempotencyKey: 'one-off-single-signer',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 201, await res.clone().text());
+    const body = (await res.json()) as any;
+    assert.equal(body.signers.length, 1, 'only the signer that was asked for is sent');
+
+    const submissionCall = calls.find((call) => call.url.endsWith('/api/submissions'));
+    assert.equal(submissionCall!.body.submitters.length, 1);
+    assert.equal(submissionCall!.body.submitters[0].role, 'Employee');
+  });
+
+  it('accepts an arbitrary guest signer role alongside an employee', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          signers: [
+            { role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' },
+            { role: 'Notary', email: 'notaris@luar.co', name: 'Budi Notaris' },
+          ],
+          document: {
+            name: 'Offer Letter - Agus',
+            code: 'offer_letter',
+            pdfBase64: Buffer.from('%PDF-1.4 test').toString('base64'),
+            fields: [
+              { name: 'Employee signature', type: 'signature', role: 'Employee', page: 1, x: 0.1, y: 0.8, w: 0.2, h: 0.05 },
+              { name: 'Notary signature', type: 'signature', role: 'Notary', page: 1, x: 0.5, y: 0.8, w: 0.2, h: 0.05 },
+            ],
+          },
+          sendEmail: false,
+          idempotencyKey: 'freeform-guest-1',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 201, await res.clone().text());
+    const submitters = calls.find((call) => call.url.endsWith('/api/submissions'))!.body.submitters;
+    assert.deepEqual(
+      submitters.map((s: any) => s.role),
+      ['Employee', 'Notary'],
+      'a role outside the built-in list is sent through unchanged'
+    );
+  });
+
+  it('rejects two signers sharing one role', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [
+            { role: 'Employee', email: 'a@b.co', name: 'A' },
+            { role: 'Employee', email: 'c@d.co', name: 'C' },
+          ],
+          sendEmail: false,
+          idempotencyKey: 'freeform-dupe-1',
+        }),
+      },
+      token
+    );
+
+    assert.equal(res.status, 400);
+    assert.match(((await res.json()) as any).error, /unik/);
+  });
+
+  it('never lets DocuSeal send email; openHR delivers it', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    const calls = mockDocuSeal();
+    const token = await adminToken();
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests',
+      {
+        method: 'POST',
+        body: JSON.stringify({
+          employeeId: 'emp-004',
+          templateCode: 'offer_letter',
+          signers: [{ role: 'Employee', email: 'agus.setiawan@nusantara.id', name: 'Agus Setiawan' }],
+          sendEmail: true,
+          idempotencyKey: 'openhr-owns-email-1',
+        }),
+      },
+      token
+    );
+    assert.equal(res.status, 201);
+
+    const submissionCall = calls.find((call) => call.url.endsWith('/api/submissions'));
+    assert.equal(submissionCall!.body.send_email, false, 'DocuSeal is never asked to email');
+
+    // The outbox row proves openHR queued the signing email itself.
+    const outbox = await db
+      .prepare(`SELECT to_email, notification_type FROM notifications_outbox WHERE notification_type = 'signing_request'`)
+      .all();
+    assert.equal(outbox.results.length, 1);
+    assert.equal((outbox.results[0] as any).to_email, 'agus.setiawan@nusantara.id');
+  });
+
   it('fails when the template is missing or inactive', async () => {
     const { db, env } = createEnv();
     const token = await adminToken();
@@ -634,6 +777,84 @@ describe('Signing CRUD', () => {
     assert.equal(res.status, 409, 'signed requests are evidence and cannot be deleted');
     const body = (await res.json()) as any;
     assert.match(body.error, /Gantikan/);
+  });
+
+  it('lets an HR admin force-delete a partially signed request and its documents', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+    const token = await adminToken();
+
+    db.exec(`
+      INSERT INTO signing_requests (
+        id, tenant_id, employee_id, template_id, template_code, template_version,
+        workflow, docuseal_template_id, status, idempotency_key
+      ) VALUES ('sr-partial-1', 'default', 'emp-004', 'doc-tpl-1', 'offer_letter', 1,
+        'offer_letter', '4242', 'partially_signed', 'crud-partial-1');
+      INSERT INTO signing_request_signers (
+        id, tenant_id, signing_request_id, employee_id, role, email, name, status
+      ) VALUES ('srs-partial-1', 'default', 'sr-partial-1', 'emp-004', 'Employee', 'a@b.co', 'A', 'completed');
+      INSERT INTO signed_documents (id, tenant_id, signing_request_id, kind, storage_key, content_type, sha256)
+      VALUES ('sd-3', 'default', 'sr-partial-1', 'signed_pdf', 'signed/sr-partial-1/signed_pdf.pdf', 'application/pdf', 'abc');
+    `);
+
+    const blocked = await request(env, '/api/hr/signing-requests/sr-partial-1', { method: 'DELETE' }, token);
+    assert.equal(blocked.status, 409, 'a plain delete still protects evidence');
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests/sr-partial-1?force=true',
+      { method: 'DELETE' },
+      token
+    );
+    assert.equal(res.status, 200);
+
+    assert.equal(
+      await db.prepare(`SELECT id FROM signing_requests WHERE id = 'sr-partial-1'`).first(),
+      null
+    );
+    assert.equal(
+      await db.prepare(`SELECT id FROM signed_documents WHERE signing_request_id = 'sr-partial-1'`).first(),
+      null,
+      'stored evidence rows are removed with the request'
+    );
+    assert.equal(
+      await db
+        .prepare(`SELECT id FROM signing_request_signers WHERE signing_request_id = 'sr-partial-1'`)
+        .first(),
+      null
+    );
+  });
+
+  it('refuses a forced delete from a non-admin HR operator', async () => {
+    const { db, env } = createEnv();
+    seedTemplate(db);
+    mockDocuSeal();
+
+    db.exec(`
+      INSERT INTO signing_requests (
+        id, tenant_id, employee_id, template_id, template_code, template_version,
+        workflow, docuseal_template_id, status, idempotency_key
+      ) VALUES ('sr-partial-2', 'default', 'emp-004', 'doc-tpl-1', 'offer_letter', 1,
+        'offer_letter', '4242', 'partially_signed', 'crud-partial-2');
+    `);
+
+    const financeToken = await signJwt(
+      { userId: 'usr-003', email: 'keuangan@nusantara.id', role: 'finance', tenantId: 'default', name: 'Keuangan' },
+      JWT_SECRET
+    );
+
+    const res = await request(
+      env,
+      '/api/hr/signing-requests/sr-partial-2?force=true',
+      { method: 'DELETE' },
+      financeToken
+    );
+    assert.equal(res.status, 409, 'only owner_admin may destroy signed evidence');
+    assert.ok(
+      await db.prepare(`SELECT id FROM signing_requests WHERE id = 'sr-partial-2'`).first(),
+      'the request survives a rejected force delete'
+    );
   });
 
 });

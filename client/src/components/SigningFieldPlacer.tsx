@@ -10,7 +10,10 @@ import { useLanguage } from '../context/LanguageContext';
  * shown here into DocuSeal's 0-based page and into its `areas` field shape.
  */
 
-export type PlacementRole = 'Employee' | 'Manager' | 'HR';
+/** Roles are free-form labels; these are only the suggested built-ins. */
+export const SUGGESTED_ROLES = ['Employee', 'Manager', 'HR'] as const;
+
+export type PlacementRole = string;
 
 export const PLACEMENT_FIELD_TYPES = [
   'signature',
@@ -42,17 +45,36 @@ interface SigningFieldPlacerProps {
   file: File | null;
   fields: PlacedField[];
   onChange: (fields: PlacedField[]) => void;
+  /** Roles the document will actually be sent to. Defaults to the built-ins. */
+  roles?: string[];
 }
 
-const ROLE_STYLES: Record<PlacementRole, { box: string; chip: string }> = {
+const KNOWN_ROLE_STYLES: Record<string, { box: string; chip: string }> = {
   Employee: { box: 'border-blue-500 bg-blue-500/15 text-blue-900', chip: 'bg-blue-100 text-blue-800' },
   Manager: { box: 'border-emerald-500 bg-emerald-500/15 text-emerald-900', chip: 'bg-emerald-100 text-emerald-800' },
   HR: { box: 'border-purple-500 bg-purple-500/15 text-purple-900', chip: 'bg-purple-100 text-purple-800' },
 };
 
+/** Extra colours so arbitrary roles (guest, auditor, notary…) stay distinguishable. */
+const EXTRA_ROLE_STYLES = [
+  { box: 'border-amber-500 bg-amber-500/15 text-amber-900', chip: 'bg-amber-100 text-amber-800' },
+  { box: 'border-rose-500 bg-rose-500/15 text-rose-900', chip: 'bg-rose-100 text-rose-800' },
+  { box: 'border-teal-500 bg-teal-500/15 text-teal-900', chip: 'bg-teal-100 text-teal-800' },
+  { box: 'border-indigo-500 bg-indigo-500/15 text-indigo-900', chip: 'bg-indigo-100 text-indigo-800' },
+  { box: 'border-cyan-500 bg-cyan-500/15 text-cyan-900', chip: 'bg-cyan-100 text-cyan-800' },
+];
+
+const roleStyle = (role: string) => {
+  const known = KNOWN_ROLE_STYLES[role];
+  if (known) return known;
+  let hash = 0;
+  for (let i = 0; i < role.length; i++) hash = (hash * 31 + role.charCodeAt(i)) >>> 0;
+  return EXTRA_ROLE_STYLES[hash % EXTRA_ROLE_STYLES.length];
+};
+
 const MIN_SIZE = 0.03;
 
-export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fields, onChange }) => {
+export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fields, onChange, roles }) => {
   const { tr } = useLanguage();
   const canvasRef = useRef<HTMLCanvasElement | null>(null);
   const pageWrapRef = useRef<HTMLDivElement | null>(null);
@@ -64,7 +86,7 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
   const [loading, setLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
 
-  const [draftRole, setDraftRole] = useState<PlacementRole>('Employee');
+  const [draftRole, setDraftRole] = useState<PlacementRole>(roles?.[0] || 'Employee');
   const [draftType, setDraftType] = useState<PlacementFieldType>('signature');
   const [selectedId, setSelectedId] = useState<string | null>(null);
 
@@ -243,20 +265,30 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
 
   const selected = fields.find((field) => field.id === selectedId) || null;
 
+  // Offer the signer roles first, then any role already used on the document.
+  const availableRoles = useMemo(() => {
+    const set = new Set<string>(roles && roles.length > 0 ? roles : [...SUGGESTED_ROLES]);
+    for (const field of fields) set.add(field.role);
+    return Array.from(set).filter(Boolean);
+  }, [roles, fields]);
+
   return (
     <div className="space-y-3">
       <div className="flex flex-wrap items-end gap-2 rounded-xl border border-slate-200 bg-slate-50 p-2.5 text-[11px]">
         <div>
           <label className="mb-0.5 block font-semibold text-slate-500">{tr('Peran', 'Role')}</label>
-          <select
+          <input
+            list="signing-role-options"
             value={draftRole}
-            onChange={(e) => setDraftRole(e.target.value as PlacementRole)}
-            className="rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-semibold"
-          >
-            <option value="Employee">Employee</option>
-            <option value="Manager">Manager</option>
-            <option value="HR">HR</option>
-          </select>
+            onChange={(e) => setDraftRole(e.target.value)}
+            placeholder={tr('mis. Tamu / Auditor', 'e.g. Guest / Auditor')}
+            className="w-32 rounded-lg border border-slate-300 bg-white px-2 py-1.5 font-semibold"
+          />
+          <datalist id="signing-role-options">
+            {availableRoles.map((role) => (
+              <option key={role} value={role} />
+            ))}
+          </datalist>
         </div>
         <div>
           <label className="mb-0.5 block font-semibold text-slate-500">{tr('Tipe', 'Type')}</label>
@@ -275,9 +307,9 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
         <span className="rounded-lg bg-white px-2 py-1.5 font-medium text-slate-500">
           {tr('Klik pada halaman untuk menaruh field', 'Click the page to place a field')}
         </span>
-        <span className="ml-auto flex items-center gap-1.5 font-bold">
-          {(['Employee', 'Manager', 'HR'] as PlacementRole[]).map((role) => (
-            <span key={role} className={`rounded px-1.5 py-0.5 ${ROLE_STYLES[role].chip}`}>
+        <span className="ml-auto flex flex-wrap items-center gap-1.5 font-bold">
+          {availableRoles.map((role) => (
+            <span key={role} className={`rounded px-1.5 py-0.5 ${roleStyle(role).chip}`}>
               {role}
             </span>
           ))}
@@ -348,7 +380,7 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
             <canvas ref={canvasRef} className="block w-full" />
 
             {pageFields.map((field) => {
-              const style = ROLE_STYLES[field.role];
+              const style = roleStyle(field.role);
               return (
                 <div
                   key={field.id}
@@ -380,15 +412,12 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
           {selected && (
             <div className="flex flex-wrap items-center gap-2 rounded-xl border border-slate-200 bg-white p-2.5 text-[11px]">
               <span className="font-bold text-slate-700">{tr('Field terpilih:', 'Selected field:')}</span>
-              <select
+              <input
+                list="signing-role-options"
                 value={selected.role}
-                onChange={(e) => updateField(selected.id, { role: e.target.value as PlacementRole })}
-                className="rounded-lg border border-slate-300 px-2 py-1 font-semibold"
-              >
-                <option value="Employee">Employee</option>
-                <option value="Manager">Manager</option>
-                <option value="HR">HR</option>
-              </select>
+                onChange={(e) => updateField(selected.id, { role: e.target.value })}
+                className="w-28 rounded-lg border border-slate-300 px-2 py-1 font-semibold"
+              />
               <select
                 value={selected.type}
                 onChange={(e) => updateField(selected.id, { type: e.target.value as PlacementFieldType })}
@@ -424,7 +453,7 @@ export const SigningFieldPlacer: React.FC<SigningFieldPlacerProps> = ({ file, fi
         <div className="max-h-32 space-y-1 overflow-y-auto rounded-xl border border-slate-200 p-2 text-[10px]">
           {fields.map((field) => (
             <div key={field.id} className="flex items-center gap-2">
-              <span className={`rounded px-1.5 py-0.5 font-bold ${ROLE_STYLES[field.role].chip}`}>{field.role}</span>
+              <span className={`rounded px-1.5 py-0.5 font-bold ${roleStyle(field.role).chip}`}>{field.role}</span>
               <span className="font-semibold text-slate-700">{field.type}</span>
               <span className="text-slate-400">
                 {tr('hal', 'p')} {field.page} · {(field.x * 100).toFixed(0)}%, {(field.y * 100).toFixed(0)}%
