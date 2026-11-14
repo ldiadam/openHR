@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import {
   DollarSign,
   Plus,
@@ -236,6 +236,21 @@ export const HRPayroll: React.FC = () => {
   const [bulkResolutionCode, setBulkResolutionCode] = useState('attendance_completed');
   const [resolutionNote, setResolutionNote] = useState('');
 
+  // Drag-to-select on the exception calendar. `anchor` is where the press
+  // started; the range ref tracks the live span while dragging. The state copy
+  // exists only to repaint the preview — reading state inside the pointerup
+  // handler would see a stale value, since state updates are async.
+  const dragAnchorRef = useRef<string | null>(null);
+  const dragMovedRef = useRef(false);
+  const justDraggedRef = useRef(false);
+  const dragRangeRef = useRef<{ from: string; to: string } | null>(null);
+  const [dragRange, setDragRange] = useState<{ from: string; to: string } | null>(null);
+
+  const setDrag = (range: { from: string; to: string } | null) => {
+    dragRangeRef.current = range;
+    setDragRange(range);
+  };
+
   const scrollTop = () => {
     if (typeof window !== 'undefined') window.scrollTo({ top: 0, behavior: 'smooth' });
   };
@@ -362,6 +377,8 @@ export const HRPayroll: React.FC = () => {
   const changeCalendarEmployee = (employeeId: string) => {
     setCalendarEmployeeId(employeeId);
     setSelectedExceptionIds([]);
+    setDrag(null);
+    dragAnchorRef.current = null;
   };
 
   const handleBulkResolve = async (employeeId: string) => {
@@ -1786,6 +1803,78 @@ export const HRPayroll: React.FC = () => {
           });
         };
 
+        /* ---- drag to select a run of days ------------------------------- */
+
+        // Every day in grid order, so a range is a slice of this list.
+        const orderedDates = months.flatMap((ym) =>
+          buildMonthGrid(ym)
+            .map((cell) => cell.date)
+            .filter((d): d is string => Boolean(d))
+        );
+
+        const datesInRange = (from: string, to: string): string[] => {
+          const a = orderedDates.indexOf(from);
+          const b = orderedDates.indexOf(to);
+          if (a === -1 || b === -1) return [from];
+          const [start, end] = a <= b ? [a, b] : [b, a];
+          return orderedDates.slice(start, end + 1);
+        };
+
+        const isSelectableDate = (date: string) =>
+          (byDate.get(date) || []).some((exc) => !exc.resolved);
+
+        const beginDrag = (date: string) => {
+          if (!singleEmployee || isLocked) return;
+          dragAnchorRef.current = date;
+          dragMovedRef.current = false;
+          setDrag({ from: date, to: date });
+        };
+
+        const extendDrag = (date: string) => {
+          const anchor = dragAnchorRef.current;
+          if (!anchor || anchor === date) return;
+          dragMovedRef.current = true;
+          setDrag({ from: anchor, to: date });
+        };
+
+        // Days highlighted by the in-progress drag, for immediate feedback.
+        const previewDates = dragRange ? new Set(datesInRange(dragRange.from, dragRange.to)) : null;
+
+        /** Which day cell is under the pointer right now. */
+        const dateUnderPointer = (event: React.PointerEvent): string | null => {
+          const el = document.elementFromPoint(event.clientX, event.clientY);
+          const cell = el?.closest('[data-exc-date]') as HTMLElement | null;
+          return cell?.dataset.excDate || null;
+        };
+
+        /**
+         * Finish a drag: a real sweep commits the whole run of days, while a
+         * plain press-release leaves it to the day's own click handler so
+         * tapping still toggles a single date.
+         */
+        const finishDrag = () => {
+          if (!dragAnchorRef.current) return;
+          const moved = dragMovedRef.current;
+          const range = dragRangeRef.current;
+          dragAnchorRef.current = null;
+          setDrag(null);
+          if (!moved || !range) return;
+
+          const ids = datesInRange(range.from, range.to)
+            .flatMap((date) => byDate.get(date) || [])
+            .filter((exc) => !exc.resolved)
+            .map((exc) => exc.id);
+
+          justDraggedRef.current = true;
+          window.setTimeout(() => {
+            justDraggedRef.current = false;
+          }, 0);
+
+          if (ids.length > 0) {
+            setSelectedExceptionIds((prev) => Array.from(new Set([...prev, ...ids])));
+          }
+        };
+
         return (
           <div
             className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-3 sm:p-4"
@@ -1800,10 +1889,15 @@ export const HRPayroll: React.FC = () => {
                     {tr('Kalender Pengecualian Presensi', 'Attendance Exception Calendar')}
                   </h3>
                   <p className="text-[11px] text-slate-500">
-                    {tr(
-                      'Klik tanggal untuk menandai alpa (potong otomatis) atau melampirkan alasan.',
-                      'Click a date to mark alpha (automatic deduction) or attach a reason.'
-                    )}
+                    {singleEmployee
+                      ? tr(
+                          'Tarik (drag) melintasi tanggal untuk memilih beberapa hari sekaligus, atau klik satu tanggal.',
+                          'Drag across dates to select several days at once, or click a single date.'
+                        )
+                      : tr(
+                          'Klik tanggal untuk menandai alpa (potong otomatis) atau melampirkan alasan.',
+                          'Click a date to mark alpha (automatic deduction) or attach a reason.'
+                        )}
                   </p>
                 </div>
                 <button
@@ -1855,7 +1949,17 @@ export const HRPayroll: React.FC = () => {
                 </div>
               )}
 
-              <div className="flex-1 space-y-6 overflow-y-auto p-5">
+              <div
+                className="flex-1 space-y-6 overflow-y-auto p-5"
+                onPointerMove={(event) => {
+                  if (!dragAnchorRef.current) return;
+                  const date = dateUnderPointer(event);
+                  if (date) extendDrag(date);
+                }}
+                onPointerUp={finishDrag}
+                onPointerLeave={finishDrag}
+                onPointerCancel={finishDrag}
+              >
                 {months.length === 0 ? (
                   <p className="py-10 text-center text-xs text-slate-400">
                     {tr('Tidak ada pengecualian presensi.', 'No attendance exceptions.')}
@@ -1900,12 +2004,27 @@ export const HRPayroll: React.FC = () => {
                               .every((exc) => selectedExceptionIds.includes(exc.id)) &&
                             dayExceptions.some((exc) => !exc.resolved);
 
+                          const previewHere =
+                            singleEmployee &&
+                            previewDates !== null &&
+                            previewDates.has(cell.date) &&
+                            isSelectableDate(cell.date);
+
                           return (
                             <button
                               key={cell.date}
                               type="button"
+                              data-exc-date={cell.date}
                               disabled={isLocked}
+                              onPointerDown={(event) => {
+                                if (!singleEmployee || isLocked) return;
+                                // Only the primary button starts a drag.
+                                if (event.button !== 0) return;
+                                beginDrag(cell.date);
+                              }}
                               onClick={() => {
+                                // A sweep already handled this release.
+                                if (justDraggedRef.current) return;
                                 if (singleEmployee) {
                                   // Multi-select mode: toggle the day instead of opening one dialog.
                                   toggleSelected(cell.date);
@@ -1923,16 +2042,16 @@ export const HRPayroll: React.FC = () => {
                                 .map((exc) => `${exc.full_name}: ${exc.resolved ? resolutionLabel(exc.resolution_code) || 'resolved' : 'open'}`)
                                 .join('\n')}
                               className={`${base} ${
-                                selectedHere
+                                selectedHere || previewHere
                                   ? 'border-blue-500 bg-blue-100 text-blue-900 ring-2 ring-blue-300'
                                   : hasOpen
                                   ? 'border-amber-300 bg-amber-100 text-amber-900 hover:border-amber-500'
                                   : 'border-emerald-200 bg-emerald-50 text-emerald-700'
-                              } ${isLocked ? 'cursor-default opacity-70' : 'cursor-pointer'}`}
+                              } ${isLocked ? 'cursor-default opacity-70' : singleEmployee ? 'cursor-pointer select-none touch-none' : 'cursor-pointer'}`}
                             >
                               {cell.day}
-                              <span className={`mt-0.5 text-[8px] font-semibold ${selectedHere ? 'text-blue-700' : hasOpen ? 'text-amber-700' : 'text-emerald-600'}`}>
-                                {selectedHere
+                              <span className={`mt-0.5 text-[8px] font-semibold ${selectedHere || previewHere ? 'text-blue-700' : hasOpen ? 'text-amber-700' : 'text-emerald-600'}`}>
+                                {selectedHere || previewHere
                                   ? tr('dipilih', 'selected')
                                   : hasOpen
                                   ? `${dayExceptions.filter((exc) => !exc.resolved).length} ${tr('buka', 'open')}`
