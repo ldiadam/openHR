@@ -17,37 +17,14 @@ import androidx.lifecycle.compose.LocalLifecycleOwner
 import id.openhr.ess.data.model.BranchInfo
 import id.openhr.ess.util.Formatters
 import org.osmdroid.config.Configuration
-import org.osmdroid.tileprovider.tilesource.OnlineTileSourceBase
+import org.osmdroid.tileprovider.tilesource.TileSourceFactory
 import org.osmdroid.util.GeoPoint
-import org.osmdroid.util.MapTileIndex
 import org.osmdroid.views.CustomZoomButtonsController
 import org.osmdroid.views.MapView
 import org.osmdroid.views.overlay.Marker
 import org.osmdroid.views.overlay.Polygon
 import java.io.File
 import kotlin.math.max
-
-private fun createCartoTileSource(): OnlineTileSourceBase {
-    return object : OnlineTileSourceBase(
-        "CartoVoyager",
-        0,
-        19,
-        256,
-        ".png",
-        arrayOf(
-            "https://a.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://b.basemaps.cartocdn.com/rastertiles/voyager/",
-            "https://c.basemaps.cartocdn.com/rastertiles/voyager/"
-        )
-    ) {
-        override fun getTileURLString(pMapTileIndex: Long): String {
-            val z = MapTileIndex.getZoom(pMapTileIndex)
-            val x = MapTileIndex.getX(pMapTileIndex)
-            val y = MapTileIndex.getY(pMapTileIndex)
-            return "$baseUrl$z/$x/$y.png"
-        }
-    }
-}
 
 private fun createUserPinDrawable(context: Context): BitmapDrawable {
     val density = context.resources.displayMetrics.density
@@ -126,12 +103,12 @@ fun AttendanceMapView(
 
     val mapView = remember {
         Configuration.getInstance().apply {
-            userAgentValue = context.packageName
+            userAgentValue = "openHR-ESS/1.0 (https://openhr.madadigital.workers.dev)"
             osmdroidBasePath = File(context.cacheDir, "osmdroid")
             osmdroidTileCache = File(context.cacheDir, "osmdroid/tiles")
         }
         MapView(context).apply {
-            setTileSource(createCartoTileSource())
+            setTileSource(TileSourceFactory.MAPNIK)
             setMultiTouchControls(true)
             zoomController.setVisibility(CustomZoomButtonsController.Visibility.NEVER)
             isTilesScaledToDpi = true
