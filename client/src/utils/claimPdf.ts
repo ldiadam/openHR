@@ -43,11 +43,11 @@ function loadImage(src: string): Promise<HTMLImageElement> {
  */
 export async function generateCombinedReceiptsPdf(options: ClaimPdfOptions): Promise<void> {
   const {
-    companyName = 'SMTS Pte Ltd',
-    periodTitle = 'September 2026',
-    employeeName = 'Adam',
+    companyName = 'openHR',
+    periodTitle = 'Current Period',
+    employeeName = '-',
     employeeNik = '-',
-    approverName = 'Lawrence',
+    approverName = 'Director',
     claims = [],
   } = options;
 
@@ -70,7 +70,7 @@ export async function generateCombinedReceiptsPdf(options: ClaimPdfOptions): Pro
   doc.setTextColor(255, 255, 255);
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(14);
-  doc.text((companyName || 'SMTS Pte Ltd').toUpperCase(), margin, 13);
+  doc.text((companyName || 'openHR').toUpperCase(), margin, 13);
 
   doc.setFontSize(10);
   doc.setFont('helvetica', 'normal');
@@ -214,7 +214,7 @@ export async function generateCombinedReceiptsPdf(options: ClaimPdfOptions): Pro
   doc.setTextColor(15, 23, 42);
   doc.text(employeeName, sigCol1, sigY + 26);
   doc.text('-', sigCol2, sigY + 26);
-  doc.text(approverName || 'Lawrence', sigCol3, sigY + 26);
+  doc.text(approverName || 'Director', sigCol3, sigY + 26);
 
   // Footer for Page 1
   doc.setFont('helvetica', 'normal');

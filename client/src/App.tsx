@@ -1,39 +1,51 @@
-import React from 'react';
+import React, { Suspense } from 'react';
 import { BrowserRouter, Routes, Route, Navigate } from 'react-router-dom';
 import { AuthProvider, useAuth } from './context/AuthContext';
 import { LanguageProvider } from './context/LanguageContext';
-import { CompanyProvider } from './context/CompanyContext';
+import { CompanyProvider, useCompany } from './context/CompanyContext';
+import { ToggleableModuleId } from '../../shared/modules';
 import { Layout } from './components/Layout';
 import { InstallPwaPrompt } from './components/InstallPwaPrompt';
 import { LoadingScreen } from './components/LoadingScreen';
 import { Login } from './pages/Login';
 import { ResetPassword } from './pages/ResetPassword';
-import { EmployeeHome } from './pages/EmployeeHome';
-import { EmployeeAttendance } from './pages/EmployeeAttendance';
-import { EmployeeRequests } from './pages/EmployeeRequests';
-import { EmployeePayslips } from './pages/EmployeePayslips';
-import { EmployeeProfile } from './pages/EmployeeProfile';
-import { HRDashboard } from './pages/HRDashboard';
-import { HREmployees } from './pages/HREmployees';
-import { HREmployeeDetail } from './pages/HREmployeeDetail';
-import { HRAttendance } from './pages/HRAttendance';
-import { HRLeave } from './pages/HRLeave';
-import { LeaveApplicationForm } from './pages/LeaveApplicationForm';
-import { LeaveApprovals } from './pages/LeaveApprovals';
-import { HRShifts } from './pages/HRShifts';
-import { HRPayroll } from './pages/HRPayroll';
-import { HRKasbon } from './pages/HRKasbon';
-import { HRDocuments } from './pages/HRDocuments';
-import { SigningComplete } from './pages/SigningComplete';
-import { HRReports } from './pages/HRReports';
-import { HRSettings } from './pages/HRSettings';
+
+const EmployeeHome = React.lazy(() => import('./pages/EmployeeHome').then((m) => ({ default: m.EmployeeHome })));
+const EmployeeAttendance = React.lazy(() => import('./pages/EmployeeAttendance').then((m) => ({ default: m.EmployeeAttendance })));
+const EmployeeRequests = React.lazy(() => import('./pages/EmployeeRequests').then((m) => ({ default: m.EmployeeRequests })));
+const EmployeePayslips = React.lazy(() => import('./pages/EmployeePayslips').then((m) => ({ default: m.EmployeePayslips })));
+const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile').then((m) => ({ default: m.EmployeeProfile })));
+const HRDashboard = React.lazy(() => import('./pages/HRDashboard').then((m) => ({ default: m.HRDashboard })));
+const HREmployees = React.lazy(() => import('./pages/HREmployees').then((m) => ({ default: m.HREmployees })));
+const HREmployeeDetail = React.lazy(() => import('./pages/HREmployeeDetail').then((m) => ({ default: m.HREmployeeDetail })));
+const HRAttendance = React.lazy(() => import('./pages/HRAttendance').then((m) => ({ default: m.HRAttendance })));
+const HRLeave = React.lazy(() => import('./pages/HRLeave').then((m) => ({ default: m.HRLeave })));
+const LeaveApplicationForm = React.lazy(() => import('./pages/LeaveApplicationForm').then((m) => ({ default: m.LeaveApplicationForm })));
+const HRShifts = React.lazy(() => import('./pages/HRShifts').then((m) => ({ default: m.HRShifts })));
+const HRPayroll = React.lazy(() => import('./pages/HRPayroll').then((m) => ({ default: m.HRPayroll })));
+const HRKasbon = React.lazy(() => import('./pages/HRKasbon').then((m) => ({ default: m.HRKasbon })));
+const HRPettyCash = React.lazy(() => import('./pages/HRPettyCash').then((m) => ({ default: m.HRPettyCash })));
+const TasksPage = React.lazy(() => import('./pages/TasksPage').then((m) => ({ default: m.TasksPage })));
+const AnnouncementsPage = React.lazy(() => import('./pages/AnnouncementsPage').then((m) => ({ default: m.AnnouncementsPage })));
+const AssetsPage = React.lazy(() => import('./pages/AssetsPage').then((m) => ({ default: m.AssetsPage })));
+const OffboardingPage = React.lazy(() => import('./pages/OffboardingPage').then((m) => ({ default: m.OffboardingPage })));
+const PerformancePage = React.lazy(() => import('./pages/PerformancePage').then((m) => ({ default: m.PerformancePage })));
+const RecruitmentPage = React.lazy(() => import('./pages/RecruitmentPage').then((m) => ({ default: m.RecruitmentPage })));
+const PublicCareersPage = React.lazy(() => import('./pages/PublicCareersPage').then((m) => ({ default: m.PublicCareersPage })));
+const HRDocuments = React.lazy(() => import('./pages/HRDocuments').then((m) => ({ default: m.HRDocuments })));
+const SigningComplete = React.lazy(() => import('./pages/SigningComplete').then((m) => ({ default: m.SigningComplete })));
+const PublicPettyCashVerify = React.lazy(() => import('./pages/PublicPettyCashVerify').then((m) => ({ default: m.PublicPettyCashVerify })));
+const HRReports = React.lazy(() => import('./pages/HRReports').then((m) => ({ default: m.HRReports })));
+const HRSettings = React.lazy(() => import('./pages/HRSettings').then((m) => ({ default: m.HRSettings })));
 
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
   allowedRoles?: string[];
   allowSelfService?: boolean;
-}> = ({ children, allowedRoles, allowSelfService = true }) => {
+  requiredModule?: ToggleableModuleId;
+}> = ({ children, allowedRoles, allowSelfService = true, requiredModule }) => {
   const { user, loading } = useAuth();
+  const { isModuleEnabled } = useCompany();
 
   if (loading) {
     return <LoadingScreen />;
@@ -50,6 +62,10 @@ const ProtectedRoute: React.FC<{
   }
 
   if (allowedRoles && !allowedRoles.includes(user.role)) {
+    return <Navigate to={user.role === 'employee' ? '/app' : '/'} replace />;
+  }
+
+  if (requiredModule && !isModuleEnabled(requiredModule)) {
     return <Navigate to={user.role === 'employee' ? '/app' : '/'} replace />;
   }
 
@@ -70,6 +86,7 @@ export const App: React.FC = () => {
       <CompanyProvider>
         <AuthProvider>
           <BrowserRouter>
+            <Suspense fallback={<LoadingScreen />}>
             <Routes>
           {/* Public Authentication */}
           <Route path="/login" element={<Login />} />
@@ -78,6 +95,10 @@ export const App: React.FC = () => {
           {/* Public: DocuSeal redirects signers here, and they are usually
               external parties with no openHR login. */}
           <Route path="/signing/complete" element={<SigningComplete />} />
+          {/* Public: QR code verification & read-only view for Petty Cash PDF reports */}
+          <Route path="/verify/petty-cash/:id" element={<PublicPettyCashVerify />} />
+          {/* Public: External Careers & Job Application Portal */}
+          <Route path="/careers" element={<PublicCareersPage />} />
 
           {/* Root redirect */}
           <Route
@@ -151,7 +172,7 @@ export const App: React.FC = () => {
           <Route
             path="/attendance"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']} requiredModule="attendance">
                 <HRAttendance />
               </ProtectedRoute>
             }
@@ -159,24 +180,20 @@ export const App: React.FC = () => {
           <Route
             path="/leave"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']} requiredModule="leave">
                 <HRLeave />
               </ProtectedRoute>
             }
           />
           <Route
             path="/leave-applications"
-            element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
-                <LeaveApprovals />
-              </ProtectedRoute>
-            }
+            element={<Navigate to="/leave" replace />}
           />
-          <Route path="/app/leave-application" element={<ProtectedRoute><LeaveApplicationForm /></ProtectedRoute>} />
+          <Route path="/app/leave-application" element={<ProtectedRoute requiredModule="leave"><LeaveApplicationForm /></ProtectedRoute>} />
           <Route
             path="/shifts"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']} requiredModule="shifts">
                 <HRShifts />
               </ProtectedRoute>
             }
@@ -184,7 +201,7 @@ export const App: React.FC = () => {
           <Route
             path="/payroll"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance']} requiredModule="payroll">
                 <HRPayroll />
               </ProtectedRoute>
             }
@@ -192,15 +209,119 @@ export const App: React.FC = () => {
           <Route
             path="/kasbon"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="claims">
                 <HRKasbon />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/petty-cash"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="petty_cash">
+                <HRPettyCash />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tasks"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="tasks">
+                <TasksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/tasks/:taskId"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="tasks">
+                <TasksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/tasks"
+            element={
+              <ProtectedRoute requiredModule="tasks">
+                <TasksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/tasks/:taskId"
+            element={
+              <ProtectedRoute requiredModule="tasks">
+                <TasksPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/announcements"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager', 'finance']} requiredModule="announcements">
+                <AnnouncementsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/announcements"
+            element={
+              <ProtectedRoute requiredModule="announcements">
+                <AnnouncementsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/assets"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager', 'finance']} requiredModule="assets">
+                <AssetsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/assets"
+            element={
+              <ProtectedRoute requiredModule="assets">
+                <AssetsPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/offboarding"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager', 'finance']} requiredModule="offboarding">
+                <OffboardingPage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/performance"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']} requiredModule="performance">
+                <PerformancePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/performance"
+            element={
+              <ProtectedRoute requiredModule="performance">
+                <PerformancePage />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/recruitment"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'manager']} requiredModule="recruitment">
+                <RecruitmentPage />
               </ProtectedRoute>
             }
           />
           <Route
             path="/reports"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="reports">
                 <HRReports />
               </ProtectedRoute>
             }
@@ -208,7 +329,7 @@ export const App: React.FC = () => {
           <Route
             path="/documents"
             element={
-              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']}>
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin', 'finance', 'manager']} requiredModule="signing">
                 <HRDocuments />
               </ProtectedRoute>
             }
@@ -225,6 +346,7 @@ export const App: React.FC = () => {
           {/* Fallback */}
           <Route path="*" element={<Navigate to="/" replace />} />
         </Routes>
+        </Suspense>
       </BrowserRouter>
     </AuthProvider>
     <InstallPwaPrompt />

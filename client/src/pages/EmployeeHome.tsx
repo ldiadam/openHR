@@ -302,6 +302,20 @@ export const EmployeeHome: React.FC = () => {
       : null;
   const dayComplete = Boolean(todayAttendance?.clock_in_time && todayAttendance?.clock_out_time);
 
+  const lateMinutes = Number(todayAttendance?.late_minutes || 0);
+  const earlyMinutes = Number(todayAttendance?.early_minutes || 0);
+  const hasClockIn = Boolean(todayAttendance?.clock_in_time);
+  const hasClockOut = Boolean(todayAttendance?.clock_out_time);
+  const clockInTone = hasClockIn
+    ? lateMinutes > 0 || todayAttendance?.status === 'late'
+      ? 'text-rose-600'
+      : 'text-emerald-600'
+    : 'text-slate-900';
+  const clockOutTone = hasClockOut ? (earlyMinutes > 0 ? 'text-rose-600' : 'text-emerald-600') : 'text-slate-900';
+  const shiftStart = todayAttendance?.shift_start_time || '';
+  const shiftEnd = todayAttendance?.shift_end_time || '';
+  const hasShift = Boolean(shiftStart && shiftEnd);
+
   return (
     <div>
       {/* Full-screen map */}
@@ -597,18 +611,39 @@ export const EmployeeHome: React.FC = () => {
               <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 {t.attendance.todayMasuk}
               </span>
-              <span className="font-mono text-sm font-bold text-slate-900">
+              <span className={`block font-mono text-sm font-bold ${clockInTone}`}>
                 {todayAttendance?.clock_in_time || '--:--'}
               </span>
+              {hasClockIn && lateMinutes > 0 && (
+                <span className="mt-0.5 block text-[9px] font-semibold text-rose-600">
+                  {tr(`Terlambat ${lateMinutes} mnt`, `Late ${lateMinutes} min`)}
+                </span>
+              )}
             </div>
             <div className="rounded-xl bg-slate-50 px-3 py-2">
               <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
                 {t.attendance.todayPulang}
               </span>
-              <span className="font-mono text-sm font-bold text-slate-900">
+              <span className={`block font-mono text-sm font-bold ${clockOutTone}`}>
                 {todayAttendance?.clock_out_time || '--:--'}
               </span>
+              {hasClockOut && earlyMinutes > 0 && (
+                <span className="mt-0.5 block text-[9px] font-semibold text-rose-600">
+                  {tr(`Pulang awal ${earlyMinutes} mnt`, `Left early ${earlyMinutes} min`)}
+                </span>
+              )}
             </div>
+            {hasShift && (
+              <div className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-white/70 py-1 text-[10px] font-semibold text-slate-500">
+                <span>{tr('Shift', 'Shift')}:</span>
+                <span className="font-mono text-slate-700">
+                  {shiftStart} – {shiftEnd}
+                </span>
+                {todayAttendance?.shift_name && (
+                  <span className="truncate text-slate-400">· {todayAttendance.shift_name}</span>
+                )}
+              </div>
+            )}
           </div>
           )}
         </div>

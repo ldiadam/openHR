@@ -73,10 +73,23 @@ describe('Reimbursement payroll linkage', () => {
     assert.equal(reimb.status, 'approved');
 
     const item = await db
-      .prepare(`SELECT reimbursement_amount FROM payroll_items WHERE payroll_run_id = ? AND employee_id = 'emp-004'`)
+      .prepare(
+        `SELECT base_salary, fixed_allowance, overtime_pay, attendance_bonus, commission_bonus, thr_amount,
+                reimbursement_amount, gross_earnings, total_deductions, take_home_pay
+         FROM payroll_items WHERE payroll_run_id = ? AND employee_id = 'emp-004'`
+      )
       .bind(runId)
       .first();
     assert.equal(item.reimbursement_amount, 500000);
+    assert.ok(
+      item.gross_earnings <= item.base_salary + item.fixed_allowance + item.overtime_pay + item.attendance_bonus + item.commission_bonus + item.thr_amount,
+      'Gross earnings must exclude reimbursement_amount'
+    );
+    assert.equal(
+      item.take_home_pay,
+      item.gross_earnings - item.total_deductions + item.reimbursement_amount,
+      'Take-home pay must add non-earning reimbursement on top of net salary'
+    );
 
     const listRes = await request('/api/kasbon/reimbursements?employee_id=emp-004', {}, adminToken);
     const list = (await listRes.json()) as any;

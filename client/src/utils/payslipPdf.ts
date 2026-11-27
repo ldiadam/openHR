@@ -262,10 +262,14 @@ export async function downloadPayslipPdf(payslip: any) {
     ...(num(payslip.commission_bonus) > 0
       ? [{ label: 'Komisi / Bonus', amount: num(payslip.commission_bonus) }]
       : []),
-    ...(num(payslip.reimbursement_amount) > 0
-      ? [{ label: 'Reimbursement', amount: num(payslip.reimbursement_amount) }]
-      : []),
   ];
+
+  const earningsTotal = earnings.reduce((sum, row) => sum + row.amount, 0);
+  const grossEarningsDisplay =
+    num(payslip.reimbursement_amount) > 0 &&
+    num(payslip.gross_earnings) === earningsTotal + num(payslip.reimbursement_amount)
+      ? earningsTotal
+      : num(payslip.gross_earnings);
 
   const deductions: PdfRow[] = [
     ...(num(payslip.bpjs_kes_employee) > 0
@@ -336,7 +340,7 @@ export async function downloadPayslipPdf(payslip: any) {
     earnings,
     '-',
     'Total Penghasilan Bruto',
-    num(payslip.gross_earnings),
+    grossEarningsDisplay,
     { totalBaseline: sharedBaseline }
   );
   drawSection(
@@ -353,6 +357,20 @@ export async function downloadPayslipPdf(payslip: any) {
   );
 
   let cursor = sharedBaseline + 6;
+
+  // Non-earning reimbursement row (added to take-home pay, excluded from gross earnings)
+  if (num(payslip.reimbursement_amount) > 0) {
+    doc.setFillColor(248, 250, 252);
+    doc.setDrawColor(...LINE);
+    doc.setLineWidth(0.2);
+    doc.rect(margin, cursor, contentWidth, 8, 'FD');
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.2);
+    doc.setTextColor(...DARK);
+    doc.text('Reimbursement (Penggantian Biaya - Bukan Penghasilan)', margin + 3, cursor + 5.2);
+    doc.text(`+${rp(payslip.reimbursement_amount)}`, pageWidth - margin - 3, cursor + 5.2, { align: 'right' });
+    cursor += 11;
+  }
 
   // Net pay band
   doc.setFillColor(...DARK);

@@ -354,6 +354,8 @@ attendanceRoutes.get('/today', async (c) => {
     SELECT e.id as employee_id, e.nik, e.full_name, e.job_title,
            d.name as department_name, b.name as branch_name,
            b.latitude as branch_lat, b.longitude as branch_lng, b.radius_meters as branch_radius,
+           e.shift_pattern_id, sp.name as shift_name,
+           sp.start_time as shift_start_time, sp.end_time as shift_end_time,
            a.id as attendance_id, a.clock_in_time, a.clock_out_time,
            COALESCE(a.status, 'absent') as status,
            COALESCE(a.late_minutes, 0) as late_minutes,
@@ -366,6 +368,7 @@ attendanceRoutes.get('/today', async (c) => {
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
     LEFT JOIN branches b ON e.branch_id = b.id
+    LEFT JOIN shift_patterns sp ON e.shift_pattern_id = sp.id
     LEFT JOIN attendance a ON e.id = a.employee_id AND a.date = ?
     WHERE e.lifecycle_status IN ('active', 'probation') ${empFilter}
     ORDER BY a.clock_in_time DESC, e.full_name ASC

@@ -245,14 +245,13 @@ export function calculateEmployeePayroll(
   const reimbursementAmount = input.reimbursement_amount || 0;
   const thrAmount = input.thr_amount || 0;
 
-  // Gross Earnings
+  // Gross Earnings (taxable compensation; reimbursements are non-earning expense repayments)
   const grossEarnings =
     proratedSalary +
     input.fixed_allowances +
     overtimePay +
     attendanceBonus +
     commissionBonus +
-    reimbursementAmount +
     thrAmount;
 
   // BPJS Wage Base (subject to cap)
@@ -330,7 +329,7 @@ export function calculateEmployeePayroll(
     bpjsJpEmployee +
     pph21Amount;
 
-  const takeHomePay = grossEarnings - totalDeductions;
+  const takeHomePay = grossEarnings - totalDeductions + reimbursementAmount;
 
   const totalEmployerCost =
     grossEarnings +

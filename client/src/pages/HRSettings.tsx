@@ -18,16 +18,28 @@ import {
   Navigation,
   Upload,
   Image as ImageIcon,
+  Layers,
 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { useLanguage } from '../context/LanguageContext';
 import { useCompany } from '../context/CompanyContext';
 import { LocationPickerMap } from '../components/LocationPickerMap';
+import {
+  DEFAULT_MODULES_CONFIG,
+  MODULE_DEFINITIONS,
+  ModulesConfig,
+  TASK_REFERENCE_PRESETS,
+  TaskReferencePreset,
+  parseModulesConfig,
+} from '../../../shared/modules';
 
 export const HRSettings: React.FC = () => {
   const { t, tr, formatCurrency, formatDate } = useLanguage();
   const { refreshCompany, updateCompanyLocal } = useCompany();
-  const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'audit' | 'departments' | 'notifications'>('payroll');
+  const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'modules' | 'audit' | 'departments' | 'notifications'>('payroll');
+  const [modulesConfig, setModulesConfig] = useState<ModulesConfig>({ ...DEFAULT_MODULES_CONFIG });
+  const [docusealConfigured, setDocusealConfigured] = useState(false);
+  const [savingModules, setSavingModules] = useState(false);
   const [payrollSettings, setPayrollSettings] = useState<any>(null);
   const [attendancePolicy, setAttendancePolicy] = useState<{ require_selfie: boolean; require_location: boolean }>({
     require_selfie: false,
@@ -67,13 +79,14 @@ export const HRSettings: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [pRes, bRes, cRes, aRes, attRes, dRes] = await Promise.all([
+      const [pRes, bRes, cRes, aRes, attRes, dRes, mRes] = await Promise.all([
         apiFetch('/settings/payroll'),
         apiFetch('/settings/branches'),
         apiFetch('/settings/company'),
         apiFetch('/settings/audit-logs'),
         apiFetch('/settings/attendance').catch(() => ({ require_selfie: false, require_location: true })),
         apiFetch('/settings/departments').catch(() => ({ departments: [] })),
+        apiFetch('/settings/modules').catch(() => ({ modules: DEFAULT_MODULES_CONFIG })),
       ]);
       setPayrollSettings(pRes.settings || {});
       setBranches(bRes.branches || []);
@@ -81,6 +94,8 @@ export const HRSettings: React.FC = () => {
       setAuditLogs(aRes.logs || []);
       setAttendancePolicy(attRes);
       setDepartments(dRes.departments || []);
+      setModulesConfig(parseModulesConfig(mRes.modules));
+      setDocusealConfigured(Boolean(mRes.integrations?.docusealConfigured));
     } catch (err: any) {
       console.warn('Settings load err:', err.message);
     } finally {
@@ -104,6 +119,25 @@ export const HRSettings: React.FC = () => {
       loadData();
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleSaveModules = async () => {
+    setSavingModules(true);
+    setMsg(null);
+    try {
+      const res = await apiFetch('/settings/modules', {
+        method: 'PUT',
+        body: JSON.stringify({ modules: modulesConfig }),
+      });
+      setModulesConfig(parseModulesConfig(res.modules));
+      updateCompanyLocal({ modules: res.modules, modules_json: JSON.stringify(res.modules) });
+      await refreshCompany();
+      setMsg({ type: 'success', text: res.message || tr('Konfigurasi modul disimpan.', 'Module settings saved.') });
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      setSavingModules(false);
     }
   };
 
@@ -345,13 +379,100 @@ export const HRSettings: React.FC = () => {
     );
   };
 
+  const settingsNavGroups: Array<{
+    groupLabel: string;
+    items: Array<{
+      id: typeof activeTab;
+      label: string;
+      hint: string;
+      icon: React.FC<{ size?: number; className?: string }>;
+    }>;
+  }> = [
+    {
+      groupLabel: tr('Organisasi', 'Organization'),
+      items: [
+        {
+          id: 'company',
+          label: t.settings.tabCompany,
+          hint: tr('Logo, identitas & SMTP', 'Logo, branding & SMTP'),
+          icon: Building,
+        },
+        {
+          id: 'branches',
+          label: t.settings.tabBranches,
+          hint: tr('Lokasi GPS & UMK', 'GPS geofence & UMK'),
+          icon: MapPin,
+        },
+        {
+          id: 'departments',
+          label: tr('Departemen', 'Departments'),
+          hint: tr('Divisi & kode unit', 'Teams & unit codes'),
+          icon: Building,
+        },
+      ],
+    },
+    {
+      groupLabel: tr('Kebijakan & Kepatuhan', 'Policies & Compliance'),
+      items: [
+        {
+          id: 'payroll',
+          label: t.settings.tabPayroll,
+          hint: tr('BPJS, PPh 21 TER & lembur', 'BPJS, PPh 21 TER & OT'),
+          icon: DollarSign,
+        },
+        {
+          id: 'attendance',
+          label: t.settings.tabAttendance,
+          hint: tr('Selfie & validasi lokasi', 'Selfie & GPS policy'),
+          icon: Clock,
+        },
+      ],
+    },
+    {
+      groupLabel: tr('Platform & Tata Kelola', 'Platform & Governance'),
+      items: [
+        {
+          id: 'modules',
+          label: tr('Modul & Template', 'Modules & Templates'),
+          hint: tr('Fitur aktif & label ekspor', 'Feature toggles & exports'),
+          icon: Layers,
+        },
+        {
+          id: 'notifications',
+          label: tr('Notifikasi', 'Notifications'),
+          hint: tr('Riwayat pengiriman email', 'Email delivery history'),
+          icon: Mail,
+        },
+        {
+          id: 'audit',
+          label: t.settings.tabAudit,
+          hint: tr('Log aktivitas & keamanan', 'Security & change log'),
+          icon: ShieldAlert,
+        },
+      ],
+    },
+  ];
+
+  const activeNavMeta =
+    settingsNavGroups.flatMap((g) => g.items).find((i) => i.id === activeTab) ||
+    settingsNavGroups[0].items[0];
+
   return (
     <div className="space-y-6">
-      <div>
-        <h1 className="text-2xl font-black text-slate-900 tracking-tight">{t.settings.title}</h1>
-        <p className="text-xs text-slate-500">
-          {t.settings.subtitle}
-        </p>
+      <div className="flex flex-wrap items-center justify-between gap-3 rounded-3xl border border-slate-200/80 bg-white px-6 py-5 shadow-2xs">
+        <div className="flex items-center gap-3.5">
+          <div className="flex h-11 w-11 shrink-0 items-center justify-center rounded-2xl bg-slate-900 text-white shadow-xs">
+            <Settings size={20} />
+          </div>
+          <div>
+            <h1 className="text-xl font-black tracking-tight text-slate-900">{t.settings.title}</h1>
+            <p className="text-xs text-slate-500">{t.settings.subtitle}</p>
+          </div>
+        </div>
+        <div className="inline-flex items-center gap-2 rounded-xl border border-slate-200 bg-slate-50 px-3 py-1.5 text-xs font-bold text-slate-700">
+          <activeNavMeta.icon size={14} className="text-blue-600" />
+          <span>{activeNavMeta.label}</span>
+        </div>
       </div>
 
       {msg && (
@@ -366,72 +487,75 @@ export const HRSettings: React.FC = () => {
         </div>
       )}
 
-      {/* Tabs */}
-      <div className="flex flex-wrap border-b border-slate-200 gap-x-6 gap-y-1 text-xs font-bold text-slate-500">
-        <button
-          onClick={() => setActiveTab('payroll')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'payroll' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <DollarSign size={15} />
-          <span>{t.settings.tabPayroll}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('branches')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'branches' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <MapPin size={15} />
-          <span>{t.settings.tabBranches}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('departments')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'departments' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <Building size={15} />
-          <span>{tr('Departemen', 'Departments')}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('attendance')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'attendance' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <Clock size={15} />
-          <span>{t.settings.tabAttendance}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('company')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'company' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <Building size={15} />
-          <span>{t.settings.tabCompany}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('audit')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'audit' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <ShieldAlert size={15} />
-          <span>{t.settings.tabAudit}</span>
-        </button>
-        <button
-          onClick={() => setActiveTab('notifications')}
-          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 cursor-pointer ${
-            activeTab === 'notifications' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
-          }`}
-        >
-          <Mail size={15} />
-          <span>{tr('Notifikasi', 'Notifications')}</span>
-        </button>
+      {/* Mobile horizontal pill nav */}
+      <div className="flex gap-1.5 overflow-x-auto pb-1 lg:hidden">
+        {settingsNavGroups.flatMap((g) => g.items).map((item) => {
+          const Icon = item.icon;
+          const active = activeTab === item.id;
+          return (
+            <button
+              key={item.id}
+              type="button"
+              onClick={() => setActiveTab(item.id)}
+              className={`flex shrink-0 items-center gap-1.5 rounded-xl px-3 py-2 text-xs font-bold transition ${
+                active
+                  ? 'bg-slate-900 text-white shadow-xs'
+                  : 'border border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+              }`}
+            >
+              <Icon size={14} />
+              <span>{item.label}</span>
+            </button>
+          );
+        })}
       </div>
+
+      <div className="grid grid-cols-1 items-start gap-6 lg:grid-cols-[264px_1fr]">
+        {/* Desktop Grouped Sidebar */}
+        <aside className="hidden rounded-3xl border border-slate-200/80 bg-white p-3 shadow-2xs lg:sticky lg:top-6 lg:block">
+          <div className="space-y-4">
+            {settingsNavGroups.map((group) => (
+              <div key={group.groupLabel} className="space-y-1">
+                <div className="px-3 pt-1 text-[10px] font-bold uppercase tracking-wider text-slate-400">
+                  {group.groupLabel}
+                </div>
+                {group.items.map((item) => {
+                  const Icon = item.icon;
+                  const active = activeTab === item.id;
+                  return (
+                    <button
+                      key={item.id}
+                      type="button"
+                      onClick={() => setActiveTab(item.id)}
+                      className={`flex w-full items-start gap-2.5 rounded-2xl px-3 py-2.5 text-left transition cursor-pointer ${
+                        active
+                          ? 'bg-slate-900 text-white shadow-xs'
+                          : 'text-slate-600 hover:bg-slate-50 hover:text-slate-900'
+                      }`}
+                    >
+                      <Icon
+                        size={15}
+                        className={`mt-0.5 shrink-0 ${active ? 'text-blue-400' : 'text-slate-400'}`}
+                      />
+                      <div className="min-w-0">
+                        <div className="truncate text-xs font-bold">{item.label}</div>
+                        <div
+                          className={`truncate text-[10px] ${
+                            active ? 'text-slate-300' : 'text-slate-400'
+                          }`}
+                        >
+                          {item.hint}
+                        </div>
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <div className="min-w-0 space-y-6">
 
       {/* Loading skeleton */}
       {loading && (
@@ -1487,7 +1611,7 @@ export const HRSettings: React.FC = () => {
                   type="text"
                   value={company.custom_domain || ''}
                   onChange={(e) => setCompany({ ...company, custom_domain: e.target.value })}
-                  placeholder={tr('Contoh: hr.shautomationpl.com', 'Example: hr.shautomationpl.com')}
+                  placeholder={tr('Contoh: hr.company.com', 'Example: hr.company.com')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1503,7 +1627,7 @@ export const HRSettings: React.FC = () => {
                   type="text"
                   value={company.purelymail_domain || ''}
                   onChange={(e) => setCompany({ ...company, purelymail_domain: e.target.value })}
-                  placeholder={tr('Contoh: shautomationpl.com', 'Example: shautomationpl.com')}
+                  placeholder={tr('Contoh: company.com', 'Example: company.com')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1519,7 +1643,7 @@ export const HRSettings: React.FC = () => {
                   type="email"
                   value={company.purelymail_from_address || ''}
                   onChange={(e) => setCompany({ ...company, purelymail_from_address: e.target.value })}
-                  placeholder={tr('Contoh: hr@shautomationpl.com', 'Example: hr@shautomationpl.com')}
+                  placeholder={tr('Contoh: hr@company.com', 'Example: hr@company.com')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
@@ -1625,6 +1749,238 @@ export const HRSettings: React.FC = () => {
         </form>
       )}
 
+      {/* TAB: MODULAR FEATURE TOGGLES */}
+      {activeTab === 'modules' && (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs p-6 space-y-5">
+          <div className="border-b border-slate-100 pb-4">
+            <h3 className="font-bold text-slate-900 text-sm">
+              {tr('Modul & Fitur Perusahaan', 'Company Modules & Features')}
+            </h3>
+            <p className="text-xs text-slate-500 mt-0.5">
+              {tr(
+                'Aktifkan atau nonaktifkan modul sesuai kebutuhan perusahaan Anda. Modul yang dinonaktifkan disembunyikan dari menu dan API.',
+                'Enable or disable modules to match your company workflow. Disabled modules are hidden from navigation and guarded at the API.'
+              )}
+            </p>
+          </div>
+
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+            {MODULE_DEFINITIONS.map((mod) => {
+              const enabled = modulesConfig[mod.id] !== false;
+              return (
+                <label
+                  key={mod.id}
+                  className={`flex items-start justify-between gap-3 rounded-2xl border p-4 cursor-pointer transition ${
+                    enabled ? 'border-blue-200 bg-blue-50/30' : 'border-slate-200 bg-slate-50/60 opacity-75'
+                  }`}
+                >
+                  <div className="min-w-0">
+                    <div className="flex flex-wrap items-center gap-1.5">
+                      <span className="font-bold text-slate-900">{tr(mod.nameId, mod.nameEn)}</span>
+                      {mod.requiresExternalCreds && (
+                        <span
+                          className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                            docusealConfigured
+                              ? 'bg-emerald-100 text-emerald-700'
+                              : 'bg-amber-100 text-amber-800'
+                          }`}
+                        >
+                          {docusealConfigured
+                            ? tr('DocuSeal Terhubung', 'DocuSeal Connected')
+                            : tr('Perlu Kredensial Eksternal', 'External Creds Required')}
+                        </span>
+                      )}
+                    </div>
+                    <div className="text-[11px] text-slate-500 mt-0.5">{tr(mod.descId, mod.descEn)}</div>
+                  </div>
+                  <input
+                    type="checkbox"
+                    checked={enabled}
+                    onChange={(e) =>
+                      setModulesConfig((prev) => ({ ...prev, [mod.id]: e.target.checked }))
+                    }
+                    className="mt-0.5 h-4 w-4 shrink-0 rounded border-slate-300 text-blue-600"
+                  />
+                </label>
+              );
+            })}
+          </div>
+
+          {modulesConfig.leave && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs space-y-2">
+              <div className="font-bold text-slate-900">
+                {tr('Mode Alur Persetujuan Cuti', 'Leave Approval Workflow Mode')}
+              </div>
+              <div className="flex flex-wrap gap-3">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="leave_workflow"
+                    checked={modulesConfig.leave_workflow === 'three_stage'}
+                    onChange={() => setModulesConfig((prev) => ({ ...prev, leave_workflow: 'three_stage' }))}
+                  />
+                  <span className="font-semibold text-slate-800">
+                    {tr('3-Tahap Resmi + PDF (Fleksibel)', '3-Stage Official + PDF (Flexible)')}
+                  </span>
+                </label>
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="radio"
+                    name="leave_workflow"
+                    checked={modulesConfig.leave_workflow === 'simple'}
+                    onChange={() => setModulesConfig((prev) => ({ ...prev, leave_workflow: 'simple' }))}
+                  />
+                  <span className="font-semibold text-slate-800">
+                    {tr('Persetujuan 1-Langkah Sederhana', 'Simple 1-Step Approval')}
+                  </span>
+                </label>
+              </div>
+            </div>
+          )}
+
+          {modulesConfig.tasks && (
+            <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs space-y-2.5">
+              <div className="font-bold text-slate-900">
+                {tr('Field Referensi / Aset Tugas (TMS)', 'Task (TMS) Reference / Asset Fields')}
+              </div>
+              <p className="text-[11px] text-slate-500">
+                {tr(
+                  'Opsional: tambahkan kolom metadata khusus pada tugas sesuai industri perusahaan.',
+                  'Optional: attach domain-specific metadata fields to tasks based on your industry.'
+                )}
+              </p>
+              <div className="flex flex-wrap gap-3">
+                {(
+                  [
+                    { id: 'none', label: tr('Umum (Tanpa Field Tambahan)', 'Generic (None)') },
+                    { id: 'project', label: tr('Klien & Proyek', 'Client & Project') },
+                    { id: 'maritime', label: tr('Maritim (Vessel / Company / IMO / Call Sign)', 'Maritime (Vessel / Company / IMO / Call Sign)') },
+                    { id: 'custom', label: tr('Kustom', 'Custom') },
+                  ] as Array<{ id: TaskReferencePreset; label: string }>
+                ).map((preset) => (
+                  <label key={preset.id} className="flex items-center gap-2 cursor-pointer">
+                    <input
+                      type="radio"
+                      name="task_reference_preset"
+                      checked={modulesConfig.task_reference_preset === preset.id}
+                      onChange={() =>
+                        setModulesConfig((prev) => ({
+                          ...prev,
+                          task_reference_preset: preset.id,
+                          task_reference_fields:
+                            preset.id === 'custom'
+                              ? prev.task_reference_fields
+                              : [...TASK_REFERENCE_PRESETS[preset.id]],
+                        }))
+                      }
+                    />
+                    <span className="font-semibold text-slate-800">{preset.label}</span>
+                  </label>
+                ))}
+              </div>
+              {modulesConfig.task_reference_preset === 'custom' && (
+                <div>
+                  <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                    {tr('Nama Field (pisahkan dengan koma)', 'Field Names (comma-separated)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={modulesConfig.task_reference_fields.join(', ')}
+                    onChange={(e) =>
+                      setModulesConfig((prev) => ({
+                        ...prev,
+                        task_reference_fields: e.target.value
+                          .split(',')
+                          .map((s) => s.trim())
+                          .filter(Boolean),
+                      }))
+                    }
+                    placeholder="Site Name, Ticket ID, Equipment"
+                    className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
+                  />
+                </div>
+              )}
+            </div>
+          )}
+
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs space-y-3">
+            <div className="font-bold text-slate-900">
+              {tr('Label Template Ekspor (PDF & Excel)', 'Export Template Labels (PDF & Excel)')}
+            </div>
+            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                  {tr('Simbol Mata Uang', 'Currency Symbol')}
+                </label>
+                <input
+                  type="text"
+                  value={modulesConfig.template_currency_symbol}
+                  onChange={(e) =>
+                    setModulesConfig((prev) => ({ ...prev, template_currency_symbol: e.target.value }))
+                  }
+                  placeholder="Rp"
+                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                  {tr('Label Pembuat', 'Prepared By Label')}
+                </label>
+                <input
+                  type="text"
+                  value={modulesConfig.template_prepared_by}
+                  onChange={(e) =>
+                    setModulesConfig((prev) => ({ ...prev, template_prepared_by: e.target.value }))
+                  }
+                  placeholder="PREPARED BY"
+                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                  {tr('Label Pemeriksa', 'Checked By Label')}
+                </label>
+                <input
+                  type="text"
+                  value={modulesConfig.template_checked_by}
+                  onChange={(e) =>
+                    setModulesConfig((prev) => ({ ...prev, template_checked_by: e.target.value }))
+                  }
+                  placeholder="CHECKED BY"
+                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
+                />
+              </div>
+              <div>
+                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
+                  {tr('Label Penyetuju', 'Approved By Label')}
+                </label>
+                <input
+                  type="text"
+                  value={modulesConfig.template_approved_by}
+                  onChange={(e) =>
+                    setModulesConfig((prev) => ({ ...prev, template_approved_by: e.target.value }))
+                  }
+                  placeholder="APPROVED BY"
+                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
+                />
+              </div>
+            </div>
+          </div>
+
+          <div className="pt-2 flex justify-end">
+            <button
+              type="button"
+              onClick={handleSaveModules}
+              disabled={savingModules}
+              className="flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
+            >
+              <Save size={15} />
+              <span>{savingModules ? tr('Menyimpan...', 'Saving...') : tr('Simpan Konfigurasi Modul', 'Save Module Settings')}</span>
+            </button>
+          </div>
+        </div>
+      )}
+
       {/* TAB: NOTIFICATIONS */}
       {!loading && activeTab === 'notifications' && (
         <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
@@ -1707,6 +2063,8 @@ export const HRSettings: React.FC = () => {
           </div>
         </div>
       )}
+        </div>
+      </div>
     </div>
   );
 };

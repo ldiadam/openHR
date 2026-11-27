@@ -68,6 +68,9 @@ export async function apiFetch<T = any>(
       endpoint.includes('/auth/login') ||
       endpoint.includes('/auth/accept-invite') ||
       endpoint.includes('/auth/reset-password') ||
+      endpoint.includes('/auth/request-reset') ||
+      endpoint.includes('/auth/confirm-reset') ||
+      endpoint.includes('/auth/reset-info') ||
       endpoint.includes('/auth/invite-info')
     ) {
       throw new Error(errorMsg || 'Akses ditolak atau kredensial tidak valid.');

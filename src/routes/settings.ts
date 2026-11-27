@@ -5,6 +5,7 @@ import { sendEmail } from '../services/smtp';
 import { getTestEmail } from '../services/email-templates';
 import { deleteFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
+import { parseModulesConfig } from '../../shared/modules';
 
 export const settingsRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -59,6 +60,58 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
     .run();
 
   return c.json({ message: 'Profil perusahaan & konfigurasi domain/email berhasil diperbarui' });
+});
+
+// 1b. Modular Feature Toggles
+settingsRoutes.get('/modules', async (c) => {
+  const hasDocuSealCreds = Boolean(
+    c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
+  );
+  try {
+    const comp = await c.env.DB.prepare(`SELECT modules_json FROM companies LIMIT 1`).first<any>();
+    return c.json({
+      modules: parseModulesConfig(comp?.modules_json, { hasDocuSealCreds }),
+      integrations: { docusealConfigured: hasDocuSealCreds },
+    });
+  } catch {
+    return c.json({
+      modules: parseModulesConfig(null, { hasDocuSealCreds }),
+      integrations: { docusealConfigured: hasDocuSealCreds },
+    });
+  }
+});
+
+settingsRoutes.put('/modules', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const hasDocuSealCreds = Boolean(
+    c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
+  );
+  const normalized = parseModulesConfig(body.modules || body, { hasDocuSealCreds });
+  const json = JSON.stringify(normalized);
+
+  try {
+    await c.env.DB.prepare(
+      `UPDATE companies SET modules_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default'`
+    )
+      .bind(json)
+      .run();
+  } catch (err: any) {
+    if (String(err?.message || '').includes('no such column')) {
+      await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN modules_json TEXT`).run();
+      await c.env.DB.prepare(
+        `UPDATE companies SET modules_json = ?, updated_at = CURRENT_TIMESTAMP WHERE tenant_id = 'default'`
+      )
+        .bind(json)
+        .run();
+    } else {
+      throw err;
+    }
+  }
+
+  return c.json({
+    message: 'Konfigurasi modul berhasil diperbarui.',
+    modules: normalized,
+  });
 });
 
 const ALLOWED_LOGO_TYPES = new Set([

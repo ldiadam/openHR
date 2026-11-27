@@ -76,10 +76,17 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, pay
     ...(comp(payslip.commission_bonus) > 0
       ? [{ label: tr('Komisi / Bonus', 'Commission / Bonus'), amount: comp(payslip.commission_bonus) }]
       : []),
-    ...(comp(payslip.reimbursement_amount) > 0
-      ? [{ label: tr('Reimbursement', 'Reimbursement'), amount: comp(payslip.reimbursement_amount) }]
-      : []),
   ];
+
+  // Historical payroll_items saved before reimbursement was separated from gross_earnings
+  // may still have reimbursement_amount baked into payslip.gross_earnings; use the sum of
+  // actual earning rows so Earnings always reconciles to Gross Earnings.
+  const earningsTotal = earnings.reduce((sum, row) => sum + row.amount, 0);
+  const grossEarningsDisplay =
+    comp(payslip.reimbursement_amount) > 0 &&
+    comp(payslip.gross_earnings) === earningsTotal + comp(payslip.reimbursement_amount)
+      ? earningsTotal
+      : comp(payslip.gross_earnings);
 
   const deductions: Array<{ label: string; amount: number; kind?: 'alpha' }> = [
     ...(comp(payslip.bpjs_kes_employee) > 0
@@ -275,7 +282,7 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, pay
               </table>
               <div className="mt-auto flex items-center justify-between border-t-2 border-slate-900 bg-slate-50 px-3 py-2 text-[11px] font-bold text-slate-900">
                 <span>{tr('Total Penghasilan Bruto', 'Gross Earnings')}</span>
-                <span className="tabular-nums">{formatRupiah(payslip.gross_earnings)}</span>
+                <span className="tabular-nums">{formatRupiah(grossEarningsDisplay)}</span>
               </div>
             </div>
 
@@ -331,6 +338,23 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, pay
               </div>
             </div>
           </div>
+
+          {/* Non-earning reimbursement (added to take-home pay, excluded from gross earnings & tax) */}
+          {comp(payslip.reimbursement_amount) > 0 && (
+            <div className="flex items-center justify-between rounded-lg border border-slate-200 bg-slate-50 px-3 py-2 text-[11px]">
+              <div>
+                <span className="font-semibold text-slate-800">
+                  {tr('Reimbursement (Penggantian Biaya)', 'Reimbursement (Expense Claim)')}
+                </span>
+                <span className="ml-2 text-[10px] text-slate-500">
+                  {tr('Bukan penghasilan · Tidak kena pajak', 'Non-earning · Non-taxable')}
+                </span>
+              </div>
+              <span className="font-bold tabular-nums text-emerald-700">
+                +{formatRupiah(payslip.reimbursement_amount)}
+              </span>
+            </div>
+          )}
 
           {/* Net pay */}
           <div className="flex flex-col gap-2 rounded-lg bg-slate-900 px-4 py-3.5 text-white sm:flex-row sm:items-center sm:justify-between">

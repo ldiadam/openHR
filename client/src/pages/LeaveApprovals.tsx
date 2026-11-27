@@ -9,6 +9,7 @@ import {
   RefreshCw,
   Search,
   ShieldAlert,
+  Trash2,
   X,
 } from 'lucide-react';
 import { apiFetch } from '../api';
@@ -74,7 +75,7 @@ const parseList = (raw: unknown): string[] => {
   }
 };
 
-export const LeaveApprovals: React.FC = () => {
+export const LeaveApprovals: React.FC<{ embedded?: boolean }> = ({ embedded = false }) => {
   const { isOwnerAdmin } = useAuth();
   const { tr } = useLanguage();
 
@@ -294,29 +295,88 @@ export const LeaveApprovals: React.FC = () => {
     new Date(row.sla_due_at) < new Date() &&
     ['submitted', 'pending_administrator', 'pending_dept_head', 'pending_management'].includes(row.status);
 
+  const isOpenRow = (status: string) =>
+    ['pending', 'submitted', 'pending_administrator', 'pending_dept_head', 'pending_management'].includes(status);
+
+  const handleQuickDecision = async (row: any, decision: 'approved' | 'rejected') => {
+    setSaving(true);
+    setMsg(null);
+    try {
+      if (row.status === 'pending') {
+        await apiFetch(`/leave/requests/${row.id}/review`, {
+          method: 'POST',
+          body: JSON.stringify({ status: decision }),
+        });
+      } else {
+        await apiFetch(`/leave/applications/${row.id}/override`, {
+          method: 'POST',
+          body: JSON.stringify({
+            status: decision,
+            reason: decision === 'approved' ? 'Approved by HR / Management' : 'Rejected by HR / Management',
+          }),
+        });
+      }
+      setMsg({
+        type: 'success',
+        text: decision === 'approved' ? tr('Cuti disetujui.', 'Leave approved.') : tr('Cuti ditolak.', 'Leave rejected.'),
+      });
+      await load(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const handleDelete = async (row: any) => {
+    if (
+      !window.confirm(
+        tr(
+          'Hapus pengajuan cuti ini? Saldo cuti akan dipulihkan jika sebelumnya disetujui.',
+          'Delete this leave request? Leave balance will be restored if it was approved.'
+        )
+      )
+    ) {
+      return;
+    }
+    setSaving(true);
+    setMsg(null);
+    try {
+      await apiFetch(`/leave/requests/${row.id}`, { method: 'DELETE' });
+      setMsg({ type: 'success', text: tr('Pengajuan cuti dihapus.', 'Leave request deleted.') });
+      await load(true);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      setSaving(false);
+    }
+  };
+
   return (
-    <div className="space-y-4 p-4 sm:p-5">
-      <div className="flex flex-wrap items-center justify-between gap-2">
-        <div>
-          <h1 className="text-lg font-black tracking-tight text-slate-900">
-            {tr('Persetujuan Cuti', 'Leave Approvals')}
-          </h1>
-          <p className="text-[11px] text-slate-500">
-            {tr(
-              'Pemeriksaan administratif, tinjauan Department Head, dan keputusan Management.',
-              'Administrative check, Department Head review, and Management decision.'
-            )}
-          </p>
+    <div className={embedded ? 'space-y-4' : 'space-y-4 p-4 sm:p-5'}>
+      {!embedded && (
+        <div className="flex flex-wrap items-center justify-between gap-2">
+          <div>
+            <h1 className="text-lg font-black tracking-tight text-slate-900">
+              {tr('Persetujuan Cuti', 'Leave Approvals')}
+            </h1>
+            <p className="text-[11px] text-slate-500">
+              {tr(
+                'Pemeriksaan administratif, tinjauan Department Head, dan keputusan Management.',
+                'Administrative check, Department Head review, and Management decision.'
+              )}
+            </p>
+          </div>
+          <button
+            onClick={() => load(true)}
+            disabled={refreshing}
+            className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
+          >
+            <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
+            {tr('Muat ulang', 'Refresh')}
+          </button>
         </div>
-        <button
-          onClick={() => load(true)}
-          disabled={refreshing}
-          className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50 disabled:opacity-50"
-        >
-          <RefreshCw size={13} className={refreshing ? 'animate-spin' : ''} />
-          {tr('Muat ulang', 'Refresh')}
-        </button>
-      </div>
+      )}
 
       {msg && (
         <div
@@ -412,15 +472,49 @@ export const LeaveApprovals: React.FC = () => {
                       )}
                     </td>
                     <td className="px-4 py-2.5 text-right">
-                      <button
-                        onClick={(event) => {
-                          event.stopPropagation();
-                          openDetail(row.id);
-                        }}
-                        className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200"
-                      >
-                        <Eye size={11} /> {tr('Buka', 'Open')}
-                      </button>
+                      <div className="flex items-center justify-end gap-1" onClick={(e) => e.stopPropagation()}>
+                        {isOwnerAdmin && isOpenRow(row.status) && (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDecision(row, 'approved')}
+                              disabled={saving}
+                              className="inline-flex items-center rounded-lg bg-emerald-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-emerald-700 disabled:opacity-50"
+                              title={tr('Setujui langsung', 'Quick Approve')}
+                            >
+                              {tr('Setujui', 'Approve')}
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleQuickDecision(row, 'rejected')}
+                              disabled={saving}
+                              className="inline-flex items-center rounded-lg bg-rose-600 px-2 py-1 text-[10px] font-bold text-white hover:bg-rose-700 disabled:opacity-50"
+                              title={tr('Tolak langsung', 'Quick Reject')}
+                            >
+                              {tr('Tolak', 'Reject')}
+                            </button>
+                          </>
+                        )}
+                        <button
+                          type="button"
+                          onClick={() => openDetail(row.id)}
+                          className="inline-flex items-center gap-1 rounded-lg bg-slate-100 px-2 py-1 text-[10px] font-bold text-slate-700 hover:bg-slate-200"
+                          title={tr('Tinjauan 3 Tahap & PDF', '3-Stage Review & PDF')}
+                        >
+                          <Eye size={11} /> {tr('Buka', 'Open')}
+                        </button>
+                        {isOwnerAdmin && (
+                          <button
+                            type="button"
+                            onClick={() => handleDelete(row)}
+                            disabled={saving}
+                            className="inline-flex items-center rounded-lg p-1 text-rose-600 hover:bg-rose-50 disabled:opacity-50"
+                            title={tr('Hapus Pengajuan', 'Delete Request')}
+                          >
+                            <Trash2 size={12} />
+                          </button>
+                        )}
+                      </div>
                     </td>
                   </tr>
                 ))

@@ -104,82 +104,166 @@ authRoutes.get('/me', authMiddleware, async (c) => {
 // 3. Request Password Reset
 authRoutes.post('/request-reset', async (c) => {
   const { email } = await c.req.json();
-  if (!email) {
-    return c.json({ error: 'Email wajib diisi' }, 400);
+  if (!email || typeof email !== 'string' || !email.trim()) {
+    return c.json({ error: 'Email atau NIK wajib diisi' }, 400);
   }
 
-  const user = await c.env.DB.prepare(`SELECT * FROM users WHERE email = ? AND is_active = 1`)
-    .bind(email.toLowerCase().trim())
+  const identifier = email.toLowerCase().trim();
+  const user = await c.env.DB.prepare(
+    `SELECT u.*, e.full_name as employee_name, e.company_email, e.personal_email
+     FROM users u
+     LEFT JOIN employees e ON u.employee_id = e.id
+     WHERE (
+       LOWER(u.email) = ? OR
+       LOWER(COALESCE(e.company_email, '')) = ? OR
+       LOWER(COALESCE(e.personal_email, '')) = ? OR
+       LOWER(COALESCE(e.nik, '')) = ?
+     ) AND u.is_active = 1`
+  )
+    .bind(identifier, identifier, identifier, identifier)
     .first<any>();
 
+  const genericMessage = 'Jika email terdaftar, instruksi reset kata sandi telah dikirim.';
+
   if (!user) {
-    // Return generic success to prevent email enumeration
-    return c.json({ message: 'Jika email terdaftar, instruksi reset akan dikirim.' });
+    // Return generic success to prevent email/account enumeration
+    return c.json({ message: genericMessage });
   }
 
-  const token = `rst-${Math.random().toString(36).substring(2, 15)}${Math.random().toString(36).substring(2, 15)}`;
+  const token = `rst-${crypto.randomUUID().replace(/-/g, '')}`;
   const expiresAt = new Date(Date.now() + 3600 * 1000).toISOString(); // 1 hour
+
+  // Invalidate any previous unused reset tokens for this user
+  await c.env.DB.prepare(
+    `UPDATE password_resets SET used_at = CURRENT_TIMESTAMP WHERE user_id = ? AND used_at IS NULL`
+  )
+    .bind(user.id)
+    .run();
 
   await c.env.DB.prepare(
     `INSERT INTO password_resets (id, tenant_id, user_id, token, expires_at)
-     VALUES (?, 'default', ?, ?, ?)`
+     VALUES (?, ?, ?, ?, ?)`
   )
-    .bind(`pr-${Date.now()}`, user.id, token, expiresAt)
+    .bind(`pr-${crypto.randomUUID()}`, user.tenant_id || 'default', user.id, token, expiresAt)
     .run();
 
   const comp = await c.env.DB.prepare(
     `SELECT name, legal_name, custom_domain, purelymail_domain, purelymail_from_address, purelymail_smtp_pass FROM companies LIMIT 1`
   ).first<any>();
 
-  const appUrl = comp?.custom_domain
-    ? (comp.custom_domain.startsWith('http') ? comp.custom_domain : `https://${comp.custom_domain}`)
-    : (c.env.APP_URL || 'http://localhost:8787');
+  const requestOrigin = (() => {
+    try {
+      return new URL(c.req.url).origin;
+    } catch {
+      return '';
+    }
+  })();
+  const appUrl = (
+    comp?.custom_domain
+      ? (comp.custom_domain.startsWith('http') ? comp.custom_domain : `https://${comp.custom_domain}`)
+      : (c.env.APP_URL || requestOrigin || 'http://localhost:8787')
+  ).replace(/\/+$/, '');
   const resetLink = `${appUrl}/reset-password?token=${token}`;
   const companyName = comp?.legal_name || comp?.name || 'Portal HR';
+  const recipientEmail = user.email || user.company_email || user.personal_email;
 
   const emailData = getPasswordResetEmail({
-    name: user.full_name || undefined,
+    name: user.employee_name || undefined,
     resetLink,
     companyName,
     expiresMinutes: 60,
   });
 
-  sendEmailInBackground(c, c.env, {
-    to: user.email,
-    subject: `Reset kata sandi akun kepegawaian Anda (Password reset) - ${companyName}`,
-    text: emailData.text,
-    html: emailData.html,
-    type: 'password_reset',
-    domainName: comp?.purelymail_domain,
-    fromAddress: comp?.purelymail_from_address,
-    smtpPass: comp?.purelymail_smtp_pass,
-    senderName: companyName,
-  });
+  if (recipientEmail) {
+    sendEmailInBackground(c, c.env, {
+      to: recipientEmail,
+      subject: `Reset kata sandi akun kepegawaian Anda (Password reset) - ${companyName}`,
+      text: emailData.text,
+      html: emailData.html,
+      type: 'password_reset',
+      domainName: comp?.purelymail_domain,
+      fromAddress: comp?.purelymail_from_address,
+      smtpPass: comp?.purelymail_smtp_pass,
+      senderName: companyName,
+    });
+  }
 
   return c.json({
-    message: 'Tautan reset kata sandi telah dikirim ke email Anda.',
+    message: genericMessage,
     resetLink: c.env.ENVIRONMENT === 'development' ? resetLink : undefined,
   });
 });
 
-// 4. Confirm Password Reset
-authRoutes.post('/confirm-reset', async (c) => {
-  const { token, newPassword } = await c.req.json();
-  if (!token || !newPassword || newPassword.length < 6) {
-    return c.json({ error: 'Token dan kata sandi baru (minimal 6 karakter) diperlukan' }, 400);
+// 3b. Verify Password Reset Token (For previewing/validating reset token before submitting)
+authRoutes.get('/reset-info', async (c) => {
+  const token = c.req.query('token');
+  if (!token) {
+    return c.json({ valid: false, message: 'Token reset tidak disertakan.' });
   }
 
   const resetRecord = await c.env.DB.prepare(
-    `SELECT * FROM password_resets WHERE token = ? AND used_at IS NULL AND expires_at > CURRENT_TIMESTAMP`
+    `SELECT pr.*, u.email as user_email
+     FROM password_resets pr
+     LEFT JOIN users u ON pr.user_id = u.id
+     WHERE pr.token = ?`
   )
     .bind(token)
     .first<any>();
 
   if (!resetRecord) {
+    return c.json({ valid: false, message: 'Tautan reset kata sandi tidak valid atau tidak ditemukan.' });
+  }
+
+  const isUsed = !!resetRecord.used_at;
+  const isExpired = new Date(resetRecord.expires_at).getTime() <= Date.now();
+
+  if (isUsed) {
+    return c.json({
+      valid: false,
+      isUsed: true,
+      message: 'Tautan reset kata sandi ini sudah pernah digunakan. Silakan ajukan permintaan reset baru.',
+    });
+  }
+
+  if (isExpired) {
+    return c.json({
+      valid: false,
+      isExpired: true,
+      message: 'Tautan reset kata sandi telah kedaluwarsa. Silakan ajukan permintaan reset baru.',
+    });
+  }
+
+  const rawEmail = String(resetRecord.user_email || '');
+  const [localPart, domainPart] = rawEmail.split('@');
+  const maskedEmail = localPart && domainPart
+    ? `${localPart.slice(0, Math.min(2, localPart.length))}***@${domainPart}`
+    : undefined;
+
+  return c.json({
+    valid: true,
+    maskedEmail,
+  });
+});
+
+// 4. Confirm Password Reset
+authRoutes.post('/confirm-reset', async (c) => {
+  const { token, newPassword, password } = await c.req.json();
+  const nextPassword = newPassword || password;
+  if (!token || !nextPassword || nextPassword.length < 6) {
+    return c.json({ error: 'Token dan kata sandi baru (minimal 6 karakter) diperlukan' }, 400);
+  }
+
+  const resetRecord = await c.env.DB.prepare(
+    `SELECT * FROM password_resets WHERE token = ? AND used_at IS NULL`
+  )
+    .bind(token)
+    .first<any>();
+
+  if (!resetRecord || new Date(resetRecord.expires_at).getTime() <= Date.now()) {
     return c.json({ error: 'Tautan reset tidak valid atau sudah kedaluwarsa' }, 400);
   }
 
-  const passwordHash = await hashPassword(newPassword);
+  const passwordHash = await hashPassword(nextPassword);
 
   await c.env.DB.batch([
     c.env.DB.prepare(`UPDATE users SET password_hash = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(

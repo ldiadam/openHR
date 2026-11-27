@@ -154,11 +154,11 @@ export const HRKasbon: React.FC = () => {
       }
 
       await generateCombinedReceiptsPdf({
-        companyName: companyName || 'SMTS Pte Ltd',
+        companyName: companyName || 'openHR',
         periodTitle: periodLabel,
         employeeName,
         employeeNik,
-        approverName: 'Lawrence',
+        approverName: 'Director',
         claims: itemsForPdf,
       });
     } catch (err: any) {
@@ -212,51 +212,6 @@ export const HRKasbon: React.FC = () => {
           </p>
         </div>
 
-        {/* Export Toolbar */}
-        <div className="flex flex-wrap items-center gap-1.5 bg-white border border-slate-200/80 rounded-2xl p-1.5 shadow-2xs">
-          <button
-            type="button"
-            disabled={downloading}
-            onClick={handleDownloadExcel}
-            className="flex items-center gap-1.5 bg-emerald-600 hover:bg-emerald-700 text-white px-3.5 py-2.5 rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
-            title={
-              selectedEmployeeId
-                ? tr('Unduh Claim Excel karyawan terpilih (termasuk klaim gaji)', 'Download the selected employee\'s Claim Excel (including salary claims)')
-                : tr('Unduh Claim Excel (.xlsx)', 'Download Claim Excel (.xlsx)')
-            }
-          >
-            <FileSpreadsheet size={15} />
-            <span>
-              {selectedEmployeeId ? tr('Excel Karyawan', 'Employee Excel') : tr('Ekspor Excel', 'Export Excel')}
-            </span>
-          </button>
-
-          <div className="hidden sm:block h-7 w-px bg-slate-200 mx-0.5" />
-
-          <button
-            type="button"
-            disabled={downloading}
-            onClick={handleDownloadAllZip}
-            className="flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
-            title={tr('ZIP berisi 1 file Excel untuk setiap karyawan', 'ZIP containing 1 Excel file for each employee')}
-          >
-            <Archive size={15} className="text-teal-600" />
-            <span>{tr('Ekspor Semua', 'Export All')}</span>
-            <span className="text-[10px] font-bold text-slate-500 bg-slate-200/80 px-1.5 py-0.5 rounded-md">ZIP</span>
-          </button>
-
-          <button
-            type="button"
-            disabled={downloading || reimbursements.filter((r) => r.status === 'approved').length === 0}
-            onClick={handleDownloadPdf}
-            className="flex items-center gap-1.5 bg-slate-50 hover:bg-slate-100 text-slate-700 px-3.5 py-2.5 rounded-xl text-xs font-bold transition cursor-pointer disabled:opacity-50"
-            title={tr('Gabungkan seluruh bukti struk yang disetujui menjadi satu PDF', 'Combine all approved receipt proofs into a single PDF')}
-          >
-            <FileDown size={15} className="text-blue-600" />
-            <span>{tr('Gabungkan Struk', 'Combine Receipts')}</span>
-            <span className="text-[10px] font-bold text-slate-500 bg-slate-200/80 px-1.5 py-0.5 rounded-md">PDF</span>
-          </button>
-        </div>
       </div>
 
       {msg && (

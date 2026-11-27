@@ -1,11 +1,15 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit } from 'lucide-react';
+import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit, Trash2 } from 'lucide-react';
 import { apiFetch } from '../api';
 import { TableSkeleton } from '../components/Skeleton';
 import { useLanguage } from '../context/LanguageContext';
+import { useAuth } from '../context/AuthContext';
+import { LeaveApprovals } from './LeaveApprovals';
 
 export const HRLeave: React.FC = () => {
   const { t, tr, formatDate } = useLanguage();
+  const { user } = useAuth();
+  const isOwnerAdmin = user?.role === 'owner_admin';
   const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays'>('requests');
   const [requests, setRequests] = useState<any[]>([]);
   const [balances, setBalances] = useState<any[]>([]);
@@ -60,6 +64,19 @@ export const HRLeave: React.FC = () => {
         method: 'POST',
         body: JSON.stringify({ status, note }),
       });
+      setMsg({ type: 'success', text: res.message });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleDeleteRequest = async (id: string) => {
+    if (!window.confirm(tr('Hapus pengajuan cuti ini? Saldo cuti akan dipulihkan jika sebelumnya disetujui.', 'Delete this leave request? Leave balance will be restored if it was approved.'))) {
+      return;
+    }
+    try {
+      const res = await apiFetch(`/leave/requests/${id}`, { method: 'DELETE' });
       setMsg({ type: 'success', text: res.message });
       loadData();
     } catch (err: any) {
@@ -177,78 +194,8 @@ export const HRLeave: React.FC = () => {
         </button>
       </div>
 
-      {/* TAB 1: REQUESTS */}
-      {activeTab === 'requests' && (
-        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left text-xs text-slate-600">
-              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
-                <tr>
-                  <th className="py-3 px-4 font-bold">{tr('Karyawan', 'Employee')}</th>
-                  <th className="py-3 px-4 font-bold">{tr('Jenis Cuti', 'Leave Type')}</th>
-                  <th className="py-3 px-4 font-bold">{tr('Rentang Tanggal', 'Date Range')}</th>
-                  <th className="py-3 px-4 font-bold">{tr('Total Hari', 'Total Days')}</th>
-                  <th className="py-3 px-4 font-bold">{tr('Alasan', 'Reason')}</th>
-                  <th className="py-3 px-4 font-bold">{tr('Status', 'Status')}</th>
-                  <th className="py-3 px-4 font-bold text-right">{tr('Aksi', 'Actions')}</th>
-                </tr>
-              </thead>
-              {loading ? (
-                <TableSkeleton rows={6} columns={7} />
-              ) : (
-              <tbody className="divide-y divide-slate-100">
-                {requests.map((r) => (
-                  <tr key={r.id}>
-                    <td className="py-3 px-4 font-bold text-slate-900">{r.full_name}</td>
-                    <td className="py-3 px-4 font-medium text-slate-800">{r.leave_type_name}</td>
-                    <td className="py-3 px-4">
-                      {formatDate(r.start_date)} - {formatDate(r.end_date)}
-                    </td>
-                    <td className="py-3 px-4 font-bold">{r.total_days} {tr('Hari', 'Days')}</td>
-                    <td className="py-3 px-4 italic max-w-xs">{r.reason}</td>
-                    <td className="py-3 px-4">
-                      <span className={`text-[10px] font-bold px-2 py-0.5 rounded ${
-                        r.status === 'approved' ? 'bg-emerald-100 text-emerald-800' : r.status === 'rejected' ? 'bg-rose-100 text-rose-800' : 'bg-amber-100 text-amber-800'
-                      }`}>
-                        {tr(
-                          r.status === 'approved' ? 'Disetujui' : r.status === 'rejected' ? 'Ditolak' : 'Menunggu',
-                          r.status === 'approved' ? 'Approved' : r.status === 'rejected' ? 'Rejected' : 'Pending'
-                        )}
-                      </span>
-                    </td>
-                    <td className="py-3 px-4 text-right">
-                      {r.status === 'pending' && (
-                        <div className="flex justify-end gap-1.5">
-                          <button
-                            onClick={() => handleReview(r.id, 'approved')}
-                            className="bg-emerald-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-emerald-700"
-                          >
-                            {tr('Setujui', 'Approve')}
-                          </button>
-                          <button
-                            onClick={() => handleReview(r.id, 'rejected')}
-                            className="bg-rose-600 text-white font-bold px-2.5 py-1 rounded-lg hover:bg-rose-700"
-                          >
-                            {tr('Tolak', 'Reject')}
-                          </button>
-                        </div>
-                      )}
-                    </td>
-                  </tr>
-                ))}
-                {!requests.length && (
-                  <tr>
-                    <td colSpan={7} className="py-10 text-center text-xs text-slate-400">
-                      {tr('Belum ada pengajuan cuti.', 'No leave requests yet.')}
-                    </td>
-                  </tr>
-                )}
-              </tbody>
-              )}
-            </table>
-          </div>
-        </div>
-      )}
+      {/* TAB 1: REQUESTS (Unified 3-Stage + Quick Review + Delete) */}
+      {activeTab === 'requests' && <LeaveApprovals embedded />}
 
       {/* TAB 2: BALANCES */}
       {activeTab === 'balances' && (

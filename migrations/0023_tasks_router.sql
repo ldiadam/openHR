@@ -1,0 +1,1 @@
+ALTER TABLE tasks ADD COLUMN router TEXT NOT NULL DEFAULT 'adhoc';

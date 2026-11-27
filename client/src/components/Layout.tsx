@@ -13,12 +13,19 @@ import {
   X,
   CreditCard,
   Receipt,
+  Wallet,
   Wifi,
   WifiOff,
   UserCircle,
   Home,
   FileCheck,
   PenLine,
+  CheckSquare,
+  Megaphone,
+  Laptop,
+  UserMinus,
+  Award,
+  Briefcase,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
@@ -29,7 +36,7 @@ import { getOfflineQueue, syncOfflineQueue } from '../api';
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, isOwnerAdmin, isManager, isFinance, isEmployee } = useAuth();
   const { t, tr } = useLanguage();
-  const { companyName, isCustomCompany, initials, legalName, logoUrl } = useCompany();
+  const { companyName, isCustomCompany, initials, legalName, logoUrl, isModuleEnabled } = useCompany();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -107,35 +114,33 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const adminNav = [
     { name: t.nav.dashboard, path: '/', icon: Home },
     { name: t.nav.employees, path: '/employees', icon: Users, show: isOwnerAdmin || isManager },
-    { name: t.nav.attendance, path: '/attendance', icon: Clock, show: isOwnerAdmin || isManager },
-    { name: t.nav.leave, path: '/leave', icon: Calendar, show: isOwnerAdmin || isManager },
-    {
-      name: tr('Persetujuan Cuti', 'Leave Approvals'),
-      path: '/leave-applications',
-      icon: FileCheck,
-      show: isOwnerAdmin || isManager,
-    },
-    { name: t.nav.shifts, path: '/shifts', icon: Layers, show: isOwnerAdmin || isManager },
-    { name: t.nav.payroll, path: '/payroll', icon: DollarSign, show: isOwnerAdmin || isFinance },
-    { name: tr('Klaim Biaya', 'Expense Claims'), path: '/kasbon', icon: Receipt, show: isOwnerAdmin || isFinance || isManager },
-    { name: tr('Dokumen & Tanda Tangan', 'Documents & Signing'), path: '/documents', icon: PenLine, show: isOwnerAdmin || isFinance || isManager },
-    { name: t.nav.reports, path: '/reports', icon: FileText, show: isOwnerAdmin || isFinance || isManager },
+    { name: t.nav.attendance, path: '/attendance', icon: Clock, show: (isOwnerAdmin || isManager) && isModuleEnabled('attendance') },
+    { name: t.nav.leave, path: '/leave', icon: Calendar, show: (isOwnerAdmin || isManager) && isModuleEnabled('leave') },
+    { name: t.nav.shifts, path: '/shifts', icon: Layers, show: (isOwnerAdmin || isManager) && isModuleEnabled('shifts') },
+    { name: t.nav.payroll, path: '/payroll', icon: DollarSign, show: (isOwnerAdmin || isFinance) && isModuleEnabled('payroll') },
+    { name: tr('Klaim Biaya', 'Expense Claims'), path: '/kasbon', icon: Receipt, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('claims') },
+    { name: tr('Petty Cash', 'Petty Cash'), path: '/petty-cash', icon: Wallet, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('petty_cash') },
+    { name: tr('Tugas (TMS)', 'Tasks (TMS)'), path: '/tasks', icon: CheckSquare, show: isModuleEnabled('tasks') },
+    { name: tr('Pengumuman', 'Announcements'), path: '/announcements', icon: Megaphone, show: isModuleEnabled('announcements') },
+    { name: tr('Aset & Inventaris', 'Assets'), path: '/assets', icon: Laptop, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('assets') },
+    { name: tr('Kinerja (KPI)', 'Performance'), path: '/performance', icon: Award, show: (isOwnerAdmin || isManager) && isModuleEnabled('performance') },
+    { name: tr('Rekrutmen', 'Recruitment'), path: '/recruitment', icon: Briefcase, show: (isOwnerAdmin || isManager) && isModuleEnabled('recruitment') },
+    { name: tr('Offboarding', 'Offboarding'), path: '/offboarding', icon: UserMinus, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('offboarding') },
+    { name: tr('Dokumen & Tanda Tangan', 'Documents & Signing'), path: '/documents', icon: PenLine, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('signing') },
+    { name: t.nav.reports, path: '/reports', icon: FileText, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('reports') },
     { name: t.nav.settings, path: '/settings', icon: Settings, show: isOwnerAdmin },
   ].filter((item) => item.show !== false);
 
   // Employee Self-Service navigation (every account linked to an employee has this)
+  // Profile is reachable from the mobile header and is not shown in the bottom bar.
   const essNav = [
-    { name: t.nav.home, path: '/app', icon: Home },
-    { name: t.nav.myAttendance, path: '/app/attendance', icon: Clock },
-    { name: t.nav.requests, path: '/app/requests', icon: FileCheck },
-    {
-      name: tr('Permohonan Cuti', 'Leave Application'),
-      path: '/app/leave-application',
-      icon: Calendar,
-    },
-    { name: t.nav.payslips, path: '/app/payslips', icon: DollarSign },
-    { name: t.nav.profile, path: '/app/profile', icon: UserCircle },
+    { name: t.nav.home, path: '/app', icon: Home, bottomBar: true },
+    { name: t.nav.myAttendance, path: '/app/attendance', icon: Clock, bottomBar: true },
+    { name: t.nav.requests, path: '/app/requests', icon: FileCheck, bottomBar: true },
+    { name: t.nav.payslips, path: '/app/payslips', icon: DollarSign, bottomBar: true },
+    { name: t.nav.profile, path: '/app/profile', icon: UserCircle, bottomBar: true },
   ];
+  const essBottomNav = essNav.filter((item) => item.bottomBar);
 
   // Any role that is also a staff member (manager, finance, admin) gets ESS too
   const hasEssAccess = Boolean(user?.employeeId);
@@ -152,7 +157,14 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
   const currentRole = user?.role ? roleBadgeMap[user.role] : roleBadgeMap.employee;
   const navItems = isEmployee ? essNav : adminNav;
+  const isNavActive = (path: string) =>
+    path === '/' || path === '/app'
+      ? location.pathname === path
+      : location.pathname === path || location.pathname.startsWith(`${path}/`);
   const isClockInPage = location.pathname === '/app';
+  const hideMobileHeader =
+    isClockInPage ||
+    ['/app/attendance', '/app/requests', '/app/payslips', '/app/profile'].includes(location.pathname);
 
   return (
     <div className={`min-h-screen bg-slate-50 flex flex-col md:flex-row ${isEmployee ? 'ess-no-select' : ''}`}>
@@ -218,7 +230,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
 
           <nav className="p-3 space-y-1 flex-1 overflow-y-auto">
             {navItems.map((item) => {
-              const active = location.pathname === item.path;
+              const active = isNavActive(item.path);
               const Icon = item.icon;
               return (
                 <Link
@@ -287,8 +299,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           </div>
         </aside>
 
-      {/* Mobile Top Header (hidden on clock-in page) */}
-      {!isClockInPage && (
+      {/* Mobile Top Header (hidden on full-screen ESS pages) */}
+      {!hideMobileHeader && (
       <header className="md:hidden fixed top-0 left-0 right-0 bg-white border-b border-slate-200 px-4 py-2.5 flex items-center justify-between z-40">
         <div className="flex items-center gap-2 overflow-hidden">
           {logoUrl ? (
@@ -318,9 +330,10 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
           {isEmployee && (
             <button
               onClick={logout}
-              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md text-xs font-semibold cursor-pointer"
+              className="p-1.5 text-rose-600 hover:bg-rose-50 rounded-md cursor-pointer"
+              aria-label={t.nav.logout}
             >
-              {t.nav.logout}
+              <LogOut size={16} />
             </button>
           )}
         </div>
@@ -357,7 +370,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
             <nav className="my-4 space-y-1 flex-1 overflow-y-auto">
               {adminNav.map((item) => {
                 const Icon = item.icon;
-                const active = location.pathname === item.path;
+                const active = isNavActive(item.path);
                 return (
                   <Link
                     key={item.path}
@@ -414,14 +427,18 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       )}
 
       {/* Main Content Area */}
-      <main className="flex-1 flex flex-col min-w-0 pt-12 pb-20 md:pt-0 md:pb-6">
+      <main
+        className={`flex-1 flex flex-col min-w-0 pb-20 md:pb-6 ${
+          hideMobileHeader && !isClockInPage ? 'pt-0' : 'pt-12'
+        } md:pt-0`}
+      >
         <div className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">{children}</div>
       </main>
 
       {/* Employee Self-Service bottom bar (also while a manager is inside /app) */}
       {showEssBottomBar && (
         <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 flex items-center justify-around py-1.5 px-2 shadow-lg">
-          {essNav.map((item) => {
+          {essBottomNav.map((item) => {
             const active = location.pathname === item.path;
             const Icon = item.icon;
             return (

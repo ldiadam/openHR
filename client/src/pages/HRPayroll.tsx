@@ -28,6 +28,7 @@ import { useLanguage } from '../context/LanguageContext';
 import { apiFetch, downloadFile, getLocalDateString } from '../api';
 import { TableSkeleton } from '../components/Skeleton';
 import { PayslipModal } from '../components/PayslipModal';
+import { PayrollAdjustModal } from '../components/payroll/PayrollAdjustModal';
 import { MobileMonthPicker } from '../components/pickers/MobileMonthPicker';
 
 export const HRPayroll: React.FC = () => {
@@ -221,6 +222,7 @@ export const HRPayroll: React.FC = () => {
   const [commBonus, setCommBonus] = useState('0');
   const [otherDed, setOtherDed] = useState('0');
   const [otherReason, setOtherReason] = useState('');
+  const [payFullMonth, setPayFullMonth] = useState(false);
 
   // Payslip detail modal
   const [selectedPayslip, setSelectedPayslip] = useState<any>(null);
@@ -415,11 +417,34 @@ export const HRPayroll: React.FC = () => {
           attendance_bonus: attBonus,
           commission_bonus: commBonus,
           other_deductions: otherDed,
-          other_deductions_reason: otherReason,
+          other_deductions_reason: otherReason || (payFullMonth ? 'Full month pay override (no prorate)' : ''),
+          pay_full_month: payFullMonth,
         }),
       });
       setMsg({ type: 'success', text: res.message });
       setShowAdjustModal(false);
+      selectRun(selectedRun);
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleToggleFullMonth = async (it: any) => {
+    if (!selectedRun) return;
+    const currentlyFull = Number(it.prorated_salary) >= Number(it.base_salary);
+    const nextFull = !currentlyFull;
+    try {
+      const res = await apiFetch(`/payroll/runs/${selectedRun.id}/adjust-item`, {
+        method: 'POST',
+        body: JSON.stringify({
+          item_id: it.id,
+          pay_full_month: nextFull,
+          other_deductions_reason: nextFull
+            ? 'Full month pay override (no prorate)'
+            : 'Reverted to prorated salary',
+        }),
+      });
+      setMsg({ type: 'success', text: res.message });
       selectRun(selectedRun);
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });
@@ -1425,6 +1450,32 @@ export const HRPayroll: React.FC = () => {
                             <div>
                               {it.days_worked} / {it.expected_working_days}
                             </div>
+                            {Number(it.days_worked) < Number(it.expected_working_days) && Number(it.base_salary) > 0 && (
+                              !isLocked && isOwnerAdmin ? (
+                                <button
+                                  type="button"
+                                  onClick={() => handleToggleFullMonth(it)}
+                                  className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[9px] font-bold transition ${
+                                    Number(it.prorated_salary) >= Number(it.base_salary)
+                                      ? 'bg-emerald-100 text-emerald-700 hover:bg-emerald-200'
+                                      : 'bg-amber-100 text-amber-800 hover:bg-amber-200'
+                                  }`}
+                                  title={
+                                    Number(it.prorated_salary) >= Number(it.base_salary)
+                                      ? tr('Klik untuk kembali ke prorate', 'Click to revert to prorated')
+                                      : tr('Klik untuk bayar penuh 1 bulan', 'Click to pay full month (no prorate)')
+                                  }
+                                >
+                                  {Number(it.prorated_salary) >= Number(it.base_salary)
+                                    ? tr('Full Month', 'Full Month')
+                                    : tr('Prorate · Set Full', 'Prorate · Set Full')}
+                                </button>
+                              ) : Number(it.prorated_salary) >= Number(it.base_salary) ? (
+                                <div className="mt-0.5 inline-flex rounded bg-emerald-100 px-1.5 py-0.5 text-[9px] font-bold text-emerald-700">
+                                  Full Month
+                                </div>
+                              ) : null
+                            )}
                             {Number(it.alpha_days) > 0 && (
                               <div className="mt-0.5 inline-flex rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
                                 {tr('Alpa', 'Alpha')} {Math.min(Number(it.alpha_days), Number(it.expected_working_days) || Number(it.alpha_days))}
@@ -1468,6 +1519,7 @@ export const HRPayroll: React.FC = () => {
                                     setCommBonus(String(it.commission_bonus || 0));
                                     setOtherDed(String(it.other_deductions || 0));
                                     setOtherReason(it.other_deductions_reason || '');
+                                    setPayFullMonth(Number(it.prorated_salary) >= Number(it.base_salary));
                                     setShowAdjustModal(true);
                                   }}
                                   className="rounded-lg bg-slate-100 p-1.5 text-slate-700 transition hover:bg-slate-200"
@@ -1520,6 +1572,19 @@ export const HRPayroll: React.FC = () => {
                           <div className="mt-0.5 font-bold text-slate-800">
                             {it.days_worked} / {it.expected_working_days}
                           </div>
+                          {Number(it.days_worked) < Number(it.expected_working_days) && Number(it.base_salary) > 0 && !isLocked && isOwnerAdmin && (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleFullMonth(it)}
+                              className={`mt-1 inline-flex rounded px-1.5 py-0.5 text-[9px] font-bold ${
+                                Number(it.prorated_salary) >= Number(it.base_salary)
+                                  ? 'bg-emerald-100 text-emerald-700'
+                                  : 'bg-amber-100 text-amber-800'
+                              }`}
+                            >
+                              {Number(it.prorated_salary) >= Number(it.base_salary) ? 'Full Month' : 'Set Full'}
+                            </button>
+                          )}
                           {Number(it.alpha_days) > 0 && (
                             <div className="mt-0.5 inline-flex rounded bg-rose-100 px-1.5 py-0.5 text-[9px] font-bold text-rose-700">
                               {tr('Alpa', 'Alpha')} {it.alpha_days}
@@ -1547,6 +1612,7 @@ export const HRPayroll: React.FC = () => {
                               setCommBonus(String(it.commission_bonus || 0));
                               setOtherDed(String(it.other_deductions || 0));
                               setOtherReason(it.other_deductions_reason || '');
+                              setPayFullMonth(Number(it.prorated_salary) >= Number(it.base_salary));
                               setShowAdjustModal(true);
                             }}
                             className="flex flex-1 items-center justify-center gap-1.5 rounded-xl bg-slate-100 px-3 py-2 text-[11px] font-bold text-slate-700"
@@ -2231,87 +2297,24 @@ export const HRPayroll: React.FC = () => {
       )}
 
       {/* ADJUST ITEM MODAL */}
-      {showAdjustModal && (
-        <div
-          className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 p-4"
-          onClick={(event) => {
-            if (event.target === event.currentTarget) setShowAdjustModal(false);
-          }}
-        >
-          <div className="w-full max-w-sm space-y-4 rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-center gap-3">
-              <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-slate-100 text-slate-700">
-                <Edit size={18} />
-              </div>
-              <div>
-                <h3 className="text-base font-bold text-slate-900">
-                  {tr('Penyesuaian Item Payroll', 'Payroll Item Adjustment')}
-                </h3>
-                <p className="text-[11px] text-slate-500">
-                  {tr('Karyawan:', 'Employee:')} <strong>{adjustItem?.employee_name}</strong>
-                </p>
-              </div>
-            </div>
-
-            <form onSubmit={handleSaveAdjust} className="space-y-3 text-xs">
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Bonus Kehadiran (Rp)', 'Attendance Bonus (Rp)')}</label>
-                <input
-                  type="number"
-                  value={attBonus}
-                  onChange={(e) => setAttBonus(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2 outline-none focus:border-blue-400"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Komisi / Bonus (Rp)', 'Commission / Bonus (Rp)')}</label>
-                <input
-                  type="number"
-                  value={commBonus}
-                  onChange={(e) => setCommBonus(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2 outline-none focus:border-blue-400"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Potongan Lain-Lain (Rp)', 'Other Deductions (Rp)')}</label>
-                <input
-                  type="number"
-                  value={otherDed}
-                  onChange={(e) => setOtherDed(e.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2 font-bold text-rose-600 outline-none focus:border-blue-400"
-                />
-              </div>
-              <div>
-                <label className="mb-1 block font-medium text-slate-700">{tr('Alasan Penyesuaian *', 'Adjustment Reason *')}</label>
-                <textarea
-                  required
-                  rows={2}
-                  value={otherReason}
-                  onChange={(e) => setOtherReason(e.target.value)}
-                  placeholder={tr('Koreksi kelebihan bayar bulan lalu...', 'Correction of last month overpayment...')}
-                  className="w-full rounded-xl border border-slate-300 p-2 outline-none focus:border-blue-400"
-                />
-              </div>
-
-              <div className="flex justify-end gap-2 pt-2">
-                <button
-                  type="button"
-                  onClick={() => setShowAdjustModal(false)}
-                  className="rounded-xl px-4 py-2 font-semibold text-slate-600 hover:bg-slate-100"
-                >
-                  {tr('Batal', 'Cancel')}
-                </button>
-                <button
-                  type="submit"
-                  className="rounded-xl bg-blue-600 px-5 py-2 font-bold text-white shadow-md transition hover:bg-blue-700"
-                >
-                  {tr('Simpan Perubahan', 'Save Changes')}
-                </button>
-              </div>
-            </form>
-          </div>
-        </div>
-      )}
+      <PayrollAdjustModal
+        isOpen={showAdjustModal}
+        adjustItem={adjustItem}
+        attBonus={attBonus}
+        setAttBonus={setAttBonus}
+        commBonus={commBonus}
+        setCommBonus={setCommBonus}
+        otherDed={otherDed}
+        setOtherDed={setOtherDed}
+        otherReason={otherReason}
+        setOtherReason={setOtherReason}
+        payFullMonth={payFullMonth}
+        setPayFullMonth={setPayFullMonth}
+        onClose={() => setShowAdjustModal(false)}
+        onSubmit={handleSaveAdjust}
+        formatCurrency={formatCurrency}
+        tr={tr}
+      />
 
       {/* PAYSLIP DETAIL MODAL */}
       <PayslipModal isOpen={!!selectedPayslip} onClose={() => setSelectedPayslip(null)} payslip={selectedPayslip} />

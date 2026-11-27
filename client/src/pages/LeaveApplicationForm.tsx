@@ -4,6 +4,8 @@ import { apiFetch } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { SignaturePad } from '../components/SignaturePad';
+import { MobileDatePicker } from '../components/pickers/MobileDatePicker';
+import { MobileSelect } from '../components/pickers/MobileSelect';
 
 /**
  * Stage 1 of the leave application: the applicant fills in their part and signs.
@@ -26,6 +28,13 @@ interface FormConfig {
   departments: Array<{ id: string; name: string; code: string | null }>;
   leaveTypes: Array<{ id: string; code: string; name: string; is_paid: number }>;
   formTitle: string;
+  viewer?: {
+    role?: string;
+    employeeId?: string | null;
+    fullName?: string | null;
+    departmentId?: string | null;
+    canPrint?: boolean;
+  };
 }
 
 const STEPS = [
@@ -35,7 +44,13 @@ const STEPS = [
   { id: 'Periksa', en: 'Review', shortId: 'Kirim', shortEn: 'Review' },
 ];
 
-const todayISO = () => new Date().toISOString().slice(0, 10);
+const todayISO = () => {
+  const now = new Date();
+  const y = now.getFullYear();
+  const m = String(now.getMonth() + 1).padStart(2, '0');
+  const d = String(now.getDate()).padStart(2, '0');
+  return `${y}-${m}-${d}`;
+};
 
 /** Counts working days so the applicant sees the number that will be deducted. */
 function workingDays(from: string, to: string): number {
@@ -92,7 +107,17 @@ export const LeaveApplicationForm: React.FC = () => {
       try {
         const res = await apiFetch('/leave/form/config');
         setConfig(res);
-        if (res.departments?.[0]) setDepartmentId(res.departments[0].id);
+        if (res.viewer?.fullName) {
+          setApplicantName(res.viewer.fullName);
+        }
+        const matchedDept = res.viewer?.departmentId
+          ? res.departments?.find((d: any) => d.id === res.viewer.departmentId)
+          : null;
+        if (matchedDept) {
+          setDepartmentId(matchedDept.id);
+        } else if (res.departments?.[0]) {
+          setDepartmentId(res.departments[0].id);
+        }
         if (res.leaveTypes?.[0]) setLeaveTypeId(res.leaveTypes[0].id);
       } catch (err: any) {
         setError(err.message);
@@ -320,25 +345,24 @@ export const LeaveApplicationForm: React.FC = () => {
               <label className="mb-1 block font-semibold text-slate-700">
                 {tr('Departemen', 'Department')} <span className="text-rose-500">*</span>
               </label>
-              <select
+              <MobileSelect
                 value={departmentId}
-                onChange={(event) => setDepartmentId(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none"
-              >
-                {config?.departments.map((dept) => (
-                  <option key={dept.id} value={dept.id}>
-                    {dept.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setDepartmentId}
+                title={tr('Departemen', 'Department')}
+                placeholder={tr('Pilih departemen', 'Choose department')}
+                options={(config?.departments || []).map((dept) => ({
+                  value: dept.id,
+                  label: dept.name,
+                }))}
+              />
             </div>
             <div>
               <label className="mb-1 block font-semibold text-slate-700">{tr('Tanggal pengajuan', 'Date')}</label>
-              <input
-                type="date"
+              <MobileDatePicker
                 value={submissionDate}
-                onChange={(event) => setSubmissionDate(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none"
+                onChange={setSubmissionDate}
+                allowClear={false}
+                placeholder={tr('Pilih tanggal', 'Select date')}
               />
               <p className="mt-1 text-[10px] text-slate-400">
                 {tr('Pada formulir cetak', 'On the printed form')}: {formatDDMMYY(submissionDate)}
@@ -353,17 +377,16 @@ export const LeaveApplicationForm: React.FC = () => {
               <label className="mb-1 block font-semibold text-slate-700">
                 {tr('Jenis cuti', 'Leave type')} <span className="text-rose-500">*</span>
               </label>
-              <select
+              <MobileSelect
                 value={leaveTypeId}
-                onChange={(event) => setLeaveTypeId(event.target.value)}
-                className="w-full rounded-xl border border-slate-300 p-2.5 font-medium focus:border-blue-500 focus:outline-none"
-              >
-                {config?.leaveTypes.map((type) => (
-                  <option key={type.id} value={type.id}>
-                    {type.name}
-                  </option>
-                ))}
-              </select>
+                onChange={setLeaveTypeId}
+                title={tr('Jenis cuti', 'Leave type')}
+                placeholder={tr('Pilih jenis cuti', 'Choose leave type')}
+                options={(config?.leaveTypes || []).map((type) => ({
+                  value: type.id,
+                  label: type.name,
+                }))}
+              />
             </div>
 
             {isOtherType && (
@@ -379,28 +402,31 @@ export const LeaveApplicationForm: React.FC = () => {
               </div>
             )}
 
-            <div className="grid grid-cols-2 gap-2">
-              <div>
+            <div className="grid grid-cols-1 gap-2 sm:grid-cols-2">
+              <div className="min-w-0">
                 <label className="mb-1 block font-semibold text-slate-700">
                   {tr('Dari', 'From')} <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  type="date"
+                <MobileDatePicker
                   value={startDate}
-                  onChange={(event) => setStartDate(event.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5 focus:border-blue-500 focus:outline-none"
+                  onChange={(val) => {
+                    setStartDate(val);
+                    if (endDate && val && endDate < val) {
+                      setEndDate(val);
+                    }
+                  }}
+                  placeholder={tr('Pilih tanggal', 'Select date')}
                 />
               </div>
-              <div>
+              <div className="min-w-0">
                 <label className="mb-1 block font-semibold text-slate-700">
                   {tr('Sampai', 'To')} <span className="text-rose-500">*</span>
                 </label>
-                <input
-                  type="date"
-                  min={startDate || undefined}
+                <MobileDatePicker
                   value={endDate}
-                  onChange={(event) => setEndDate(event.target.value)}
-                  className="w-full rounded-xl border border-slate-300 p-2.5 focus:border-blue-500 focus:outline-none"
+                  min={startDate || undefined}
+                  onChange={setEndDate}
+                  placeholder={tr('Pilih tanggal', 'Select date')}
                 />
               </div>
             </div>

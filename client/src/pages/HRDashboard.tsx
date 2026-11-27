@@ -7,14 +7,30 @@ import {
   FileCheck,
   TrendingUp,
   ArrowRight,
+  Users,
+  Layers,
+  DollarSign,
+  Receipt,
+  Wallet,
+  CheckSquare,
+  Megaphone,
+  Laptop,
+  Award,
+  Briefcase,
+  UserMinus,
+  PenLine,
+  FileText,
+  Settings,
 } from 'lucide-react';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
 import { apiFetch, getLocalDateString } from '../api';
 
 export const HRDashboard: React.FC = () => {
   const { user } = useAuth();
   const { t, tr, formatDate } = useLanguage();
+  const { isModuleEnabled } = useCompany();
   const [todaySummary, setTodaySummary] = useState<any>({ total: 0, present: 0, late: 0, on_leave: 0, absent: 0 });
   const [contractAlerts, setContractAlerts] = useState<any[]>([]);
   const [pendingCounts, setPendingCounts] = useState({
@@ -66,6 +82,29 @@ export const HRDashboard: React.FC = () => {
     pendingCounts.overtime +
     pendingCounts.reimbursements;
 
+  const isAdmin = user?.role === 'owner_admin';
+  const isManager = user?.role === 'manager';
+  const isFinance = user?.role === 'finance';
+
+  const moduleMenu = [
+    { to: '/employees', icon: Users, title: t.nav.employees, desc: tr('Direktori & profil karyawan', 'Directory & staff profiles'), color: 'text-blue-600 bg-blue-50', show: isAdmin || isManager },
+    { to: '/attendance', icon: Clock, title: t.nav.attendance, desc: tr('Presensi GPS & koreksi', 'GPS punches & corrections'), color: 'text-emerald-600 bg-emerald-50', show: (isAdmin || isManager) && isModuleEnabled('attendance') },
+    { to: '/leave', icon: Calendar, title: t.nav.leave, desc: tr('Pengajuan & saldo cuti', 'Leave requests & balances'), color: 'text-indigo-600 bg-indigo-50', show: (isAdmin || isManager) && isModuleEnabled('leave') },
+    { to: '/shifts', icon: Layers, title: t.nav.shifts, desc: tr('Jadwal kerja & lembur', 'Shift schedules & overtime'), color: 'text-amber-600 bg-amber-50', show: (isAdmin || isManager) && isModuleEnabled('shifts') },
+    { to: '/payroll', icon: DollarSign, title: t.nav.payroll, desc: tr('Gaji, BPJS, PPh 21 & slip', 'Payroll, BPJS, tax & payslips'), color: 'text-emerald-700 bg-emerald-50', show: (isAdmin || isFinance) && isModuleEnabled('payroll') },
+    { to: '/kasbon', icon: Receipt, title: tr('Klaim & Kasbon', 'Claims & Kasbon'), desc: tr('Reimbursement & pinjaman', 'Reimbursements & loans'), color: 'text-teal-600 bg-teal-50', show: (isAdmin || isFinance || isManager) && isModuleEnabled('claims') },
+    { to: '/petty-cash', icon: Wallet, title: 'Petty Cash', desc: tr('Dana kas & laporan QR', 'Operational float & QR PDF'), color: 'text-cyan-600 bg-cyan-50', show: (isAdmin || isFinance || isManager) && isModuleEnabled('petty_cash') },
+    { to: '/tasks', icon: CheckSquare, title: tr('Tugas (TMS)', 'Tasks (TMS)'), desc: tr('Penugasan & alur kerja', 'Task assignments & workflow'), color: 'text-violet-600 bg-violet-50', show: isModuleEnabled('tasks') },
+    { to: '/announcements', icon: Megaphone, title: tr('Pengumuman', 'Announcements'), desc: tr('Memo & kebijakan HR', 'Memos & policy acks'), color: 'text-sky-600 bg-sky-50', show: isModuleEnabled('announcements') },
+    { to: '/assets', icon: Laptop, title: tr('Aset & Inventaris', 'Assets'), desc: tr('Perangkat & serah-terima', 'Equipment & assignments'), color: 'text-slate-700 bg-slate-100', show: (isAdmin || isFinance || isManager) && isModuleEnabled('assets') },
+    { to: '/performance', icon: Award, title: tr('Kinerja (KPI)', 'Performance'), desc: tr('KPI & siklus penilaian', 'KPI goals & appraisals'), color: 'text-amber-700 bg-amber-50', show: (isAdmin || isManager) && isModuleEnabled('performance') },
+    { to: '/recruitment', icon: Briefcase, title: tr('Rekrutmen', 'Recruitment'), desc: tr('Lowongan & onboarding', 'Hiring pipeline & onboarding'), color: 'text-blue-700 bg-blue-50', show: (isAdmin || isManager) && isModuleEnabled('recruitment') },
+    { to: '/offboarding', icon: UserMinus, title: 'Offboarding', desc: tr('Clearance keluar karyawan', 'Exit checklist & clearance'), color: 'text-rose-600 bg-rose-50', show: (isAdmin || isFinance || isManager) && isModuleEnabled('offboarding') },
+    { to: '/documents', icon: PenLine, title: tr('Dokumen & TTD', 'Documents & Signing'), desc: tr('Kontrak & DocuSeal', 'Templates & e-signatures'), color: 'text-purple-600 bg-purple-50', show: (isAdmin || isFinance || isManager) && isModuleEnabled('signing') },
+    { to: '/reports', icon: FileText, title: t.nav.reports, desc: tr('Ekspor Excel & pajak', 'Excel & tax exports'), color: 'text-slate-700 bg-slate-100', show: (isAdmin || isFinance || isManager) && isModuleEnabled('reports') },
+    { to: '/settings', icon: Settings, title: t.nav.settings, desc: tr('Aturan, cabang & modul', 'Rules, branches & modules'), color: 'text-slate-700 bg-slate-100', show: isAdmin },
+  ].filter((m) => m.show);
+
   const metricSkeletons = (
     <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
       {[0, 1, 2, 3, 4].map((index) => (
@@ -87,6 +126,40 @@ export const HRDashboard: React.FC = () => {
         <h1 className="text-2xl font-extrabold tracking-tight md:text-3xl">
           {t.dashboard.welcome}, {user?.name}
         </h1>
+      </div>
+
+      {/* Main Menu — Quick Module Launcher */}
+      <div>
+        <div className="mb-3 flex items-center justify-between">
+          <h2 className="text-sm font-bold uppercase tracking-wider text-slate-700">
+            {tr('Menu Utama Modul', 'Main Module Menu')}
+          </h2>
+          {isAdmin && (
+            <Link to="/settings" className="text-xs font-semibold text-blue-600 hover:underline">
+              {tr('Kelola Modul', 'Manage Modules')}
+            </Link>
+          )}
+        </div>
+        <div className="grid grid-cols-2 gap-3 sm:grid-cols-3 lg:grid-cols-4">
+          {moduleMenu.map((mod) => {
+            const Icon = mod.icon;
+            return (
+              <Link
+                key={mod.to}
+                to={mod.to}
+                className="group flex items-start gap-3 rounded-2xl border border-slate-200/80 bg-white p-3.5 shadow-2xs transition hover:border-blue-300 hover:shadow-sm"
+              >
+                <div className={`flex h-9 w-9 shrink-0 items-center justify-center rounded-xl ${mod.color}`}>
+                  <Icon size={18} />
+                </div>
+                <div className="min-w-0">
+                  <div className="truncate text-xs font-bold text-slate-900 group-hover:text-blue-700">{mod.title}</div>
+                  <div className="mt-0.5 line-clamp-1 text-[11px] text-slate-500">{mod.desc}</div>
+                </div>
+              </Link>
+            );
+          })}
+        </div>
       </div>
 
       {/* Contract Expiry Alerts (30 & 7 days warning) */}
@@ -194,7 +267,7 @@ export const HRDashboard: React.FC = () => {
         ) : (
           <div className="grid grid-cols-2 md:grid-cols-4 gap-3">
             <Link
-              to="/leave-applications"
+              to="/leave"
               className="p-3.5 rounded-2xl bg-slate-50 hover:bg-blue-50 border border-slate-200 transition text-center"
             >
               <Calendar size={20} className="mx-auto text-blue-600 mb-1" />

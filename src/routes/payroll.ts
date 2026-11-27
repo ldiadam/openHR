@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Bindings, PayrollSettingsModel } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
-import { calculateEmployeePayroll } from '../services/payroll-calc';
+import { calculateEmployeePayroll, calculateTerPPh21 } from '../services/payroll-calc';
 import { sendEmail, runInBackground } from '../services/smtp';
 import { getPayslipReadyEmail } from '../services/email-templates';
 import { makeId } from '../utils/id';
@@ -890,6 +890,7 @@ payrollRoutes.post('/runs/:id/adjust-item', requireRole(['owner_admin']), async 
     commission_bonus,
     other_deductions,
     other_deductions_reason,
+    pay_full_month,
   } = body;
 
   const run = await c.env.DB.prepare(`SELECT status FROM payroll_runs WHERE id = ?`).bind(runId).first<any>();
@@ -904,34 +905,93 @@ payrollRoutes.post('/runs/:id/adjust-item', requireRole(['owner_admin']), async 
 
   if (!item) return c.json({ error: 'Item payroll tidak ditemukan' }, 404);
 
-  const attBonus = attendance_bonus !== undefined ? parseFloat(attendance_bonus) : item.attendance_bonus;
-  const commBonus = commission_bonus !== undefined ? parseFloat(commission_bonus) : item.commission_bonus;
-  const otherDed = other_deductions !== undefined ? parseFloat(other_deductions) : item.other_deductions;
+  const attBonus = attendance_bonus !== undefined ? parseFloat(attendance_bonus) : Number(item.attendance_bonus || 0);
+  const commBonus = commission_bonus !== undefined ? parseFloat(commission_bonus) : Number(item.commission_bonus || 0);
+  const otherDed = other_deductions !== undefined ? parseFloat(other_deductions) : Number(item.other_deductions || 0);
 
-  const newGross = item.prorated_salary + item.fixed_allowance + item.overtime_pay + attBonus + commBonus + item.reimbursement_amount;
-  const newTotalDeductions = item.late_deduction + item.unpaid_leave_deduction + item.kasbon_deduction + otherDed + item.bpjs_kes_employee + item.bpjs_jht_employee + item.bpjs_jp_employee + item.pph21_amount;
-  const newTakeHome = newGross - newTotalDeductions;
+  let newProratedSalary = Number(item.prorated_salary || 0);
+  if (typeof pay_full_month === 'boolean') {
+    const base = Number(item.base_salary || 0);
+    const expected = Number(item.expected_working_days) > 0 ? Number(item.expected_working_days) : 21;
+    const worked = Math.min(Number(item.days_worked || 0), expected);
+    if (pay_full_month) {
+      newProratedSalary = base;
+    } else {
+      newProratedSalary = worked < expected ? Math.round((base / expected) * worked) : base;
+    }
+  }
+
+  const newGross =
+    newProratedSalary +
+    Number(item.fixed_allowance || 0) +
+    Number(item.overtime_pay || 0) +
+    attBonus +
+    commBonus +
+    Number(item.thr_amount || 0);
+
+  let newPph21 = Number(item.pph21_amount || 0);
+  if (typeof pay_full_month === 'boolean' && item.pph21_method === 'TER') {
+    const settingsRow = await c.env.DB.prepare(`SELECT ter_rules_json FROM payroll_settings LIMIT 1`).first<any>();
+    if (settingsRow?.ter_rules_json) {
+      newPph21 = calculateTerPPh21(newGross, item.ptkp_status, settingsRow.ter_rules_json).taxAmount;
+    }
+  }
+
+  const newTotalDeductions =
+    Number(item.late_deduction || 0) +
+    Number(item.unpaid_leave_deduction || 0) +
+    Number(item.kasbon_deduction || 0) +
+    otherDed +
+    Number(item.bpjs_kes_employee || 0) +
+    Number(item.bpjs_jht_employee || 0) +
+    Number(item.bpjs_jp_employee || 0) +
+    newPph21;
+  const newTakeHome = newGross - newTotalDeductions + Number(item.reimbursement_amount || 0);
 
   await c.env.DB.prepare(
     `UPDATE payroll_items SET
+      prorated_salary = ?,
       attendance_bonus = ?,
       commission_bonus = ?,
       other_deductions = ?,
       other_deductions_reason = ?,
+      pph21_amount = ?,
       gross_earnings = ?,
       total_deductions = ?,
       take_home_pay = ?
      WHERE id = ?`
   )
     .bind(
+      newProratedSalary,
       attBonus,
       commBonus,
       otherDed,
-      other_deductions_reason || item.other_deductions_reason,
+      other_deductions_reason ?? item.other_deductions_reason,
+      newPph21,
       newGross,
       newTotalDeductions,
       newTakeHome,
       item_id
+    )
+    .run();
+
+  const runTotals = await c.env.DB.prepare(
+    `SELECT COALESCE(SUM(gross_earnings), 0) AS total_gross,
+            COALESCE(SUM(total_deductions), 0) AS total_deductions,
+            COALESCE(SUM(take_home_pay), 0) AS total_take_home
+     FROM payroll_items WHERE payroll_run_id = ?`
+  )
+    .bind(runId)
+    .first<any>();
+
+  await c.env.DB.prepare(
+    `UPDATE payroll_runs SET total_gross = ?, total_deductions = ?, total_take_home = ? WHERE id = ?`
+  )
+    .bind(
+      runTotals?.total_gross || 0,
+      runTotals?.total_deductions || 0,
+      runTotals?.total_take_home || 0,
+      runId
     )
     .run();
 
@@ -944,7 +1004,14 @@ payrollRoutes.post('/runs/:id/adjust-item', requireRole(['owner_admin']), async 
       makeId('aud'),
       user.userId,
       item_id,
-      JSON.stringify({ attBonus, commBonus, otherDed, reason: other_deductions_reason })
+      JSON.stringify({
+        pay_full_month,
+        prorated_salary: newProratedSalary,
+        attBonus,
+        commBonus,
+        otherDed,
+        reason: other_deductions_reason,
+      })
     )
     .run();
 

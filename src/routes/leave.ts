@@ -420,10 +420,15 @@ function scopeClause(user: { role: string; employeeId?: string | null }) {
 leaveRoutes.get('/form/config', async (c) => {
   const user = c.get('user');
 
-  const [letterhead, departments, leaveTypes] = await Promise.all([
+  const [letterhead, departments, leaveTypes, employee] = await Promise.all([
     loadLetterhead(c.env),
     c.env.DB.prepare(`SELECT id, name, code FROM departments ORDER BY name ASC`).all<any>(),
     c.env.DB.prepare(`SELECT id, code, name, is_paid FROM leave_types ORDER BY name ASC`).all<any>(),
+    user.employeeId
+      ? c.env.DB.prepare(`SELECT id, full_name, department_id FROM employees WHERE id = ?`)
+          .bind(user.employeeId)
+          .first<any>()
+      : Promise.resolve(null),
   ]);
 
   return c.json({
@@ -438,6 +443,8 @@ leaveRoutes.get('/form/config', async (c) => {
     viewer: {
       role: user.role,
       employeeId: user.employeeId || null,
+      fullName: employee?.full_name || null,
+      departmentId: employee?.department_id || null,
       canPrint: user.role === 'owner_admin',
     },
   });
@@ -875,19 +882,23 @@ leaveRoutes.post('/applications/:id/override', requireRole(['owner_admin']), asy
   const reason = String(body.reason || '').trim().slice(0, 500);
   if (!reason) return c.json({ error: 'Alasan override wajib diisi.' }, 400);
 
-  if (request.status === 'cancelled') {
-    return c.json({ error: 'Pengajuan yang sudah dibatalkan tidak dapat diubah.' }, 409);
+  if (request.status === 'cancelled' || request.status === 'rejected') {
+    return c.json({ error: `Pengajuan yang sudah ${request.status} tidak dapat diubah.` }, 409);
   }
-  if (!canTransition(request.status, nextStatus)) {
-    return c.json({ error: `Override ke "${nextStatus}" tidak diizinkan dari "${request.status}".` }, 409);
+  if (request.status === 'approved' && nextStatus !== 'cancelled') {
+    return c.json({ error: `Pengajuan yang sudah disetujui hanya dapat dibatalkan.` }, 409);
   }
 
   await c.env.DB.prepare(
     `UPDATE leave_requests
      SET status = ?,
          override_reason = ?,
+         management_decision = CASE WHEN ? = 'approved' THEN COALESCE(management_decision, 'APPROVED') WHEN ? = 'rejected' THEN COALESCE(management_decision, 'REJECTED') ELSE management_decision END,
+         management_signed_at = CASE WHEN ? IN ('approved', 'rejected') THEN COALESCE(management_signed_at, CURRENT_TIMESTAMP) ELSE management_signed_at END,
+         management_by = CASE WHEN ? IN ('approved', 'rejected') THEN COALESCE(management_by, ?) ELSE management_by END,
          approved_by = CASE WHEN ? = 'approved' THEN ? ELSE approved_by END,
          approved_at = CASE WHEN ? = 'approved' THEN CURRENT_TIMESTAMP ELSE approved_at END,
+         rejection_note = CASE WHEN ? = 'rejected' THEN ? ELSE rejection_note END,
          cancelled_at = CASE WHEN ? = 'cancelled' THEN CURRENT_TIMESTAMP ELSE cancelled_at END,
          cancelled_by = CASE WHEN ? = 'cancelled' THEN ? ELSE cancelled_by END
      WHERE id = ?`
@@ -896,8 +907,15 @@ leaveRoutes.post('/applications/:id/override', requireRole(['owner_admin']), asy
       nextStatus,
       reason,
       nextStatus,
+      nextStatus,
+      nextStatus,
+      nextStatus,
       user.userId,
       nextStatus,
+      user.userId,
+      nextStatus,
+      nextStatus,
+      reason,
       nextStatus,
       nextStatus,
       user.userId,
@@ -920,6 +938,54 @@ leaveRoutes.post('/applications/:id/override', requireRole(['owner_admin']), asy
   }
 
   return c.json({ message: 'Override tersimpan.', status: nextStatus });
+});
+
+// Delete a leave request (owner_admin only, e.g. cleaning up test entries).
+// If the leave was already approved and side effects applied, restores the
+// employee's leave balance and removes auto-created leave attendance rows.
+leaveRoutes.delete('/requests/:id', requireRole(['owner_admin']), async (c) => {
+  const user = c.get('user');
+  const id = c.req.param('id');
+
+  const req = await c.env.DB.prepare(`SELECT * FROM leave_requests WHERE id = ?`)
+    .bind(id)
+    .first<any>();
+  if (!req) return c.json({ error: 'Pengajuan cuti tidak ditemukan.' }, 404);
+
+  if (req.side_effects_applied_at || req.status === 'approved') {
+    const year = parseInt(String(req.start_date).slice(0, 4), 10) || new Date().getUTCFullYear();
+    const days = Number(req.total_days || 0);
+    if (days > 0) {
+      await c.env.DB.prepare(
+        `UPDATE leave_balances
+         SET used_days = MAX(0, used_days - ?),
+             remaining_days = remaining_days + ?,
+             updated_at = CURRENT_TIMESTAMP
+         WHERE employee_id = ? AND leave_type_id = ? AND year = ?`
+      )
+        .bind(days, days, req.employee_id, req.leave_type_id, year)
+        .run();
+    }
+
+    await c.env.DB.prepare(
+      `DELETE FROM attendance
+       WHERE employee_id = ? AND date BETWEEN ? AND ?
+         AND status IN ('on_leave', 'sick') AND clock_in_time IS NULL AND source = 'manual'`
+    )
+      .bind(req.employee_id, req.start_date, req.end_date)
+      .run();
+  }
+
+  await c.env.DB.prepare(`DELETE FROM leave_requests WHERE id = ?`).bind(id).run();
+
+  await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_REQUEST_DELETED', id, {
+    employee_id: req.employee_id,
+    status: req.status,
+    start_date: req.start_date,
+    end_date: req.end_date,
+  });
+
+  return c.json({ message: 'Pengajuan cuti berhasil dihapus.' });
 });
 
 // Everything the client needs to render the printable document.

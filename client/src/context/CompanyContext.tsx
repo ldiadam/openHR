@@ -1,5 +1,12 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useLanguage } from './LanguageContext';
+import {
+  DEFAULT_MODULES_CONFIG,
+  LeaveWorkflowMode,
+  ModulesConfig,
+  parseModulesConfig,
+  ToggleableModuleId,
+} from '../../../shared/modules';
 
 export interface CompanyInfo {
   id?: string;
@@ -17,6 +24,8 @@ export interface CompanyInfo {
   purelymail_from_address?: string;
   purelymail_api_token?: string;
   purelymail_smtp_pass?: string;
+  modules_json?: string;
+  modules?: ModulesConfig;
 }
 
 interface CompanyContextType {
@@ -26,6 +35,9 @@ interface CompanyContextType {
   logoUrl: string | null;
   isCustomCompany: boolean;
   initials: string;
+  modules: ModulesConfig;
+  isModuleEnabled: (id: ToggleableModuleId) => boolean;
+  leaveWorkflow: LeaveWorkflowMode;
   refreshCompany: () => Promise<void>;
   updateCompanyLocal: (newInfo: Partial<CompanyInfo>) => void;
 }
@@ -131,6 +143,15 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     setCompany((prev) => ({ ...(prev || {}), ...newInfo }));
   };
 
+  const modules: ModulesConfig = company?.modules
+    ? parseModulesConfig(company.modules as any)
+    : company?.modules_json
+      ? parseModulesConfig(company.modules_json)
+      : { ...DEFAULT_MODULES_CONFIG };
+
+  const isModuleEnabled = (id: ToggleableModuleId) => modules[id] !== false;
+  const leaveWorkflow: LeaveWorkflowMode = modules.leave_workflow || 'three_stage';
+
   return (
     <CompanyContext.Provider
       value={{
@@ -140,6 +161,9 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         logoUrl,
         isCustomCompany,
         initials,
+        modules,
+        isModuleEnabled,
+        leaveWorkflow,
         refreshCompany: fetchCompany,
         updateCompanyLocal,
       }}

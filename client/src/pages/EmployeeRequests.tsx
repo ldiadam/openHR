@@ -1,18 +1,20 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams } from 'react-router-dom';
+import { useSearchParams, Link } from 'react-router-dom';
 import {
+  AlertCircle,
+  ArrowLeft,
   Calendar,
   Clock,
   Receipt,
   Plus,
   CheckCircle2,
-  AlertCircle,
   FileCheck,
   Camera,
   FileSpreadsheet,
   FileDown,
   Upload,
   Eye,
+  Wallet,
 } from 'lucide-react';
 import { apiFetch, getLocalDateString, getLocalMonthString, downloadFile, getToken } from '../api';
 import { apiFetchCached } from '../utils/offlineCache';
@@ -20,21 +22,27 @@ import { useLanguage } from '../context/LanguageContext';
 import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { CameraModal } from '../components/CameraModal';
+import { PettyCashPanel } from '../components/PettyCashPanel';
 import { MobileDatePicker } from '../components/pickers/MobileDatePicker';
 import { MobileTimePicker } from '../components/pickers/MobileTimePicker';
 import { MobileSelect } from '../components/pickers/MobileSelect';
 import { MobileMonthPicker } from '../components/pickers/MobileMonthPicker';
 import { generateCombinedReceiptsPdf, ClaimItemForPdf } from '../utils/claimPdf';
+import { fileToDownscaledDataUrl } from '../utils/image';
 
 export const EmployeeRequests: React.FC = () => {
   const { t, tr, lang, formatDate, formatCurrency } = useLanguage();
-  const { companyName } = useCompany();
+  const { companyName, isModuleEnabled } = useCompany();
   const { user } = useAuth();
   const [searchParams] = useSearchParams();
   const initialType = searchParams.get('type');
-  const initialTab = initialType === 'reimbursement' || initialType === 'overtime' ? initialType : 'leave';
-  const [activeTab, setActiveTab] = useState<'leave' | 'overtime' | 'reimbursement'>(initialTab);
+  const initialView =
+    initialType === 'reimbursement' || initialType === 'overtime' || initialType === 'petty'
+      ? initialType
+      : 'hub';
+  const [view, setView] = useState<'hub' | 'leave' | 'overtime' | 'reimbursement' | 'petty'>(initialView);
   const [showForm, setShowForm] = useState(false);
+  const [pettyFormOpen, setPettyFormOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
   const [claimMonth, setClaimMonth] = useState(getLocalMonthString);
 
@@ -90,7 +98,7 @@ export const EmployeeRequests: React.FC = () => {
         setLeaveTypeId(ltRes.leaveTypes[0].id);
       }
 
-      await loadHistory(activeTab);
+      await loadHistory(view);
     } catch (err: any) {
       console.warn('Load requests data err:', err.message);
     } finally {
@@ -117,7 +125,7 @@ export const EmployeeRequests: React.FC = () => {
 
   useEffect(() => {
     loadData();
-  }, [activeTab, claimMonth]);
+  }, [view, claimMonth]);
 
   const handleSubmitLeave = async (e: React.FormEvent) => {
     e.preventDefault();
@@ -209,13 +217,19 @@ export const EmployeeRequests: React.FC = () => {
     reader.readAsDataURL(file);
   };
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {    const file = e.target.files?.[0];
+  const handleFileChange = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
     if (!file) return;
-    const reader = new FileReader();
-    reader.onload = (event) => {
-      setReceiptPhoto(event.target?.result as string);
-    };
-    reader.readAsDataURL(file);
+    try {
+      const dataUrl = await fileToDownscaledDataUrl(file);
+      setReceiptPhoto(dataUrl);
+    } catch {
+      const reader = new FileReader();
+      reader.onload = (event) => {
+        setReceiptPhoto(event.target?.result as string);
+      };
+      reader.readAsDataURL(file);
+    }
   };
 
   const handleSubmitReimbursement = async (e: React.FormEvent) => {
@@ -285,7 +299,7 @@ export const EmployeeRequests: React.FC = () => {
       }));
 
       await generateCombinedReceiptsPdf({
-        companyName: companyName || 'SMTS Pte Ltd',
+        companyName: companyName || 'openHR',
         periodTitle: (() => {
           const [yearStr, monthStr] = claimMonth.split('-');
           return new Date(Number(yearStr), Number(monthStr) - 1, 1).toLocaleDateString(
@@ -293,7 +307,7 @@ export const EmployeeRequests: React.FC = () => {
             { month: 'long', year: 'numeric' }
           );
         })(),
-        employeeName: user?.name || 'Adam',
+        employeeName: user?.name || '-',
         employeeNik: user?.employeeId || '-',
         claims: itemsForPdf,
       });
@@ -340,11 +354,52 @@ export const EmployeeRequests: React.FC = () => {
   const claimPeriodStart = `${claimPrevMonth.getFullYear()}-${String(claimPrevMonth.getMonth() + 1).padStart(2, '0')}-25`;
   const claimPeriodEnd = `${claimMonth}-25`;
 
+  const REQUEST_CARDS = [
+    {
+      key: 'leave' as const,
+      moduleId: 'leave' as const,
+      icon: Calendar,
+      title: t.nav.leave,
+      description: tr('Cuti, izin, dan sakit', 'Leave, absence, and sick days'),
+      tint: 'bg-blue-50 text-blue-600',
+    },
+    {
+      key: 'overtime' as const,
+      moduleId: 'attendance' as const,
+      icon: Clock,
+      title: t.shifts.requestOvertime,
+      description: tr('Pengajuan kerja lembur', 'Overtime work requests'),
+      tint: 'bg-amber-50 text-amber-600',
+    },
+    {
+      key: 'reimbursement' as const,
+      moduleId: 'claims' as const,
+      icon: Receipt,
+      title: tr('Klaim Biaya', 'Expense Claims'),
+      description: tr('Klaim pengeluaran & struk', 'Expense claims & receipts'),
+      tint: 'bg-emerald-50 text-emerald-600',
+    },
+    {
+      key: 'petty' as const,
+      moduleId: 'petty_cash' as const,
+      icon: Wallet,
+      title: tr('Petty Cash', 'Petty Cash'),
+      description: tr('Dana kecil & realisasi', 'Small float & realization'),
+      tint: 'bg-sky-50 text-sky-600',
+    },
+  ].filter((item) => isModuleEnabled(item.moduleId));
+
+  const currentCard = REQUEST_CARDS.find((item) => item.key === view) || REQUEST_CARDS[0];
+
   return (
     <div className="max-w-md mx-auto flex flex-col gap-4">
       <div>
         <h2 className="text-xl font-bold text-slate-900">{t.nav.requests}</h2>
-        <p className="text-xs text-slate-500">{t.leave.requestLeave}, {t.shifts.requestOvertime}, {tr('Klaim Biaya', 'Expense Claims')}</p>
+        {view === 'hub' && (
+          <p className="text-xs text-slate-500">
+            {tr('Pilih jenis permohonan yang ingin dibuat', 'Choose the type of request you want to make')}
+          </p>
+        )}
       </div>
 
       {msg && (
@@ -358,55 +413,94 @@ export const EmployeeRequests: React.FC = () => {
         </div>
       )}
 
-      {/* Mobile-Optimized Modern Tabs */}
-      <div className="order-1 grid grid-cols-3 gap-1 p-1.5 bg-slate-100 rounded-2xl border border-slate-200/80 shadow-2xs">
-        <button
-          type="button"
-          onClick={() => setActiveTab('leave')}
-          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
-            activeTab === 'leave'
-              ? 'bg-white text-blue-600 shadow-xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-          }`}
-        >
-          <Calendar size={14} className={`shrink-0 ${activeTab === 'leave' ? 'text-blue-600' : 'text-slate-400'}`} />
-          <span className="min-w-0 break-words">{t.nav.leave}</span>
-        </button>
+      {view === 'hub' ? (
+        <div className="order-1 grid grid-cols-2 gap-2.5">
+          {REQUEST_CARDS.map((item) => {
+            const Icon = item.icon;
+            return (
+              <button
+                key={item.key}
+                type="button"
+                onClick={() => {
+                  setMsg(null);
+                  setShowForm(false);
+                  setPettyFormOpen(false);
+                  setStatusFilter('all');
+                  setView(item.key);
+                }}
+                className="flex min-h-[118px] flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3.5 text-left shadow-2xs transition hover:border-slate-300 hover:shadow-xs cursor-pointer"
+              >
+                <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${item.tint}`}>
+                  <Icon size={17} />
+                </span>
+                <span className="mt-2 block">
+                  <span className="block text-xs font-bold leading-tight text-slate-900">{item.title}</span>
+                  <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">{item.description}</span>
+                </span>
+              </button>
+            );
+          })}
+        </div>
+      ) : (
+        <div className="order-1 space-y-3">
+          {!(showForm || (view === 'petty' && pettyFormOpen)) && (
+          <div className="flex items-start gap-2">
+            <button
+              type="button"
+              onClick={() => {
+                setMsg(null);
+                setShowForm(false);
+                setStatusFilter('all');
+                setView('hub');
+              }}
+              className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 cursor-pointer"
+              aria-label={tr('Kembali', 'Back')}
+            >
+              <ArrowLeft size={15} />
+            </button>
+            <div className="min-w-0">
+              <h3 className="text-sm font-bold text-slate-900">{currentCard.title}</h3>
+              <p className="text-[11px] text-slate-500">{currentCard.description}</p>
+            </div>
+          </div>
+          )}
 
-        <button
-          type="button"
-          onClick={() => setActiveTab('overtime')}
-          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
-            activeTab === 'overtime'
-              ? 'bg-white text-amber-600 shadow-xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-          }`}
-        >
-          <Clock size={14} className={`shrink-0 ${activeTab === 'overtime' ? 'text-amber-600' : 'text-slate-400'}`} />
-          <span className="min-w-0 break-words">{t.shifts.requestOvertime}</span>
-        </button>
-
-        <button
-          type="button"
-          onClick={() => setActiveTab('reimbursement')}
-          className={`min-w-0 flex flex-col sm:flex-row items-center justify-center gap-1 sm:gap-1.5 px-1.5 sm:px-3 py-2 rounded-xl text-[10px] sm:text-xs font-bold leading-tight text-center transition cursor-pointer ${
-            activeTab === 'reimbursement'
-              ? 'bg-white text-emerald-600 shadow-xs border border-slate-200/80'
-              : 'text-slate-600 hover:text-slate-900 hover:bg-slate-200/60'
-          }`}
-        >
-          <Receipt size={14} className={`shrink-0 ${activeTab === 'reimbursement' ? 'text-emerald-600' : 'text-slate-400'}`} />
-          <span className="min-w-0 break-words">{tr('Klaim Biaya', 'Expense Claims')}</span>
-        </button>
-      </div>
+          {view === 'petty' ? (
+            <PettyCashPanel onFormOpenChange={setPettyFormOpen} />
+          ) : showForm ? (
+            <>
+              <div className="flex items-start gap-2">
+                <button
+                  type="button"
+                  onClick={() => setShowForm(false)}
+                  className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 cursor-pointer"
+                  aria-label={tr('Kembali', 'Back')}
+                >
+                  <ArrowLeft size={15} />
+                </button>
+                <div className="min-w-0">
+                  <h3 className="text-sm font-bold text-slate-900">{currentCard.title}</h3>
+                  <p className="text-[11px] text-slate-500">
+                    {tr('Form pengajuan baru', 'New request form')}
+                  </p>
+                </div>
+              </div>
 
       {/* TAB 1: CUTI / IZIN */}
-      {showForm && activeTab === 'leave' && (
+      {view === 'leave' && (
         <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
           <div className="flex flex-wrap items-center justify-between gap-2 pb-3 border-b border-slate-100">
             <h3 className="font-bold text-xs uppercase text-slate-900">{t.leave.requestLeave}</h3>
-            <div className="text-xs text-blue-600 font-semibold">
-              {t.leave.annualLeaveBalance}: {leaveBalances.find((b) => b.leave_type_code === 'annual')?.remaining_days || 12} {t.leave.remainingDays}
+            <div className="flex items-center gap-2">
+              <div className="text-xs text-blue-600 font-semibold">
+                {t.leave.annualLeaveBalance}: {leaveBalances.find((b) => b.leave_type_code === 'annual')?.remaining_days || 12} {t.leave.remainingDays}
+              </div>
+              <Link
+                to="/app/leave-application"
+                className="rounded-lg bg-slate-900 px-2.5 py-1 text-[10px] font-bold text-white hover:bg-slate-800"
+              >
+                {tr('Formulir Resmi (TTD & PDF)', 'Official Form (Sign & PDF)')}
+              </Link>
             </div>
           </div>
 
@@ -496,7 +590,7 @@ export const EmployeeRequests: React.FC = () => {
       )}
 
       {/* TAB 2: OVERTIME */}
-      {showForm && activeTab === 'overtime' && (
+      {view === 'overtime' && (
         <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
           <h3 className="font-bold text-xs uppercase text-slate-900 border-b border-slate-100 pb-3">
             {tr('Form Pengajuan Lembur', 'Overtime Request Form')}
@@ -572,7 +666,7 @@ export const EmployeeRequests: React.FC = () => {
       )}
 
       {/* TAB 3: REIMBURSEMENT (KLAIM BIAYA) */}
-      {showForm && activeTab === 'reimbursement' && (
+      {view === 'reimbursement' && (
         <div className="order-3 bg-white p-5 rounded-3xl border border-slate-200/80 shadow-xs space-y-4">
           <div className="flex items-center justify-between border-b border-slate-100 pb-3">
             <div>
@@ -627,8 +721,7 @@ export const EmployeeRequests: React.FC = () => {
               <input
                 type="number"
                 required
-                min="1000"
-                step="1000"
+                min="1"
                 value={reimbAmount}
                 onChange={(e) => setReimbAmount(e.target.value)}
                 placeholder="2300000"
@@ -643,7 +736,7 @@ export const EmployeeRequests: React.FC = () => {
                   type="text"
                   value={reimbCostCentre}
                   onChange={(e) => setReimbCostCentre(e.target.value)}
-                  placeholder={tr('Opsional, cth: SMTS', 'Optional, e.g. SMTS')}
+                  placeholder={tr('Opsional, cth: OPS-01', 'Optional, e.g. OPS-01')}
                   className="w-full p-2.5 border border-slate-300 rounded-xl"
                 />
               </div>
@@ -723,6 +816,9 @@ export const EmployeeRequests: React.FC = () => {
           </form>
         </div>
       )}
+            </>
+          ) : (
+            <>
 
       {/* REQUEST HISTORY LIST */}
       <div className="order-2 bg-white rounded-3xl p-5 border border-slate-200/80 shadow-xs space-y-3">
@@ -740,11 +836,14 @@ export const EmployeeRequests: React.FC = () => {
 
           <button
             type="button"
-            onClick={() => setShowForm((value) => !value)}
+            onClick={() => {
+              setMsg(null);
+              setShowForm(true);
+            }}
             className="flex shrink-0 items-center justify-center gap-1.5 rounded-xl bg-slate-900 px-3 py-2 text-xs font-bold text-white transition hover:bg-slate-800 cursor-pointer"
           >
             <Plus size={14} />
-            <span>{showForm ? tr('Tutup Form', 'Hide Form') : tr('Buat Pengajuan', 'New Request')}</span>
+            <span>{tr('Buat Pengajuan', 'New Request')}</span>
           </button>
         </div>
 
@@ -774,7 +873,7 @@ export const EmployeeRequests: React.FC = () => {
           ))}
         </div>
 
-        {activeTab === 'reimbursement' && (
+        {view === 'reimbursement' && (
           <div className="flex items-center justify-between gap-2 rounded-xl bg-slate-50 px-3 py-2">
             <span className="text-[11px] font-semibold text-slate-600">
               {tr('Periode Klaim', 'Claim Period')}
@@ -785,13 +884,13 @@ export const EmployeeRequests: React.FC = () => {
           </div>
         )}
 
-        {activeTab === 'reimbursement' && (
+        {view === 'reimbursement' && (
           <p className="text-[10px] text-slate-400">
             {tr('Periode:', 'Period:')} {formatDate(claimPeriodStart)} – {formatDate(claimPeriodEnd)}
           </p>
         )}
 
-        {activeTab === 'reimbursement' && (
+        {view === 'reimbursement' && (
             <div className="flex flex-wrap items-center gap-2">
               <button
                 type="button"
@@ -904,6 +1003,10 @@ export const EmployeeRequests: React.FC = () => {
           </div>
         )}
       </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Image Preview Modal */}
       {previewModalImg && (
