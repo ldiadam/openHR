@@ -21,6 +21,7 @@ import {
   workingDaySlaDueAt,
   type LeaveStatus,
 } from '../services/leave-workflow';
+import { loadLeaveFormTemplate } from '../services/form-templates';
 
 export const leaveRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -420,7 +421,7 @@ function scopeClause(user: { role: string; employeeId?: string | null }) {
 leaveRoutes.get('/form/config', async (c) => {
   const user = c.get('user');
 
-  const [letterhead, departments, leaveTypes, employee] = await Promise.all([
+  const [letterhead, departments, leaveTypes, employee, leaveTpl] = await Promise.all([
     loadLetterhead(c.env),
     c.env.DB.prepare(`SELECT id, name, code FROM departments ORDER BY name ASC`).all<any>(),
     c.env.DB.prepare(`SELECT id, code, name, is_paid FROM leave_types ORDER BY name ASC`).all<any>(),
@@ -429,6 +430,7 @@ leaveRoutes.get('/form/config', async (c) => {
           .bind(user.employeeId)
           .first<any>()
       : Promise.resolve(null),
+    loadLeaveFormTemplate(c.env),
   ]);
 
   return c.json({
@@ -436,10 +438,10 @@ leaveRoutes.get('/form/config', async (c) => {
     letterheadGaps: letterheadGaps(letterhead),
     departments: departments.results || [],
     leaveTypes: leaveTypes.results || [],
-    adminClashFlags: ADMIN_CLASH_FLAGS,
-    deptHeadFlags: DEPT_HEAD_FLAGS,
-    // The form title is the document's name, not organisation data.
-    formTitle: 'LEAVE APPLICATION FORM',
+    adminClashFlags: leaveTpl.config.adminClashFlags,
+    deptHeadFlags: leaveTpl.config.deptHeadFlags,
+    formTitle: leaveTpl.config.formTitle,
+    formTemplate: leaveTpl.config,
     viewer: {
       role: user.role,
       employeeId: user.employeeId || null,
@@ -714,7 +716,11 @@ leaveRoutes.post('/applications/:id/admin-check', requireRole(['owner_admin']), 
     );
   }
 
-  const flags = parseFlags(body.admin_clash_checks, ADMIN_CLASH_FLAGS);
+  const leaveTpl = await loadLeaveFormTemplate(c.env);
+  const allowedAdminFlags = leaveTpl.config.adminClashFlags.length > 0
+    ? leaveTpl.config.adminClashFlags
+    : ADMIN_CLASH_FLAGS;
+  const flags = parseFlags(body.admin_clash_checks, allowedAdminFlags);
   const otherReason = String(body.admin_other_reason || '').trim().slice(0, 500);
 
   if (flags.includes('Other reason') && !otherReason) {
@@ -772,7 +778,11 @@ leaveRoutes.post(
       return c.json({ error: 'Keputusan department head wajib dipilih.' }, 400);
     }
 
-    const issues = parseFlags(body.dept_head_issues, DEPT_HEAD_FLAGS);
+    const leaveTpl = await loadLeaveFormTemplate(c.env);
+    const allowedDeptFlags = leaveTpl.config.deptHeadFlags.length > 0
+      ? leaveTpl.config.deptHeadFlags
+      : DEPT_HEAD_FLAGS;
+    const issues = parseFlags(body.dept_head_issues, allowedDeptFlags);
 
     await c.env.DB.prepare(
       `UPDATE leave_requests
@@ -1002,16 +1012,18 @@ leaveRoutes.get('/applications/:id/print', async (c) => {
 
   // The printed form lists every department and leave type as a checkbox, so the
   // payload carries the full option sets rather than only this application's.
-  const [departmentRows, leaveTypeRows] = await Promise.all([
+  const [departmentRows, leaveTypeRows, leaveTpl] = await Promise.all([
     c.env.DB.prepare(`SELECT name FROM departments ORDER BY name ASC`).all<any>(),
     c.env.DB.prepare(`SELECT name FROM leave_types ORDER BY name ASC`).all<any>(),
+    loadLeaveFormTemplate(c.env),
   ]);
 
   return c.json({
     application: request,
     letterhead: await loadLetterhead(c.env),
-    adminClashFlags: ADMIN_CLASH_FLAGS,
-    deptHeadFlags: DEPT_HEAD_FLAGS,
+    adminClashFlags: leaveTpl.config.adminClashFlags,
+    deptHeadFlags: leaveTpl.config.deptHeadFlags,
+    formTemplate: leaveTpl.config,
     // Full option lists so the printed form shows every checkbox, not just the
     // ones this application happens to use.
     departments: (departmentRows.results || []).map((row: any) => row.name),

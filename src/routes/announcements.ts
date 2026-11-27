@@ -206,7 +206,11 @@ announcementRoutes.post('/:id/attachment', requireRole(['owner_admin', 'manager'
 
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const key = `announcements/${id}/${makeId('doc')}-${safeName}`;
-  await putFile(c.env, key, await file.arrayBuffer(), file.type || 'application/octet-stream');
+  await putFile(c.env, {
+    key,
+    data: await file.arrayBuffer(),
+    contentType: file.type || 'application/octet-stream',
+  });
 
   await c.env.DB.prepare(`UPDATE announcements SET attachment_key = ?, attachment_name = ? WHERE id = ?`)
     .bind(key, file.name, id)
@@ -230,7 +234,7 @@ announcementRoutes.get('/:id/attachment', async (c) => {
 
   c.header('Content-Type', file.contentType || 'application/octet-stream');
   c.header('Content-Disposition', `inline; filename="${row.attachment_name || 'document'}"`);
-  return c.body(file.data);
+  return c.body(file.data as any);
 });
 
 // Employee acknowledges reading announcement/policy

@@ -26,11 +26,11 @@ describe('HRIS 5-module suite (Announcements, Assets, Offboarding, Performance, 
     const { env } = createEnv();
 
     const adminToken = await signJwt(
-      { userId: 'usr-admin', employeeId: 'emp-001', email: 'admin@company.id', name: 'Admin', role: 'owner_admin' },
+      { userId: 'usr-admin', employeeId: 'emp-001', email: 'admin@company.id', name: 'Admin', role: 'owner_admin', tenantId: 'default' },
       SECRET
     );
     const empToken = await signJwt(
-      { userId: 'usr-emp2', employeeId: 'emp-002', email: 'emp2@company.id', name: 'Employee 2', role: 'employee' },
+      { userId: 'usr-emp2', employeeId: 'emp-002', email: 'emp2@company.id', name: 'Employee 2', role: 'employee', tenantId: 'default' },
       SECRET
     );
 

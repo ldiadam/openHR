@@ -13,6 +13,7 @@ import {
   resolveDirectorName,
   writeClaimWorkbookBuffer,
 } from '../services/claim-excel';
+import { loadClaimSheetTemplate } from '../services/form-templates';
 export const kasbonRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
 kasbonRoutes.use('*', authMiddleware);
@@ -299,6 +300,7 @@ async function exportAllEmployeesZip(
   const comp: any = await c.env.DB.prepare(`SELECT name FROM companies LIMIT 1`).first();
   const defaultCompanyName = comp?.name || 'openHR';
   const range = getClaimPeriodRange(month);
+  const claimTpl = await loadClaimSheetTemplate(c.env, { withBytes: true });
 
   const employeesRes: any = await c.env.DB.prepare(
     `SELECT e.*, d.name as department_name, c.name as comp_name, mgr.full_name as manager_name
@@ -424,6 +426,7 @@ async function exportAllEmployeesZip(
       employeeName: emp.full_name,
       employeeNik: emp.nik,
       employeeJobTitle: emp.job_title,
+      employeeDepartment: emp.department_name,
       checkedByName: empCheckedBy,
       approverName: empApprover,
       claims: empClaims,
@@ -431,6 +434,8 @@ async function exportAllEmployeesZip(
       salaryAmount: salAmt,
       salaryDate: salDate,
       salaryRemarks: buildSalaryRemarks(emp.job_title, salRemarksItem),
+      templateConfig: claimTpl.config,
+      customTemplateBytes: claimTpl.customTemplateBytes,
       attendance: attendanceByEmployee.get(emp.id) || [],
       attendancePeriod: range,
       attendanceExceptions: exceptionsByEmployee.get(emp.id) || [],
@@ -585,12 +590,14 @@ kasbonRoutes.get('/claims/export-excel', async (c) => {
     attendanceExceptions = exceptionRes.results || [];
   }
 
+  const claimTpl = await loadClaimSheetTemplate(c.env, { withBytes: true });
   const wb = buildClaimSheetWorkbook({
     companyName,
     month,
     employeeName,
     employeeNik: employeeInfo?.nik || claims[0]?.nik,
     employeeJobTitle: employeeInfo?.job_title,
+    employeeDepartment: employeeInfo?.department_name,
     checkedByName,
     approverName,
     claims,
@@ -598,6 +605,8 @@ kasbonRoutes.get('/claims/export-excel', async (c) => {
     salaryAmount,
     salaryDate,
     salaryRemarks,
+    templateConfig: claimTpl.config,
+    customTemplateBytes: claimTpl.customTemplateBytes,
     attendance,
     attendancePeriod: claimRange,
     attendanceExceptions,

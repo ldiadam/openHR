@@ -63,6 +63,12 @@ object Formatters {
         maximumFractionDigits = 0
         minimumFractionDigits = 0
     }
+    private val ymFormatter = DateTimeFormatter.ofPattern("yyyy-MM")
+    private val timeFormatter = DateTimeFormatter.ofPattern("HH:mm:ss")
+    private val idDisplayDateFormatter = DateTimeFormatter.ofPattern("dd MMM yyyy", idLocale)
+    private val enDisplayDateFormatter = DateTimeFormatter.ofPattern("dd MMM yyyy", Locale.US)
+    private val idMonthFormatter = DateTimeFormatter.ofPattern("MMMM yyyy", idLocale)
+    private val enMonthFormatter = DateTimeFormatter.ofPattern("MMMM yyyy", Locale.US)
 
     fun formatRupiah(amount: Double): String {
         return rupiahFormat.format(amount.roundToLong())
@@ -72,26 +78,24 @@ object Formatters {
         date.format(DateTimeFormatter.ISO_LOCAL_DATE)
 
     fun localMonthString(ym: YearMonth = YearMonth.now()): String =
-        ym.format(DateTimeFormatter.ofPattern("yyyy-MM"))
+        ym.format(ymFormatter)
 
     fun localTimeString(time: LocalTime = LocalTime.now()): String =
-        time.format(DateTimeFormatter.ofPattern("HH:mm:ss"))
+        time.format(timeFormatter)
 
     fun formatDisplayDate(rawDate: String?, lang: String = "id"): String {
         if (rawDate.isNullOrBlank()) return "-"
         val datePart = rawDate.take(10)
         return runCatching {
             val d = LocalDate.parse(datePart)
-            val locale = if (lang == "id") idLocale else Locale.US
-            d.format(DateTimeFormatter.ofPattern("dd MMM yyyy", locale))
+            d.format(if (lang == "id") idDisplayDateFormatter else enDisplayDateFormatter)
         }.getOrDefault(rawDate)
     }
 
     fun formatMonthLabel(monthStr: String, lang: String = "id"): String {
         return runCatching {
             val ym = YearMonth.parse(monthStr)
-            val locale = if (lang == "id") idLocale else Locale.US
-            ym.format(DateTimeFormatter.ofPattern("MMMM yyyy", locale))
+            ym.format(if (lang == "id") idMonthFormatter else enMonthFormatter)
         }.getOrDefault(monthStr)
     }
 

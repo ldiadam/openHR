@@ -7,6 +7,9 @@ export interface EmailOptions {
   html: string;
   type: 'welcome_invite' | 'password_reset' | 'leave_status' | 'payslip_ready' | 'signing_request' | 'signing_status' | 'general';
   fromAddress?: string;
+  smtpHost?: string;
+  smtpPort?: number;
+  smtpUser?: string;
   smtpPass?: string;
   domainName?: string;
   senderName?: string;
@@ -240,33 +243,44 @@ async function sendViaEmailApi(
 export async function sendEmail(env: Bindings, options: EmailOptions): Promise<EmailResult> {
   let domainName = options.domainName;
   let fromAddress = options.fromAddress;
+  let smtpHostOpt = options.smtpHost;
+  let smtpPortOpt = options.smtpPort;
+  let smtpUserOpt = options.smtpUser;
   let smtpPass = options.smtpPass;
   let senderName = options.senderName;
 
-  // Auto-lookup credentials & company name from companies table if not passed
-  if (!smtpPass || !domainName || !fromAddress || !senderName) {
+  // Auto-lookup credentials & company name from companies table
+  try {
+    let comp: any = null;
     try {
-      const comp = await env.DB.prepare(
+      comp = await env.DB.prepare(
+        `SELECT name, purelymail_domain, purelymail_from_address, purelymail_smtp_pass, smtp_host, smtp_port, smtp_user FROM companies LIMIT 1`
+      ).first<any>();
+    } catch {
+      comp = await env.DB.prepare(
         `SELECT name, purelymail_domain, purelymail_from_address, purelymail_smtp_pass FROM companies LIMIT 1`
       ).first<any>();
-      if (comp) {
-        domainName = domainName || comp.purelymail_domain;
-        fromAddress = fromAddress || comp.purelymail_from_address;
-        smtpPass = smtpPass || comp.purelymail_smtp_pass;
-        senderName = senderName || comp.name;
-      }
-    } catch {
-      // ignore
     }
+    if (comp) {
+      domainName = domainName || comp.purelymail_domain;
+      fromAddress = fromAddress || comp.purelymail_from_address;
+      smtpHostOpt = smtpHostOpt || comp.smtp_host;
+      smtpPortOpt = smtpPortOpt || (comp.smtp_port ? Number(comp.smtp_port) : undefined);
+      smtpUserOpt = smtpUserOpt || comp.smtp_user;
+      smtpPass = smtpPass || comp.purelymail_smtp_pass;
+      senderName = senderName || comp.name;
+    }
+  } catch {
+    // ignore
   }
 
   domainName = domainName || env.PURELYMAIL_DOMAIN || 'company.id';
   fromAddress = fromAddress || env.PURELYMAIL_FROM_ADDRESS || `hr@${domainName}`;
   senderName = senderName || 'Portal HR';
   const cleanSenderName = senderName.replace(/["\r\n]/g, '').trim();
-  const smtpHost = env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com';
-  const smtpPort = parseInt(env.PURELYMAIL_SMTP_PORT || '465', 10);
-  const smtpUser = env.PURELYMAIL_SMTP_USER || fromAddress;
+  const smtpHost = smtpHostOpt || env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com';
+  const smtpPort = smtpPortOpt || parseInt(env.PURELYMAIL_SMTP_PORT || '465', 10);
+  const smtpUser = smtpUserOpt || env.PURELYMAIL_SMTP_USER || fromAddress;
   const smtpPassFinal = smtpPass || env.PURELYMAIL_SMTP_PASS;
 
   const outboxId = `out-${Date.now()}-${Math.random().toString(36).substring(2, 7)}`;
@@ -359,9 +373,9 @@ export async function sendEmail(env: Bindings, options: EmailOptions): Promise<E
 
       // Support direct SMTPS (Port 465) or STARTTLS (Port 587)
       if (smtpPort === 465 || smtpPort !== 587) {
-        // Direct SSL/TLS over port 465 (Recommended for Purelymail in Cloudflare Workers)
+        // Direct SSL/TLS over port 465
         const socket = connect(
-          { hostname: smtpHost, port: 465 },
+          { hostname: smtpHost, port: smtpPort || 465 },
           { secureTransport: 'on', allowHalfOpen: false }
         );
         const reader = socket.readable.getReader();

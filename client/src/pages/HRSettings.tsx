@@ -24,6 +24,7 @@ import { apiFetch } from '../api';
 import { useLanguage } from '../context/LanguageContext';
 import { useCompany } from '../context/CompanyContext';
 import { LocationPickerMap } from '../components/LocationPickerMap';
+import { FormTemplatesManager } from '../components/FormTemplatesManager';
 import {
   DEFAULT_MODULES_CONFIG,
   MODULE_DEFINITIONS,
@@ -36,9 +37,10 @@ import {
 export const HRSettings: React.FC = () => {
   const { t, tr, formatCurrency, formatDate } = useLanguage();
   const { refreshCompany, updateCompanyLocal } = useCompany();
-  const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'modules' | 'audit' | 'departments' | 'notifications'>('payroll');
+  const [activeTab, setActiveTab] = useState<'payroll' | 'attendance' | 'branches' | 'company' | 'modules' | 'templates' | 'audit' | 'departments' | 'notifications'>('payroll');
   const [modulesConfig, setModulesConfig] = useState<ModulesConfig>({ ...DEFAULT_MODULES_CONFIG });
   const [docusealConfigured, setDocusealConfigured] = useState(false);
+  const [purelymailConfigured, setPurelymailConfigured] = useState(false);
   const [savingModules, setSavingModules] = useState(false);
   const [payrollSettings, setPayrollSettings] = useState<any>(null);
   const [attendancePolicy, setAttendancePolicy] = useState<{ require_selfie: boolean; require_location: boolean }>({
@@ -55,8 +57,11 @@ export const HRSettings: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [savingCompany, setSavingCompany] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
-  const [testingEmail, setTestingEmail] = useState(false);
-  const [testResult, setTestResult] = useState<{ api: any; smtp: any } | null>(null);
+  const [testingSmtp, setTestingSmtp] = useState(false);
+  const [testingPurelymailApi, setTestingPurelymailApi] = useState(false);
+  const [smtpTestResult, setSmtpTestResult] = useState<{ status: string; message: string } | null>(null);
+  const [apiTestResult, setApiTestResult] = useState<{ status: string; message: string } | null>(null);
+  const [smtpTestRecipient, setSmtpTestRecipient] = useState('');
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Edit branch modal state
@@ -96,6 +101,7 @@ export const HRSettings: React.FC = () => {
       setDepartments(dRes.departments || []);
       setModulesConfig(parseModulesConfig(mRes.modules));
       setDocusealConfigured(Boolean(mRes.integrations?.docusealConfigured));
+      setPurelymailConfigured(Boolean(mRes.integrations?.purelymailConfigured));
     } catch (err: any) {
       console.warn('Settings load err:', err.message);
     } finally {
@@ -267,27 +273,51 @@ export const HRSettings: React.FC = () => {
     }
   };
 
-  const handleTestPurelymail = async () => {
-    setTestingEmail(true);
-    setTestResult(null);
+  const handleTestSmtp = async () => {
+    setTestingSmtp(true);
+    setSmtpTestResult(null);
     try {
-      const res = await apiFetch<any>('/settings/test-purelymail', {
+      const res = await apiFetch<any>('/settings/test-smtp', {
+        method: 'POST',
+        body: JSON.stringify({
+          smtp_host: company.smtp_host,
+          smtp_port: company.smtp_port,
+          smtp_user: company.smtp_user,
+          purelymail_from_address: company.purelymail_from_address,
+          purelymail_smtp_pass: company.purelymail_smtp_pass,
+          test_recipient: smtpTestRecipient.trim() || undefined,
+        }),
+      });
+      setSmtpTestResult(res);
+    } catch (err: any) {
+      setSmtpTestResult({
+        status: 'error',
+        message: err.message || tr('Gagal menghubungi server', 'Failed to contact the server'),
+      });
+    } finally {
+      setTestingSmtp(false);
+    }
+  };
+
+  const handleTestPurelymailApi = async () => {
+    setTestingPurelymailApi(true);
+    setApiTestResult(null);
+    try {
+      const res = await apiFetch<any>('/settings/test-purelymail-api', {
         method: 'POST',
         body: JSON.stringify({
           purelymail_api_token: company.purelymail_api_token,
           purelymail_domain: company.purelymail_domain,
-          purelymail_from_address: company.purelymail_from_address,
-          purelymail_smtp_pass: company.purelymail_smtp_pass,
         }),
       });
-      setTestResult(res);
+      setApiTestResult(res);
     } catch (err: any) {
-      setTestResult({
-        api: { status: 'error', message: err.message || tr('Gagal menghubungi server', 'Failed to contact the server') },
-        smtp: { status: 'error', message: err.message || tr('Gagal menghubungi server', 'Failed to contact the server') },
+      setApiTestResult({
+        status: 'error',
+        message: err.message || tr('Gagal menghubungi server', 'Failed to contact the server'),
       });
     } finally {
-      setTestingEmail(false);
+      setTestingPurelymailApi(false);
     }
   };
 
@@ -433,9 +463,15 @@ export const HRSettings: React.FC = () => {
       items: [
         {
           id: 'modules',
-          label: tr('Modul & Template', 'Modules & Templates'),
-          hint: tr('Fitur aktif & label ekspor', 'Feature toggles & exports'),
+          label: tr('Modul & Fitur', 'Modules & Features'),
+          hint: tr('Fitur aktif & label dasar', 'Feature toggles & defaults'),
           icon: Layers,
+        },
+        {
+          id: 'templates',
+          label: tr('Template Formulir', 'Form Templates'),
+          hint: tr('Format Claim Excel & Form Cuti', 'Claim Excel & Leave PDF'),
+          icon: FileText,
         },
         {
           id: 'notifications',
@@ -1591,34 +1627,216 @@ export const HRSettings: React.FC = () => {
             </div>
           </div>
 
-          {/* Konfigurasi Custom Domain & Purelymail API */}
+          {/* 1. Custom Web App Domain */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-4">
+            <div className="flex items-center gap-2 text-slate-900 font-bold text-sm border-b border-slate-100 pb-3">
+              <Building size={18} className="text-blue-600" />
+              <span>{tr('Domain Aplikasi Web (App Domain)', 'Web App Custom Domain (App Domain)')}</span>
+            </div>
+            <div className="text-xs">
+              <label className="text-slate-700 block text-xs font-semibold mb-1">
+                {tr('Custom Domain Aplikasi Web', 'Web App Custom Domain')}
+              </label>
+              <input
+                type="text"
+                value={company.custom_domain || ''}
+                onChange={(e) => setCompany({ ...company, custom_domain: e.target.value })}
+                placeholder={tr('Contoh: hr.company.com', 'Example: hr.company.com')}
+                className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
+              />
+              <span className="text-[10px] text-slate-400 mt-1 block">
+                {tr(
+                  'Digunakan untuk tautan aktivasi karyawan, reset kata sandi, QR Connect aplikasi mobile, dan slip gaji.',
+                  'Used for employee activation links, password resets, mobile QR Connect, and payslips.'
+                )}
+              </span>
+            </div>
+          </div>
+
+          {/* 2. Email Delivery (SMTP) — Independent of Purelymail API */}
           <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-4">
             <div className="flex items-center gap-2 text-slate-900 font-bold text-sm border-b border-slate-100 pb-3">
               <Mail size={18} className="text-blue-600" />
-              <span>{tr('Konfigurasi Domain & API Purelymail (Email Onboarding)', 'Domain & Purelymail API Configuration (Email Onboarding)')}</span>
+              <span>{tr('Pengiriman Email (SMTP)', 'Email Delivery (SMTP)')}</span>
             </div>
-            
             <p className="text-xs text-slate-500 leading-relaxed">
-              {tr('Konfigurasikan domain aplikasi web Anda dan kredensial Purelymail langsung di sini. Data akan disimpan aman di database dan langsung digunakan untuk provisioning mailbox & pengiriman email.', 'Configure your web application domain and Purelymail credentials right here. Data is stored securely in the database and used immediately for mailbox provisioning & email delivery.')}
+              {tr(
+                'Konfigurasikan server SMTP (Purelymail SMTP, Gmail, Zoho, Microsoft 365, atau SMTP lain) untuk mengirim undangan aktivasi, reset kata sandi, dan notifikasi HR.',
+                'Configure your SMTP server (Purelymail SMTP, Gmail, Zoho, Microsoft 365, or any custom SMTP) for activation invites, password resets, and HR notifications.'
+              )}
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
                 <label className="text-slate-700 block text-xs font-semibold mb-1">
-                  {tr('Custom Domain Aplikasi Web (App Domain)', 'Web App Custom Domain (App Domain)')}
+                  {tr('Alamat Email Pengirim (From Address)', 'Sender Email Address (From Address)')}
+                </label>
+                <input
+                  type="email"
+                  value={company.purelymail_from_address || ''}
+                  onChange={(e) => setCompany({ ...company, purelymail_from_address: e.target.value })}
+                  placeholder={tr('Contoh: hr@company.com', 'Example: hr@company.com')}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-700 block text-xs font-semibold mb-1">
+                  {tr('Password SMTP / App Password', 'SMTP Password / App Password')}
+                </label>
+                <input
+                  type="password"
+                  value={company.purelymail_smtp_pass || ''}
+                  onChange={(e) => setCompany({ ...company, purelymail_smtp_pass: e.target.value })}
+                  placeholder={tr('Password mailbox pengirim atau App Password', 'Sender mailbox password or App Password')}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
+                />
+              </div>
+
+              <div>
+                <label className="text-slate-700 block text-xs font-semibold mb-1">
+                  {tr('SMTP Host', 'SMTP Host')}
                 </label>
                 <input
                   type="text"
-                  value={company.custom_domain || ''}
-                  onChange={(e) => setCompany({ ...company, custom_domain: e.target.value })}
-                  placeholder={tr('Contoh: hr.company.com', 'Example: hr.company.com')}
+                  value={company.smtp_host || ''}
+                  onChange={(e) => setCompany({ ...company, smtp_host: e.target.value })}
+                  placeholder="smtp.purelymail.com"
                   className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
                 />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  {tr('Digunakan untuk tautan aktivasi karyawan, reset kata sandi, dan slip gaji.', 'Used for employee activation links, password resets, and payslips.')}
-                </span>
               </div>
 
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="text-slate-700 block text-xs font-semibold mb-1">
+                    {tr('SMTP Port', 'SMTP Port')}
+                  </label>
+                  <select
+                    value={String(company.smtp_port || 465)}
+                    onChange={(e) => setCompany({ ...company, smtp_port: Number(e.target.value) })}
+                    className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900 bg-white"
+                  >
+                    <option value="465">465 (SSL/TLS)</option>
+                    <option value="587">587 (STARTTLS)</option>
+                  </select>
+                </div>
+                <div>
+                  <label className="text-slate-700 block text-xs font-semibold mb-1">
+                    {tr('SMTP Username (Opsional)', 'SMTP Username (Optional)')}
+                  </label>
+                  <input
+                    type="text"
+                    value={company.smtp_user || ''}
+                    onChange={(e) => setCompany({ ...company, smtp_user: e.target.value })}
+                    placeholder={tr('Default: From Address', 'Default: From Address')}
+                    className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
+                  />
+                </div>
+              </div>
+            </div>
+
+            <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
+              <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
+                <div className="flex-1">
+                  <h4 className="font-bold text-xs text-slate-800">{tr('Uji Pengiriman SMTP', 'Test SMTP Delivery')}</h4>
+                  <p className="text-[11px] text-slate-500">
+                    {tr('Kirim email uji coba melalui server SMTP Anda.', 'Send a test email through your configured SMTP server.')}
+                  </p>
+                </div>
+                <div className="flex flex-wrap items-center gap-2">
+                  <input
+                    type="email"
+                    value={smtpTestRecipient}
+                    onChange={(e) => setSmtpTestRecipient(e.target.value)}
+                    placeholder={tr('Email penerima (opsional)', 'Test recipient (optional)')}
+                    className="p-2 border border-slate-300 rounded-xl text-xs bg-white font-mono w-48"
+                  />
+                  <button
+                    type="button"
+                    onClick={handleTestSmtp}
+                    disabled={testingSmtp}
+                    className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+                  >
+                    <Mail size={14} />
+                    <span>{testingSmtp ? tr('Mengirim...', 'Sending...') : tr('Uji Koneksi SMTP', 'Test SMTP Connection')}</span>
+                  </button>
+                </div>
+              </div>
+
+              {smtpTestResult && (
+                <div className={`p-3 rounded-xl border text-xs ${
+                  smtpTestResult.status === 'ok'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : smtpTestResult.status === 'warning'
+                    ? 'bg-amber-50 border-amber-200 text-amber-900'
+                    : 'bg-rose-50 border-rose-200 text-rose-900'
+                }`}>
+                  <div className="font-bold mb-0.5">
+                    {smtpTestResult.status === 'ok'
+                      ? tr('✓ SMTP Pengiriman Berhasil', '✓ SMTP Delivery Successful')
+                      : smtpTestResult.status === 'warning'
+                      ? tr('⚠ SMTP Info', '⚠ SMTP Info')
+                      : tr('✕ SMTP Gagal', '✕ SMTP Failed')}
+                  </div>
+                  <div className="text-[11px]">{smtpTestResult.message}</div>
+                </div>
+              )}
+            </div>
+          </div>
+
+          {/* 3. Purelymail Mailbox Provisioning API (Optional Module) */}
+          <div className="bg-white rounded-3xl p-6 border border-slate-200/80 shadow-2xs space-y-4">
+            <div className="flex flex-wrap items-center justify-between gap-2 border-b border-slate-100 pb-3">
+              <div className="flex items-center gap-2 text-slate-900 font-bold text-sm">
+                <Mail size={18} className="text-indigo-600" />
+                <span>{tr('Purelymail Mailbox API (Modul Opsional)', 'Purelymail Mailbox API (Optional Module)')}</span>
+              </div>
+              <label className="inline-flex items-center gap-2 rounded-full border border-slate-200 bg-slate-50 px-3 py-1 text-xs font-bold text-slate-700 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={modulesConfig.purelymail}
+                  onChange={async (e) => {
+                    const nextVal = e.target.checked;
+                    const nextModules = { ...modulesConfig, purelymail: nextVal };
+                    setModulesConfig(nextModules);
+                    try {
+                      const res = await apiFetch('/settings/modules', {
+                        method: 'PUT',
+                        body: JSON.stringify({ modules: nextModules }),
+                      });
+                      setModulesConfig(parseModulesConfig(res.modules));
+                      updateCompanyLocal({ modules: res.modules, modules_json: JSON.stringify(res.modules) });
+                      await refreshCompany();
+                      setMsg({
+                        type: 'success',
+                        text: nextVal
+                          ? tr('Modul Purelymail Mailbox API diaktifkan.', 'Purelymail Mailbox API module enabled.')
+                          : tr('Modul Purelymail Mailbox API dinonaktifkan.', 'Purelymail Mailbox API module disabled.'),
+                      });
+                    } catch (err: any) {
+                      setMsg({ type: 'error', text: err.message });
+                    }
+                  }}
+                  className="h-3.5 w-3.5 rounded border-slate-300 text-blue-600"
+                />
+                <span>
+                  {modulesConfig.purelymail
+                    ? tr('Purelymail API Aktif', 'Purelymail API Enabled')
+                    : tr('Purelymail API Nonaktif (Opsional)', 'Purelymail API Disabled (Optional)')}
+                </span>
+              </label>
+            </div>
+
+            {!modulesConfig.purelymail && (
+              <div className="rounded-2xl border border-amber-200 bg-amber-50 px-4 py-3 text-xs text-amber-900">
+                {tr(
+                  'Opsional (rekomendasi): aktifkan modul ini hanya jika Anda ingin openHR otomatis membuatkan akun email karyawan baru via Purelymail API v0. Pengiriman SMTP di atas tetap berjalan normal meski modul ini nonaktif.',
+                  'Optional (recommended): enable this module only if you want openHR to auto-create employee mailboxes via Purelymail API v0. SMTP email delivery above continues working normally when disabled.'
+                )}
+              </div>
+            )}
+
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-4 text-xs">
               <div>
                 <label className="text-slate-700 block text-xs font-semibold mb-1">
                   {tr('Domain Email Karyawan di Purelymail', 'Employee Email Domain on Purelymail')}
@@ -1637,22 +1855,6 @@ export const HRSettings: React.FC = () => {
 
               <div>
                 <label className="text-slate-700 block text-xs font-semibold mb-1">
-                  {tr('Alamat Email Pengirim HR (From Address)', 'HR Sender Email Address (From Address)')}
-                </label>
-                <input
-                  type="email"
-                  value={company.purelymail_from_address || ''}
-                  onChange={(e) => setCompany({ ...company, purelymail_from_address: e.target.value })}
-                  placeholder={tr('Contoh: hr@company.com', 'Example: hr@company.com')}
-                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  {tr('Alamat email pengirim undangan aktivasi dan notifikasi sistem.', 'Sender email address for activation invitations and system notifications.')}
-                </span>
-              </div>
-
-              <div>
-                <label className="text-slate-700 block text-xs font-semibold mb-1">
                   Purelymail API Token / API Key
                 </label>
                 <input
@@ -1663,74 +1865,46 @@ export const HRSettings: React.FC = () => {
                   className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
                 />
                 <span className="text-[10px] text-slate-400 mt-1 block">
-                  {tr('Token API resmi Purelymail untuk otomatis membuat mailbox karyawan via API v0.', 'Official Purelymail API token to automatically create employee mailboxes via API v0.')}
-                </span>
-              </div>
-
-              <div className="md:col-span-2">
-                <label className="text-slate-700 block text-xs font-semibold mb-1">
-                  Purelymail SMTP Password / App Password
-                </label>
-                <input
-                  type="password"
-                  value={company.purelymail_smtp_pass || ''}
-                  onChange={(e) => setCompany({ ...company, purelymail_smtp_pass: e.target.value })}
-                  placeholder={tr('Password mailbox pengirim atau App Password Purelymail', 'Sender mailbox password or Purelymail App Password')}
-                  className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-slate-900"
-                />
-                <span className="text-[10px] text-slate-400 mt-1 block">
-                  {tr('Password untuk otentikasi pengiriman email via SMTP (', 'Password for email delivery authentication via SMTP (')}<code>smtp.purelymail.com:587</code>).
+                  {tr('Token API resmi Purelymail untuk membuat mailbox karyawan via API v0.', 'Official Purelymail API token for creating employee mailboxes via API v0.')}
                 </span>
               </div>
             </div>
 
-            {/* Test Connection Button & Status Output */}
             <div className="bg-slate-50 border border-slate-200 rounded-2xl p-4 space-y-3">
               <div className="flex flex-col sm:flex-row sm:items-center justify-between gap-3">
                 <div>
-                  <h4 className="font-bold text-xs text-slate-800">{tr('Uji Koneksi Purelymail (API & SMTP)', 'Test Purelymail Connection (API & SMTP)')}</h4>
+                  <h4 className="font-bold text-xs text-slate-800">{tr('Uji Token API Purelymail', 'Test Purelymail API Token')}</h4>
                   <p className="text-[11px] text-slate-500">
-                    {tr('Periksa validitas API Token ke server Purelymail dan kirim email uji coba real-time.', 'Validate the API Token against the Purelymail server and send a real-time test email.')}
+                    {tr('Validasi API Token ke server Purelymail tanpa mengirim email SMTP.', 'Validate your Purelymail API token against Purelymail without sending an SMTP email.')}
                   </p>
                 </div>
                 <button
                   type="button"
-                  onClick={handleTestPurelymail}
-                  disabled={testingEmail}
-                  className="px-4 py-2 bg-slate-900 hover:bg-slate-800 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
+                  onClick={handleTestPurelymailApi}
+                  disabled={testingPurelymailApi}
+                  className="px-4 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer disabled:opacity-50 shrink-0"
                 >
                   <Mail size={14} />
-                  <span>{testingEmail ? tr('Menguji Koneksi...', 'Testing Connection...') : tr('Uji Koneksi API & SMTP Sekarang', 'Test API & SMTP Connection Now')}</span>
+                  <span>{testingPurelymailApi ? tr('Memeriksa API...', 'Checking API...') : tr('Uji Purelymail API', 'Test Purelymail API')}</span>
                 </button>
               </div>
 
-              {testResult && (
-                <div className="grid grid-cols-1 md:grid-cols-2 gap-3 pt-2 text-xs">
-                  <div className={`p-3 rounded-xl border ${
-                    testResult.api.status === 'ok'
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                      : testResult.api.status === 'warning'
-                      ? 'bg-amber-50 border-amber-200 text-amber-900'
-                      : 'bg-rose-50 border-rose-200 text-rose-900'
-                  }`}>
-                    <div className="font-bold flex items-center gap-1.5 mb-1">
-                      {testResult.api.status === 'ok' ? tr('✓ API Token Valid', '✓ API Token Valid') : testResult.api.status === 'warning' ? tr('⚠ API Token Info', '⚠ API Token Info') : tr('✕ API Token Gagal', '✕ API Token Failed')}
-                    </div>
-                    <div className="text-[11px]">{testResult.api.message}</div>
+              {apiTestResult && (
+                <div className={`p-3 rounded-xl border text-xs ${
+                  apiTestResult.status === 'ok'
+                    ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
+                    : apiTestResult.status === 'warning'
+                    ? 'bg-amber-50 border-amber-200 text-amber-900'
+                    : 'bg-rose-50 border-rose-200 text-rose-900'
+                }`}>
+                  <div className="font-bold mb-0.5">
+                    {apiTestResult.status === 'ok'
+                      ? tr('✓ API Token Valid', '✓ API Token Valid')
+                      : apiTestResult.status === 'warning'
+                      ? tr('⚠ API Token Info', '⚠ API Token Info')
+                      : tr('✕ API Token Gagal', '✕ API Token Failed')}
                   </div>
-
-                  <div className={`p-3 rounded-xl border ${
-                    testResult.smtp.status === 'ok'
-                      ? 'bg-emerald-50 border-emerald-200 text-emerald-900'
-                      : testResult.smtp.status === 'warning'
-                      ? 'bg-amber-50 border-amber-200 text-amber-900'
-                      : 'bg-rose-50 border-rose-200 text-rose-900'
-                  }`}>
-                    <div className="font-bold flex items-center gap-1.5 mb-1">
-                      {testResult.smtp.status === 'ok' ? tr('✓ SMTP Pengiriman Berhasil', '✓ SMTP Delivery Successful') : testResult.smtp.status === 'warning' ? tr('⚠ SMTP Info', '⚠ SMTP Info') : tr('✕ SMTP Gagal', '✕ SMTP Failed')}
-                    </div>
-                    <div className="text-[11px]">{testResult.smtp.message}</div>
-                  </div>
+                  <div className="text-[11px]">{apiTestResult.message}</div>
                 </div>
               )}
             </div>
@@ -1742,7 +1916,7 @@ export const HRSettings: React.FC = () => {
                 className="flex items-center gap-1.5 px-5 py-2.5 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold transition shadow-xs cursor-pointer disabled:opacity-50"
               >
                 <Save size={15} />
-                <span>{savingCompany ? tr('Menyimpan...', 'Saving...') : tr('Simpan Profil & Integrasi Email', 'Save Profile & Email Integration')}</span>
+                <span>{savingCompany ? tr('Menyimpan...', 'Saving...') : tr('Simpan Profil, SMTP & API', 'Save Profile, SMTP & API')}</span>
               </button>
             </div>
           </div>
@@ -1777,19 +1951,33 @@ export const HRSettings: React.FC = () => {
                   <div className="min-w-0">
                     <div className="flex flex-wrap items-center gap-1.5">
                       <span className="font-bold text-slate-900">{tr(mod.nameId, mod.nameEn)}</span>
-                      {mod.requiresExternalCreds && (
-                        <span
-                          className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
-                            docusealConfigured
-                              ? 'bg-emerald-100 text-emerald-700'
-                              : 'bg-amber-100 text-amber-800'
-                          }`}
-                        >
-                          {docusealConfigured
-                            ? tr('DocuSeal Terhubung', 'DocuSeal Connected')
-                            : tr('Perlu Kredensial Eksternal', 'External Creds Required')}
-                        </span>
-                      )}
+                      {mod.requiresExternalCreds && (() => {
+                        const isConfigured =
+                          mod.id === 'signing'
+                            ? docusealConfigured
+                            : mod.id === 'purelymail'
+                            ? purelymailConfigured
+                            : false;
+                        const label =
+                          mod.id === 'signing'
+                            ? isConfigured
+                              ? tr('DocuSeal Terhubung', 'DocuSeal Connected')
+                              : tr('Perlu Kredensial Eksternal', 'External Creds Required')
+                            : isConfigured
+                            ? tr('Purelymail Terhubung', 'Purelymail Connected')
+                            : tr('Opsional / Rekomendasi', 'Optional / Recommended');
+                        return (
+                          <span
+                            className={`rounded-full px-2 py-0.5 text-[9px] font-bold ${
+                              isConfigured
+                                ? 'bg-emerald-100 text-emerald-700'
+                                : 'bg-amber-100 text-amber-800'
+                            }`}
+                          >
+                            {label}
+                          </span>
+                        );
+                      })()}
                     </div>
                     <div className="text-[11px] text-slate-500 mt-0.5">{tr(mod.descId, mod.descEn)}</div>
                   </div>
@@ -1903,68 +2091,26 @@ export const HRSettings: React.FC = () => {
             </div>
           )}
 
-          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs space-y-3">
-            <div className="font-bold text-slate-900">
-              {tr('Label Template Ekspor (PDF & Excel)', 'Export Template Labels (PDF & Excel)')}
+          <div className="rounded-2xl border border-slate-200 bg-slate-50 p-4 text-xs flex flex-wrap items-center justify-between gap-3">
+            <div>
+              <div className="font-bold text-slate-900">
+                {tr('Desainer Template Ekspor (Claim Excel & Leave PDF)', 'Export Template Studio (Claim Excel & Leave PDF)')}
+              </div>
+              <p className="text-[11px] text-slate-500 mt-0.5">
+                {tr(
+                  'Atur kolom Claim Sheet, unggah file .xlsx custom, ubah checklist & catatan Leave Form di tab Template Formulir.',
+                  'Customize Claim Sheet columns, upload a custom .xlsx, or edit Leave Form checklists & notes in the Form Templates tab.'
+                )}
+              </p>
             </div>
-            <div className="grid grid-cols-1 sm:grid-cols-4 gap-3">
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
-                  {tr('Simbol Mata Uang', 'Currency Symbol')}
-                </label>
-                <input
-                  type="text"
-                  value={modulesConfig.template_currency_symbol}
-                  onChange={(e) =>
-                    setModulesConfig((prev) => ({ ...prev, template_currency_symbol: e.target.value }))
-                  }
-                  placeholder="Rp"
-                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
-                  {tr('Label Pembuat', 'Prepared By Label')}
-                </label>
-                <input
-                  type="text"
-                  value={modulesConfig.template_prepared_by}
-                  onChange={(e) =>
-                    setModulesConfig((prev) => ({ ...prev, template_prepared_by: e.target.value }))
-                  }
-                  placeholder="PREPARED BY"
-                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
-                  {tr('Label Pemeriksa', 'Checked By Label')}
-                </label>
-                <input
-                  type="text"
-                  value={modulesConfig.template_checked_by}
-                  onChange={(e) =>
-                    setModulesConfig((prev) => ({ ...prev, template_checked_by: e.target.value }))
-                  }
-                  placeholder="CHECKED BY"
-                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
-                />
-              </div>
-              <div>
-                <label className="block text-[10px] font-semibold text-slate-500 mb-1">
-                  {tr('Label Penyetuju', 'Approved By Label')}
-                </label>
-                <input
-                  type="text"
-                  value={modulesConfig.template_approved_by}
-                  onChange={(e) =>
-                    setModulesConfig((prev) => ({ ...prev, template_approved_by: e.target.value }))
-                  }
-                  placeholder="APPROVED BY"
-                  className="w-full rounded-xl border border-slate-300 bg-white p-2 text-xs font-semibold"
-                />
-              </div>
-            </div>
+            <button
+              type="button"
+              onClick={() => setActiveTab('templates')}
+              className="inline-flex items-center gap-1.5 rounded-xl border border-slate-300 bg-white px-3.5 py-2 text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
+            >
+              <FileText size={14} />
+              <span>{tr('Buka Template Formulir', 'Open Form Templates')}</span>
+            </button>
           </div>
 
           <div className="pt-2 flex justify-end">
@@ -1980,6 +2126,9 @@ export const HRSettings: React.FC = () => {
           </div>
         </div>
       )}
+
+      {/* TAB: FORM TEMPLATES */}
+      {!loading && activeTab === 'templates' && <FormTemplatesManager />}
 
       {/* TAB: NOTIFICATIONS */}
       {!loading && activeTab === 'notifications' && (

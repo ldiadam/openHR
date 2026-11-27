@@ -12,6 +12,7 @@ import { sendEmailInBackground } from '../services/smtp';
 import { getWelcomeInviteEmail } from '../services/email-templates';
 import { getFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
+import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
 
 export const employeeRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -299,17 +300,28 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
   const fixedAllowancesDetail = JSON.stringify(body.fixed_allowances_detail || []);
 
   // Fetch company settings for custom domain & purelymail config
-  const comp = await c.env.DB.prepare(
-    `SELECT name, legal_name, custom_domain, purelymail_domain, purelymail_from_address, purelymail_api_token, purelymail_smtp_pass FROM companies LIMIT 1`
-  ).first<any>();
+  let comp: any = null;
+  try {
+    comp = await c.env.DB.prepare(
+      `SELECT name, legal_name, custom_domain, purelymail_domain, purelymail_from_address, purelymail_api_token, purelymail_smtp_pass, modules_json FROM companies LIMIT 1`
+    ).first<any>();
+  } catch {
+    comp = await c.env.DB.prepare(
+      `SELECT name, legal_name, custom_domain, purelymail_domain, purelymail_from_address, purelymail_api_token, purelymail_smtp_pass FROM companies LIMIT 1`
+    ).first<any>();
+  }
+  const hasPurelymailCreds = hasPurelymailConfig(c.env, comp);
+  const companyModules = parseModulesConfig(comp?.modules_json, { hasPurelymailCreds });
 
-  // 1. Provision Purelymail Mailbox if company email is requested or generated
+  // 1. Provision Purelymail Mailbox if module is enabled and company email is requested
   const purelymailDomain = comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN || 'company.id';
   let companyEmail = body.company_email;
-  let purelymailStatusNotes = 'Not requested';
+  let purelymailStatusNotes = companyModules.purelymail
+    ? 'Not requested'
+    : 'Purelymail integration module is disabled';
   let purelymailSuccess = false;
 
-  if (body.provision_company_email) {
+  if (companyModules.purelymail && body.provision_company_email) {
     // Generate clean username from full name (e.g., budi.santoso)
     const localPart = body.company_email_username ||
       body.full_name

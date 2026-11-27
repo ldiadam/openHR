@@ -12,6 +12,9 @@ interface OpenHrApi {
     @POST("api/auth/login")
     suspend fun login(@Body request: LoginRequest): LoginResponse
 
+    @POST("api/auth/logout")
+    suspend fun logout(@Body request: LogoutRequest): SimpleMessageResponse
+
     @GET("api/public/company")
     suspend fun getPublicCompany(): PublicCompanyResponse
 
@@ -86,4 +89,156 @@ interface OpenHrApi {
         @Path("id") employeeId: String,
         @Body request: UpdateBankDetailsRequest
     ): SimpleMessageResponse
+
+    // Announcements & Policy Acks
+    @GET("api/announcements")
+    suspend fun getAnnouncements(): AnnouncementsResponse
+
+    @POST("api/announcements/{id}/ack")
+    suspend fun acknowledgeAnnouncement(@Path("id") id: String): AnnouncementAckResponse
+
+    // Shifts Roster
+    @GET("api/shifts/roster")
+    suspend fun getShiftRoster(
+        @Query("start_date") startDate: String,
+        @Query("end_date") endDate: String
+    ): ShiftRosterResponse
+
+    // Team Approvals & Review Actions
+    @GET("api/leave/requests")
+    suspend fun getTeamLeaveRequests(@Query("scope") scope: String = "team"): LeaveRequestsResponse
+
+    @POST("api/leave/requests/{id}/review")
+    suspend fun reviewLeaveRequest(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    @GET("api/shifts/overtime/requests")
+    suspend fun getTeamOvertimeRequests(@Query("scope") scope: String = "team"): OvertimeRequestsResponse
+
+    @POST("api/shifts/overtime/requests/{id}/review")
+    suspend fun reviewOvertimeRequest(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    @GET("api/attendance/corrections")
+    suspend fun getAttendanceCorrections(): CorrectionsResponse
+
+    @POST("api/attendance/corrections/{id}/review")
+    suspend fun reviewAttendanceCorrection(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    @GET("api/kasbon/reimbursements")
+    suspend fun getTeamReimbursements(
+        @Query("month") month: String,
+        @Query("scope") scope: String = "team"
+    ): ReimbursementsResponse
+
+    @POST("api/kasbon/reimbursements/{id}/review")
+    suspend fun reviewReimbursement(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    @POST("api/kasbon/requests/{id}/review")
+    suspend fun reviewKasbonRequest(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    // Tasks (TMS)
+    @GET("api/tasks")
+    suspend fun getTasks(@Query("tab") tab: String = "inbox"): TasksResponse
+
+    @POST("api/tasks/{id}/action")
+    suspend fun takeTaskAction(
+        @Path("id") id: String,
+        @Body body: TaskActionBody
+    ): SimpleMessageResponse
+
+    @POST("api/tasks/{id}/close")
+    suspend fun closeTask(
+        @Path("id") id: String,
+        @Body body: TaskCloseBody
+    ): SimpleMessageResponse
+
+    @POST("api/tasks/{id}/approve")
+    suspend fun approveTask(
+        @Path("id") id: String,
+        @Body body: TaskApproveBody
+    ): SimpleMessageResponse
+
+    // Petty Cash & Realization
+    @GET("api/petty-cash/requests")
+    suspend fun getPettyCashRequests(@Query("scope") scope: String = "mine"): PettyCashRequestsResponse
+
+    @POST("api/petty-cash/requests")
+    suspend fun createPettyCashRequest(@Body body: CreatePettyCashRequest): SimpleMessageResponse
+
+    @GET("api/petty-cash/requests/{id}")
+    suspend fun getPettyCashDetail(@Path("id") id: String): PettyCashDetailResponse
+
+    @POST("api/petty-cash/requests/{id}/cancel")
+    suspend fun cancelPettyCash(@Path("id") id: String): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/approve")
+    suspend fun approvePettyCash(
+        @Path("id") id: String,
+        @Body body: ApprovePettyCashBody
+    ): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/reject")
+    suspend fun rejectPettyCash(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/expenses")
+    suspend fun addPettyCashExpense(
+        @Path("id") id: String,
+        @Body body: AddPettyCashExpenseRequest
+    ): SimpleMessageResponse
+
+    @retrofit2.http.DELETE("api/petty-cash/requests/{id}/expenses/{expenseId}")
+    suspend fun deletePettyCashExpense(
+        @Path("id") id: String,
+        @Path("expenseId") expenseId: String
+    ): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/expenses/{expenseId}/receipts")
+    suspend fun uploadPettyCashReceipt(
+        @Path("id") id: String,
+        @Path("expenseId") expenseId: String,
+        @Body body: UploadPettyCashReceiptRequest
+    ): SimpleMessageResponse
+
+    @retrofit2.http.DELETE("api/petty-cash/requests/{id}/expenses/{expenseId}/receipts/{receiptId}")
+    suspend fun deletePettyCashReceipt(
+        @Path("id") id: String,
+        @Path("expenseId") expenseId: String,
+        @Path("receiptId") receiptId: String
+    ): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/submit-report")
+    suspend fun submitPettyCashReport(@Path("id") id: String): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/report-approve")
+    suspend fun approvePettyCashReport(@Path("id") id: String): SimpleMessageResponse
+
+    @POST("api/petty-cash/requests/{id}/report-reject")
+    suspend fun rejectPettyCashReport(
+        @Path("id") id: String,
+        @Body body: ReviewRequestBody
+    ): SimpleMessageResponse
+
+    // My Assets & Signing Requests
+    @GET("api/assets/mine")
+    suspend fun getMyAssets(): MyAssetsResponse
+
+    @GET("api/hr/signing-requests")
+    suspend fun getSigningRequests(): SigningRequestsResponse
 }

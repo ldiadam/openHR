@@ -1,4 +1,9 @@
 import { jsPDF } from 'jspdf';
+import {
+  DEFAULT_LEAVE_FORM_TEMPLATE,
+  LeaveFormTemplateConfig,
+  parseLeaveFormTemplate,
+} from '../../../shared/formTemplates';
 
 /**
  * Printable leave application, laid out like the paper form it replaces.
@@ -59,6 +64,18 @@ export interface LeaveFormOptions {
   leaveTypes?: string[];
   /** Rendered at the bottom of the page. */
   policyNotes?: string[];
+  /** Customizable PDF layout/labels template from /api/templates/leave_form. */
+  template?: Partial<LeaveFormTemplateConfig> | null;
+}
+
+function hexToRgb(hex: string): [number, number, number] {
+  const cleaned = (hex || '#141414').replace(/^#/, '');
+  if (!/^[0-9A-Fa-f]{6}$/.test(cleaned)) return [20, 20, 20];
+  return [
+    parseInt(cleaned.slice(0, 2), 16),
+    parseInt(cleaned.slice(2, 4), 16),
+    parseInt(cleaned.slice(4, 6), 16),
+  ];
 }
 
 /**
@@ -207,7 +224,9 @@ function drawDateBoxes(doc: jsPDF, x: number, y: number, label: string, iso?: st
 
 export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<void> {
   const { application: app, letterhead } = options;
-  const doc = new jsPDF({ unit: 'mm', format: 'a4' });
+  const tpl = options.template ? parseLeaveFormTemplate(options.template as any) : DEFAULT_LEAVE_FORM_TEMPLATE;
+  const [ar, ag, ab] = hexToRgb(tpl.accentColor);
+  const doc = new jsPDF({ unit: 'mm', format: tpl.paperSize });
 
   const pageWidth = doc.internal.pageSize.getWidth();
   const margin = 14;
@@ -215,7 +234,7 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
   let y = margin;
 
   /* ---------- letterhead ---------- */
-  if (letterhead.logoUrl) {
+  if (tpl.showLogo && letterhead.logoUrl) {
     try {
       const image = await new Promise<HTMLImageElement>((resolve, reject) => {
         const img = new Image();
@@ -234,7 +253,7 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(13);
-  doc.setTextColor(15, 15, 15);
+  doc.setTextColor(ar, ag, ab);
   doc.text(letterhead.name || ' ', margin, y + 5);
 
   doc.setFont('helvetica', 'normal');
@@ -250,29 +269,30 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
     doc.text(contact, margin, headerY);
     headerY += 3.6;
   }
-  if (letterhead.regNo) {
+  if (tpl.showRegNo && letterhead.regNo) {
     doc.text(`Reg. No.: ${letterhead.regNo}`, margin, headerY);
     headerY += 3.6;
   }
 
   y = Math.max(headerY, 24) + 2;
 
-  doc.setDrawColor(20, 20, 20);
+  doc.setDrawColor(ar, ag, ab);
   doc.setLineWidth(0.5);
   doc.line(margin, y, pageWidth - margin, y);
   y += 5;
 
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(10.5);
-  doc.setTextColor(15, 15, 15);
-  doc.text('LEAVE APPLICATION FORM', pageWidth / 2, y, { align: 'center' });
+  doc.setTextColor(ar, ag, ab);
+  doc.text(tpl.formTitle, pageWidth / 2, y, { align: 'center' });
   y += 7;
 
   /* ---------- reference / date ---------- */
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7.6);
-  doc.text(`Application Reference No.: ${app.reference_no || '-'}`, margin, y);
-  drawDateBoxes(doc, pageWidth - margin - 55, y, 'Date:', app.submission_date || app.submission_date_display);
+  doc.setTextColor(30, 30, 30);
+  doc.text(`${tpl.referenceLabel} ${app.reference_no || '-'}`, margin, y);
+  drawDateBoxes(doc, pageWidth - margin - 55, y, tpl.dateLabel, app.submission_date || app.submission_date_display);
   y += 7;
 
   /* ---------- applicant ---------- */
@@ -280,43 +300,47 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
   doc.setLineWidth(0.2);
   doc.line(margin, y - 3, pageWidth - margin, y - 3);
 
-  const nameLine = `Applicant Name: ${app.full_name || '-'}${app.nik ? `   (${app.nik})` : ''}`;
+  const nameLine = `${tpl.applicantNameLabel} ${app.full_name || '-'}${app.nik ? `   (${app.nik})` : ''}`;
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(8.2);
   doc.text(nameLine, margin, y + 1);
   y += 7;
 
-  drawDateBoxes(doc, margin, y + 1, 'Apply Leave Date From:', app.start_date);
-  drawDateBoxes(doc, margin + 70, y + 1, 'To:', app.end_date);
+  drawDateBoxes(doc, margin, y + 1, tpl.leaveFromLabel, app.start_date);
+  drawDateBoxes(doc, margin + 70, y + 1, tpl.leaveToLabel, app.end_date);
   y += 8;
 
   /* ---------- department ---------- */
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.6);
   doc.setTextColor(40, 40, 40);
-  doc.text('Department:', margin, y);
-
-  const departments = options.departments?.length
-    ? options.departments
-    : ([app.department_label].filter(Boolean) as string[]);
-
-  // Options sit on their own lines beneath the label, wrapping as needed, so a
-  // long department name can never overlap the heading.
-  y = drawOptionLines(doc, margin, y + 4.2, pageWidth - margin * 2, departments, app.department_label);
-  y += 4;
+  if (tpl.departmentDisplay === 'text') {
+    doc.text(`${tpl.departmentLabel} ${app.department_label || '-'}`, margin, y);
+    y += 6;
+  } else {
+    doc.text(tpl.departmentLabel, margin, y);
+    const departments = options.departments?.length
+      ? options.departments
+      : ([app.department_label].filter(Boolean) as string[]);
+    y = drawOptionLines(doc, margin, y + 4.2, pageWidth - margin * 2, departments, app.department_label);
+    y += 4;
+  }
 
   /* ---------- leave type ---------- */
   doc.setFont('helvetica', 'bold');
   doc.setFontSize(7.6);
   doc.setTextColor(40, 40, 40);
-  doc.text('Type of Leave:', margin, y);
-
-  const leaveTypes = options.leaveTypes?.length
-    ? options.leaveTypes
-    : ([app.leave_type_label].filter(Boolean) as string[]);
-
-  y = drawOptionLines(doc, margin, y + 4.2, pageWidth - margin * 2, leaveTypes, app.leave_type_label);
-  y += 3;
+  if (tpl.leaveTypeDisplay === 'text') {
+    doc.text(`${tpl.leaveTypeLabel} ${app.leave_type_label || '-'}`, margin, y);
+    y += 5;
+  } else {
+    doc.text(tpl.leaveTypeLabel, margin, y);
+    const leaveTypes = options.leaveTypes?.length
+      ? options.leaveTypes
+      : ([app.leave_type_label].filter(Boolean) as string[]);
+    y = drawOptionLines(doc, margin, y + 4.2, pageWidth - margin * 2, leaveTypes, app.leave_type_label);
+    y += 3;
+  }
 
   if (app.leave_type_other_note) {
     doc.setFont('helvetica', 'italic');
@@ -330,7 +354,7 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
     doc.setFont('helvetica', 'normal');
     doc.setFontSize(7.4);
     doc.setTextColor(70, 70, 70);
-    const reason = doc.splitTextToSize(`Reason: ${app.reason}`, contentWidth);
+    const reason = doc.splitTextToSize(`${tpl.reasonLabel} ${app.reason}`, contentWidth);
     doc.text(reason, margin, y + 3);
     y += reason.length * 3.6 + 2;
   }
@@ -340,7 +364,7 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
   doc.setFont('helvetica', 'normal');
   doc.setFontSize(7);
   doc.setTextColor(120, 120, 120);
-  doc.text("Applicant's Signature:", margin, y);
+  doc.text(tpl.applicantSignatureLabel, margin, y);
 
   if (app.applicant_signature) {
     try {
@@ -355,104 +379,114 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
   y += 14;
 
   /* ---------- section 2 header ---------- */
-  y += 2;
-  doc.setDrawColor(20, 20, 20);
-  doc.setLineWidth(0.35);
-  doc.line(margin, y, pageWidth - margin, y);
-  y += 5;
+  if (tpl.showAdminCheck || tpl.showDeptHead || tpl.showManagement) {
+    y += 2;
+    doc.setDrawColor(ar, ag, ab);
+    doc.setLineWidth(0.35);
+    doc.line(margin, y, pageWidth - margin, y);
+    y += 5;
 
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(8);
-  doc.setTextColor(15, 15, 15);
-  doc.text('For Administrative / Approval Use', margin, y);
-  y += 5.5;
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(8);
+    doc.setTextColor(ar, ag, ab);
+    doc.text(tpl.adminSectionTitle, margin, y);
+    y += 5.5;
+  }
 
   /* ---------- stage 2 ---------- */
-  doc.setFontSize(7.4);
-  doc.setFont('helvetica', 'bold');
-  doc.text('Administrative Check', margin, y);
-  y += 4;
-
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.9);
-  doc.setTextColor(90, 90, 90);
-  doc.text('Please tick if there is any clashes with colleagues:', margin, y);
-  y += 4;
-
-  const adminSelected = parseFlagList(app.admin_clash_checks);
-  y = drawCheckboxRow(doc, margin, y, contentWidth, options.adminFlags, adminSelected);
-  y += 4;
-
-  if (app.admin_other_reason) {
-    doc.setFont('helvetica', 'italic');
-    doc.setFontSize(7);
-    doc.setTextColor(90, 90, 90);
-    doc.text(`Other reason: ${app.admin_other_reason}`, margin, y);
+  if (tpl.showAdminCheck) {
+    doc.setFontSize(7.4);
+    doc.setFont('helvetica', 'bold');
+    doc.setTextColor(40, 40, 40);
+    doc.text(tpl.adminCheckHeading, margin, y);
     y += 4;
-  }
 
-  drawDateBoxes(doc, margin, y + 1, 'Checked by Administrator on:', app.admin_checked_at);
-  y += 8;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.9);
+    doc.setTextColor(90, 90, 90);
+    doc.text(tpl.adminCheckPrompt, margin, y);
+    y += 4;
+
+    const adminFlags = options.adminFlags?.length ? options.adminFlags : tpl.adminClashFlags;
+    const adminSelected = parseFlagList(app.admin_clash_checks);
+    y = drawCheckboxRow(doc, margin, y, contentWidth, adminFlags, adminSelected);
+    y += 4;
+
+    if (app.admin_other_reason) {
+      doc.setFont('helvetica', 'italic');
+      doc.setFontSize(7);
+      doc.setTextColor(90, 90, 90);
+      doc.text(`Other reason: ${app.admin_other_reason}`, margin, y);
+      y += 4;
+    }
+
+    drawDateBoxes(doc, margin, y + 1, tpl.adminCheckedDateLabel, app.admin_checked_at);
+    y += 8;
+  }
 
   /* ---------- stage 3 ---------- */
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.4);
-  doc.setTextColor(40, 40, 40);
-  doc.text('Department Head', margin, y);
-  y += 4;
+  if (tpl.showDeptHead) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.4);
+    doc.setTextColor(40, 40, 40);
+    doc.text(tpl.deptHeadHeading, margin, y);
+    y += 4;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(6.9);
-  doc.setTextColor(90, 90, 90);
-  doc.text('Please check if there is Issue with:', margin, y);
-  y += 4;
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(6.9);
+    doc.setTextColor(90, 90, 90);
+    doc.text(tpl.deptHeadPrompt, margin, y);
+    y += 4;
 
-  const headSelected = parseFlagList(app.dept_head_issues);
-  y = drawCheckboxRow(doc, margin, y, contentWidth, options.deptHeadFlags, headSelected);
-  y += 4;
+    const deptFlags = options.deptHeadFlags?.length ? options.deptHeadFlags : tpl.deptHeadFlags;
+    const headSelected = parseFlagList(app.dept_head_issues);
+    y = drawCheckboxRow(doc, margin, y, contentWidth, deptFlags, headSelected);
+    y += 4;
 
-  const decisionRendered = String(app.dept_head_decision || '').toUpperCase();
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.4);
-  // Drawn as vector checkboxes for the same font-glyph reason as above.
-  let decisionX = drawCheckItem(doc, margin, y, 'Approved', decisionRendered === 'APPROVED') + 8;
-  drawCheckItem(doc, decisionX, y, 'Not Approved', decisionRendered === 'NOT_APPROVED');
+    const decisionRendered = String(app.dept_head_decision || '').toUpperCase();
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.4);
+    const decisionX = drawCheckItem(doc, margin, y, tpl.approvedLabel, decisionRendered === 'APPROVED') + 8;
+    drawCheckItem(doc, decisionX, y, tpl.notApprovedLabel, decisionRendered === 'NOT_APPROVED');
 
-  drawDateBoxes(doc, pageWidth - margin - 52, y, 'Date:', app.dept_head_decided_at);
-  y += 9;
+    drawDateBoxes(doc, pageWidth - margin - 52, y, tpl.dateLabel, app.dept_head_decided_at);
+    y += 9;
+  }
 
   /* ---------- stage 4 ---------- */
-  doc.setFont('helvetica', 'bold');
-  doc.setFontSize(7.4);
-  doc.setTextColor(40, 40, 40);
-  doc.text('Management', margin, y);
-  y += 4;
+  if (tpl.showManagement) {
+    doc.setFont('helvetica', 'bold');
+    doc.setFontSize(7.4);
+    doc.setTextColor(40, 40, 40);
+    doc.text(tpl.managementHeading, margin, y);
+    y += 4;
 
-  const mgmt = String(app.management_decision || '').toUpperCase();
-  let mgmtX = drawCheckItem(doc, margin, y, 'Approved', mgmt === 'APPROVED') + 8;
-  drawCheckItem(doc, mgmtX, y, 'Not Approved', mgmt === 'NOT_APPROVED');
-  y += 8;
+    const mgmt = String(app.management_decision || '').toUpperCase();
+    const mgmtX = drawCheckItem(doc, margin, y, tpl.approvedLabel, mgmt === 'APPROVED') + 8;
+    drawCheckItem(doc, mgmtX, y, tpl.notApprovedLabel, mgmt === 'NOT_APPROVED');
+    y += 8;
 
-  doc.setFont('helvetica', 'normal');
-  doc.setFontSize(7);
-  doc.setTextColor(120, 120, 120);
-  doc.text('Management Signature:', margin, y);
+    doc.setFont('helvetica', 'normal');
+    doc.setFontSize(7);
+    doc.setTextColor(120, 120, 120);
+    doc.text(tpl.managementSignatureLabel, margin, y);
 
-  if (app.management_signature) {
-    try {
-      doc.addImage(app.management_signature, 'PNG', margin + 38, y - 9, 40, 15);
-    } catch {
-      // Same tolerance as the applicant signature.
+    if (app.management_signature) {
+      try {
+        doc.addImage(app.management_signature, 'PNG', margin + 38, y - 9, 40, 15);
+      } catch {
+        // Same tolerance as the applicant signature.
+      }
     }
-  }
-  doc.setDrawColor(160, 160, 160);
-  doc.line(margin + 38, y + 7, margin + 78, y + 7);
+    doc.setDrawColor(160, 160, 160);
+    doc.line(margin + 38, y + 7, margin + 78, y + 7);
 
-  drawDateBoxes(doc, pageWidth - margin - 52, y, 'Date:', app.management_signed_at);
-  y += 14;
+    drawDateBoxes(doc, pageWidth - margin - 52, y, tpl.dateLabel, app.management_signed_at);
+    y += 14;
+  }
 
   /* ---------- policy notes ---------- */
-  const notes = options.policyNotes || [];
+  const notes = options.policyNotes !== undefined ? options.policyNotes : tpl.policyNotes;
   if (notes.length > 0) {
     doc.setDrawColor(200, 200, 200);
     doc.setLineWidth(0.2);
@@ -462,7 +496,7 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
     doc.setFont('helvetica', 'bold');
     doc.setFontSize(6.8);
     doc.setTextColor(60, 60, 60);
-    doc.text('Notes:', margin, y);
+    doc.text(tpl.notesHeading, margin, y);
     y += 3.4;
 
     doc.setFont('helvetica', 'normal');
@@ -479,4 +513,42 @@ export async function generateLeaveFormPdf(options: LeaveFormOptions): Promise<v
 
   const reference = String(app.reference_no || 'LEAVE').replace(/[^a-zA-Z0-9_-]/g, '');
   doc.save(`Leave_Application_${reference}.pdf`);
+}
+
+export async function previewSampleLeaveFormPdf(
+  template: LeaveFormTemplateConfig,
+  letterhead: LeaveFormLetterhead,
+  departments: string[] = ['Operations', 'Engineering', 'Finance', 'Human Resources'],
+  leaveTypes: string[] = ['Annual Leave', 'Medical Leave', 'Unpaid Leave']
+): Promise<void> {
+  const today = new Date().toISOString().slice(0, 10);
+  await generateLeaveFormPdf({
+    application: {
+      reference_no: 'LV-2026-SAMPLE',
+      submission_date: today,
+      full_name: 'Budi Santoso',
+      nik: 'EMP001',
+      department_label: departments[0] || 'Operations',
+      leave_type_label: leaveTypes[0] || 'Annual Leave',
+      start_date: today,
+      end_date: today,
+      total_days: 1,
+      reason: 'Sample annual leave request for template layout preview.',
+      admin_clash_checks: JSON.stringify(template.adminClashFlags.slice(0, 1)),
+      admin_checked_at: today,
+      dept_head_issues: JSON.stringify([]),
+      dept_head_decision: 'APPROVED',
+      dept_head_decided_at: today,
+      management_decision: 'APPROVED',
+      management_signed_at: today,
+      status: 'approved',
+    },
+    letterhead,
+    adminFlags: template.adminClashFlags,
+    deptHeadFlags: template.deptHeadFlags,
+    departments,
+    leaveTypes,
+    template,
+    policyNotes: template.policyNotes,
+  });
 }

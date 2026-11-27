@@ -74,7 +74,9 @@ dependencies {
 
     implementation(libs.coil.compose)
     implementation(libs.zxing.core)
-    implementation(libs.osmdroid.android)
+    implementation(libs.maplibre.sdk)
+    implementation(libs.androidx.biometric)
+    implementation(libs.androidx.fragment.ktx)
 
     debugImplementation(libs.androidx.ui.tooling)
 }

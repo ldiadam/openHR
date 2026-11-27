@@ -64,7 +64,7 @@ export const PublicCareersPage: React.FC = () => {
           setClosedMessage(tr('Portal karir saat ini sedang ditutup.', 'Careers portal is currently closed.'));
           return;
         }
-        const data = await res.json();
+        const data = (await res.json()) as any;
         setCompany(data.company || null);
         setJobs(data.jobs || []);
       } catch {
@@ -83,7 +83,7 @@ export const PublicCareersPage: React.FC = () => {
       setTrackLoading(true);
       fetch(`${API_BASE}/public/careers/track/verify?token=${encodeURIComponent(trackToken)}`)
         .then(async (r) => {
-          const d = await r.json().catch(() => ({}));
+          const d = (await r.json().catch(() => ({}))) as any;
           if (!r.ok) throw new Error(d.error || tr('Tautan tidak valid.', 'Invalid link.'));
           setTrackApps(d.applications || []);
           setTrackEmail(d.email || '');
@@ -164,7 +164,7 @@ export const PublicCareersPage: React.FC = () => {
     try {
       const res = await fetch(`${API_BASE}/public/careers/captcha`);
       if (res.ok) {
-        const data = await res.json();
+        const data = (await res.json()) as any;
         setCaptchaQuestion(data.question || '');
         setCaptchaToken(data.token || '');
         setCaptchaAnswer('');
@@ -208,7 +208,7 @@ export const PublicCareersPage: React.FC = () => {
         method: 'POST',
         body: fd,
       });
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) {
         loadCaptcha();
         throw new Error(data.error || tr('Gagal mengirim lamaran.', 'Failed to submit application.'));
@@ -247,7 +247,7 @@ export const PublicCareersPage: React.FC = () => {
           captcha_answer: captchaAnswer.trim(),
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) {
         loadCaptcha();
         throw new Error(data.error || tr('Gagal melacak lamaran.', 'Failed to track application.'));
@@ -275,7 +275,7 @@ export const PublicCareersPage: React.FC = () => {
           captcha_answer: captchaAnswer.trim(),
         }),
       });
-      const data = await res.json().catch(() => ({}));
+      const data = (await res.json().catch(() => ({}))) as any;
       if (!res.ok) {
         loadCaptcha();
         throw new Error(data.error || tr('Gagal mengirim tautan.', 'Failed to send link.'));

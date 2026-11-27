@@ -248,36 +248,8 @@ export const LeaveApprovals: React.FC<{ embedded?: boolean }> = ({ embedded = fa
         deptHeadFlags: res.deptHeadFlags || flagsConfig.head,
         departments: res.departments || [],
         leaveTypes: res.leaveTypes || [],
-        policyNotes: [
-          tr(
-            'Formulir ini harus ditandatangani oleh pemohon sebelum diproses.',
-            'This form must be signed by the applicant before it is processed.'
-          ),
-          tr(
-            'Salinan formulir tidak boleh digandakan tanpa izin Administrator.',
-            'Copies of this form may not be duplicated without the Administrator’s permission.'
-          ),
-          tr(
-            'Pemeriksaan administratif harus diselesaikan sebelum Department Head meninjau.',
-            'The administrative check must be completed before the Department Head reviews.'
-          ),
-          tr(
-            'Department Head tidak dapat menyetujui sebelum pemeriksaan administratif selesai.',
-            'The Department Head cannot approve before the administrative check is complete.'
-          ),
-          tr(
-            'Pemberitahuan hasil akhir kepada pemohon dilakukan dalam 1 hari kerja.',
-            'The applicant must be notified of the final outcome within 1 working day.'
-          ),
-          tr(
-            'Management dapat membatalkan atau mengesampingkan keputusan departemen.',
-            'Management may cancel or override any departmental decision.'
-          ),
-          tr(
-            'Cuti belum resmi disetujui sampai persetujuan Management selesai.',
-            'Leave is not officially confirmed until Management approval is complete.'
-          ),
-        ],
+        template: res.formTemplate,
+        policyNotes: res.formTemplate?.policyNotes,
       });
     } catch (err: any) {
       setMsg({ type: 'error', text: err.message });

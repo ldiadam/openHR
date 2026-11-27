@@ -4,15 +4,18 @@ import android.content.Context
 import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
+import androidx.activity.compose.BackHandler
+import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.pager.HorizontalPager
 import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
+import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.draw.clipToBounds
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
@@ -25,18 +28,22 @@ import id.openhr.ess.data.repository.EssRepository
 import id.openhr.ess.ui.components.OfflineQueueBanner
 import id.openhr.ess.ui.components.tr
 import id.openhr.ess.ui.screens.*
-import id.openhr.ess.ui.theme.Blue600
-import id.openhr.ess.ui.theme.Slate50
-import id.openhr.ess.ui.theme.Slate500
+import id.openhr.ess.ui.theme.LocalEssPalette
 import id.openhr.ess.util.Formatters
 import kotlinx.coroutines.launch
 
-private enum class EssTab(val route: String, val icon: ImageVector, val idLabel: String, val enLabel: String) {
-    HOME("home", Icons.Default.Home, "Beranda", "Home"),
-    ATTENDANCE("attendance", Icons.Default.Schedule, "Presensi", "Attendance"),
-    REQUESTS("requests", Icons.Default.AssignmentTurnedIn, "Pengajuan", "Requests"),
-    PAYSLIPS("payslips", Icons.Default.Receipt, "Slip Gaji", "Payslips"),
-    PROFILE("profile", Icons.Default.Person, "Profil", "Profile")
+private enum class EssTab(
+    val route: String,
+    val selectedIcon: ImageVector,
+    val unselectedIcon: ImageVector,
+    val idLabel: String,
+    val enLabel: String
+) {
+    HOME("home", Icons.Filled.Home, Icons.Outlined.Home, "Beranda", "Home"),
+    ATTENDANCE("attendance", Icons.Filled.Schedule, Icons.Outlined.Schedule, "Presensi", "Attendance"),
+    REQUESTS("requests", Icons.Filled.AssignmentTurnedIn, Icons.Outlined.AssignmentTurnedIn, "Pengajuan", "Requests"),
+    PAYSLIPS("payslips", Icons.Filled.Receipt, Icons.Outlined.Receipt, "Slip Gaji", "Payslips"),
+    PROFILE("profile", Icons.Filled.Person, Icons.Outlined.Person, "Profil", "Profile")
 }
 
 @Composable
@@ -47,6 +54,7 @@ fun MainShell(
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val palette = LocalEssPalette.current
     val lang by sessionStore.langFlow.collectAsState()
     val modules by sessionStore.modulesFlow.collectAsState()
     val offlineQueue by sessionStore.offlineQueueFlow.collectAsState()
@@ -64,6 +72,11 @@ fun MainShell(
 
     val pagerState = rememberPagerState(initialPage = 0, pageCount = { visibleTabs.size })
     val currentTabIndex = pagerState.currentPage.coerceIn(0, (visibleTabs.size - 1).coerceAtLeast(0))
+
+    BackHandler(enabled = currentTabIndex > 0) {
+        scope.launch { pagerState.scrollToPage(0) }
+    }
+
     var isOnline by remember { mutableStateOf(Formatters.isNetworkConnected(context)) }
     var syncing by remember { mutableStateOf(false) }
     var geofenceSyncQueue by remember { mutableStateOf<List<OfflineClockRecord>>(emptyList()) }
@@ -77,8 +90,12 @@ fun MainShell(
                 if (sessionStore.offlineQueueFlow.value.isNotEmpty() && !syncing) {
                     scope.launch {
                         syncing = true
-                        repository.syncOfflineQueue()
+                        val result = repository.syncOfflineQueue()
                         syncing = false
+                        if (result.geofenceBlockedItems.isNotEmpty()) {
+                            geofenceReasonText = ""
+                            geofenceSyncQueue = result.geofenceBlockedItems
+                        }
                     }
                 }
             }
@@ -95,22 +112,21 @@ fun MainShell(
         onDispose { runCatching { cm.unregisterNetworkCallback(callback) } }
     }
 
-    LaunchedEffect(currentTabIndex) {
-        repository.getPublicCompany().onSuccess { comp ->
-            comp?.modules?.let { sessionStore.saveModules(it) }
-        }
-    }
-
     LaunchedEffect(Unit) {
+        repository.getPublicCompany()
         if (isOnline && offlineQueue.isNotEmpty()) {
             syncing = true
-            repository.syncOfflineQueue()
+            val result = repository.syncOfflineQueue()
             syncing = false
+            if (result.geofenceBlockedItems.isNotEmpty()) {
+                geofenceReasonText = ""
+                geofenceSyncQueue = result.geofenceBlockedItems
+            }
         }
     }
 
     Scaffold(
-        containerColor = Slate50,
+        containerColor = palette.canvas,
         bottomBar = {
             Column {
                 OfflineQueueBanner(
@@ -130,19 +146,27 @@ fun MainShell(
                         }
                     }
                 )
-                NavigationBar(containerColor = Color.White, tonalElevation = 4.dp) {
+                HorizontalDivider(thickness = 1.dp, color = palette.cardBorder)
+                NavigationBar(
+                    containerColor = palette.dockBackground,
+                    tonalElevation = 0.dp
+                ) {
                     visibleTabs.forEachIndexed { index, tab ->
                         val selected = currentTabIndex == index
                         NavigationBarItem(
                             selected = selected,
                             onClick = {
                                 if (!selected) {
-                                    scope.launch {
-                                        pagerState.scrollToPage(index)
-                                    }
+                                    scope.launch { pagerState.scrollToPage(index) }
                                 }
                             },
-                            icon = { Icon(tab.icon, contentDescription = null) },
+                            icon = {
+                                Icon(
+                                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
+                                    contentDescription = null,
+                                    modifier = Modifier.size(22.dp)
+                                )
+                            },
                             label = {
                                 Text(
                                     text = tr(lang, tab.idLabel, tab.enLabel),
@@ -152,11 +176,11 @@ fun MainShell(
                                 )
                             },
                             colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = Blue600,
-                                selectedTextColor = Blue600,
-                                unselectedIconColor = Slate500,
-                                unselectedTextColor = Slate500,
-                                indicatorColor = Blue600.copy(alpha = 0.1f)
+                                selectedIconColor = palette.accent,
+                                selectedTextColor = palette.accent,
+                                unselectedIconColor = palette.textMuted,
+                                unselectedTextColor = palette.textMuted,
+                                indicatorColor = palette.accentSurface
                             )
                         )
                     }
@@ -172,16 +196,47 @@ fun MainShell(
             HorizontalPager(
                 state = pagerState,
                 key = { page -> visibleTabs.getOrElse(page) { EssTab.HOME }.route },
-                beyondViewportPageCount = (visibleTabs.size - 1).coerceAtLeast(0),
+                beyondViewportPageCount = 1,
                 userScrollEnabled = false,
                 modifier = Modifier.fillMaxSize()
             ) { page ->
-                when (visibleTabs.getOrElse(page) { EssTab.HOME }) {
-                    EssTab.HOME -> HomeScreen(repository = repository, sessionStore = sessionStore)
-                    EssTab.ATTENDANCE -> AttendanceScreen(repository = repository, sessionStore = sessionStore, apiClient = apiClient)
-                    EssTab.REQUESTS -> RequestsScreen(repository = repository, sessionStore = sessionStore, apiClient = apiClient)
-                    EssTab.PAYSLIPS -> PayslipsScreen(repository = repository, sessionStore = sessionStore)
-                    EssTab.PROFILE -> ProfileScreen(repository = repository, sessionStore = sessionStore)
+                val tab = visibleTabs.getOrElse(page) { EssTab.HOME }
+                Box(
+                    modifier = Modifier
+                        .fillMaxSize()
+                        .background(palette.canvas)
+                        .clipToBounds()
+                ) {
+                    when (tab) {
+                        EssTab.HOME -> HomeScreen(
+                            repository = repository,
+                            sessionStore = sessionStore,
+                            isVisible = (currentTabIndex == page)
+                        )
+                        EssTab.ATTENDANCE -> AttendanceScreen(
+                            repository = repository,
+                            sessionStore = sessionStore,
+                            apiClient = apiClient,
+                            onNavigateToRequests = {
+                                val reqIndex = visibleTabs.indexOf(EssTab.REQUESTS)
+                                if (reqIndex >= 0) scope.launch { pagerState.scrollToPage(reqIndex) }
+                            }
+                        )
+                        EssTab.REQUESTS -> RequestsScreen(
+                            repository = repository,
+                            sessionStore = sessionStore,
+                            apiClient = apiClient,
+                            isVisible = (currentTabIndex == page)
+                        )
+                        EssTab.PAYSLIPS -> PayslipsScreen(
+                            repository = repository,
+                            sessionStore = sessionStore
+                        )
+                        EssTab.PROFILE -> ProfileScreen(
+                            repository = repository,
+                            sessionStore = sessionStore
+                        )
+                    }
                 }
             }
         }
@@ -214,8 +269,7 @@ fun MainShell(
                     enabled = geofenceReasonText.isNotBlank(),
                     onClick = {
                         val reason = geofenceReasonText.trim()
-                        val remainingPrompts = geofenceSyncQueue.drop(1)
-                        geofenceSyncQueue = remainingPrompts
+                        geofenceSyncQueue = geofenceSyncQueue.drop(1)
                         scope.launch {
                             syncing = true
                             repository.syncOfflineQueue(mapOf(pendingItem.id to reason))

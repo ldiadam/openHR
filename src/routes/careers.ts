@@ -125,7 +125,7 @@ careersRoutes.get('/captcha', async (c) => {
   const answerHash = await hashPassword(`${nonce}:${answer}`);
 
   const token = await signJwt(
-    { userId: `captcha:${nonce}`, email: answerHash, name: 'captcha', role: 'employee' },
+    { userId: `captcha:${nonce}`, email: answerHash, name: 'captcha', role: 'employee', tenantId: 'default' },
     c.env.JWT_SECRET,
     300
   );
@@ -378,7 +378,7 @@ careersRoutes.post('/track/magic-link', async (c) => {
     const compRow = await c.env.DB.prepare(`SELECT name FROM companies LIMIT 1`).first<any>();
     const companyName = String(compRow?.name || 'Recruitment Team').trim();
     const token = await signJwt(
-      { userId: `track:${email}`, email, name: 'track', role: 'employee' },
+      { userId: `track:${email}`, email, name: 'track', role: 'employee', tenantId: 'default' },
       c.env.JWT_SECRET,
       900
     );
@@ -466,7 +466,7 @@ careersRoutes.get('/offer-letter', async (c) => {
   if (!file) return c.json({ error: 'File Offer Letter tidak ditemukan.' }, 404);
 
   const safeName = String(cand.offer_letter_name || 'Offer_Letter.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
-  return new Response(file.data, {
+  return new Response(file.data as any, {
     headers: {
       'Content-Type': file.contentType || 'application/pdf',
       'Content-Disposition': `inline; filename="${safeName}"`,

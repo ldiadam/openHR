@@ -59,7 +59,8 @@ const RELIGION_LABEL_EN: Record<string, string> = {
 export const HREmployees: React.FC = () => {
   const { user, isOwnerAdmin, isManager } = useAuth();
   const { t, tr, formatCurrency, formatDate } = useLanguage();
-  const { company } = useCompany();
+  const { company, isModuleEnabled } = useCompany();
+  const purelymailEnabled = isModuleEnabled('purelymail');
   const [employees, setEmployees] = useState<any[]>([]);
   const [departments, setDepartments] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -195,7 +196,10 @@ export const HREmployees: React.FC = () => {
     try {
       const res = await apiFetch('/employees', {
         method: 'POST',
-        body: JSON.stringify(formData),
+        body: JSON.stringify({
+          ...formData,
+          provision_company_email: purelymailEnabled ? formData.provision_company_email : false,
+        }),
       });
 
       setInviteResult(res);
@@ -493,7 +497,7 @@ export const HREmployees: React.FC = () => {
                 <CheckCircle2 size={15} />
                 <span>{tr('Email aktivasi sedang dikirim ulang ke email karyawan via server SMTP Purelymail.', 'The account activation email is being resent to the employee email via the Purelymail SMTP server.')}</span>
               </div>
-            ) : inviteResult.purelymail ? (
+            ) : inviteResult.purelymail && (inviteResult.purelymail.provisioned || purelymailEnabled) ? (
               <div className="font-semibold">
                 {tr('Status Mailbox: ', 'Mailbox Status: ')}{inviteResult.purelymail.provisioned
                   ? tr(
@@ -1324,7 +1328,8 @@ export const HREmployees: React.FC = () => {
                 </div>
               </div>
 
-              {/* Purelymail Provisioning Box */}
+              {/* Purelymail Provisioning Box (when Purelymail module is enabled) */}
+              {purelymailEnabled && (
               <div className="bg-blue-50 border border-blue-200 p-3.5 rounded-2xl space-y-2">
                 <div className="flex items-center gap-2">
                   <input
@@ -1354,6 +1359,7 @@ export const HREmployees: React.FC = () => {
                   </div>
                 )}
               </div>
+              )}
             </div>
 
             <div className="flex justify-end gap-2 p-4 border-t border-slate-200 bg-slate-50/80 rounded-b-3xl shrink-0">

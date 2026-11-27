@@ -152,7 +152,7 @@ export const RecruitmentPage: React.FC = () => {
       body: fd,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
+      const err = (await res.json().catch(() => ({}))) as any;
       throw new Error(err.error || 'Gagal mengunggah CV.');
     }
   };
@@ -436,7 +436,7 @@ export const RecruitmentPage: React.FC = () => {
         body: fd,
       });
       if (!upRes.ok) {
-        const errData = await upRes.json().catch(() => ({}));
+        const errData = (await upRes.json().catch(() => ({}))) as any;
         throw new Error(errData.error || 'Gagal mengunggah Offer Letter.');
       }
 

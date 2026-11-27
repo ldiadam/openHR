@@ -307,6 +307,7 @@ taskRoutes.post('/', async (c) => {
   if (assignee.email) {
     sendEmailInBackground(c, c.env, {
       to: assignee.email,
+      type: 'general',
       subject: `[${referenceNo}] New Task Assigned: ${title}`,
       text: `Hi ${assignee.full_name}, ${actor.full_name} assigned you task ${referenceNo}: ${title} (Due: ${dueAt}).`,
       html: `<p>Hi <strong>${assignee.full_name}</strong>,</p>
@@ -401,7 +402,11 @@ taskRoutes.post('/:id/attachments', async (c) => {
   const attId = makeId('tatt');
   const safeName = file.name.replace(/[^a-zA-Z0-9._-]/g, '_');
   const key = `tasks/${id}/${attId}-${safeName}`;
-  await putFile(c.env, key, await file.arrayBuffer(), file.type || 'application/octet-stream');
+  await putFile(c.env, {
+    key,
+    data: await file.arrayBuffer(),
+    contentType: file.type || 'application/octet-stream',
+  });
 
   const activityId = (form?.get('activity_id') as string | null) || null;
   await c.env.DB.prepare(
@@ -449,7 +454,7 @@ taskRoutes.get('/:id/attachments/:attachmentId', async (c) => {
 
   c.header('Content-Type', file.contentType || att.mime_type || 'application/octet-stream');
   c.header('Content-Disposition', `inline; filename="${att.file_name}"`);
-  return c.body(file.data);
+  return c.body(file.data as any);
 });
 
 // 7. B1: Take Action / Update Progress
@@ -538,6 +543,7 @@ taskRoutes.post('/:id/handover', async (c) => {
   if (nextAssignee.email) {
     sendEmailInBackground(c, c.env, {
       to: nextAssignee.email,
+      type: 'general',
       subject: `[${task.reference_no}] Task Handed Over: ${task.title}`,
       text: `Hi ${nextAssignee.full_name}, ${actor.full_name} handed over task ${task.reference_no} (${task.title}) to you. Reason: ${reason}`,
       html: `<p>Hi <strong>${nextAssignee.full_name}</strong>,</p>
@@ -645,6 +651,7 @@ taskRoutes.post('/:id/close', async (c) => {
   for (const recipient of notifyEmails) {
     sendEmailInBackground(c, c.env, {
       to: recipient,
+      type: 'general',
       subject: `[${task.reference_no}] Task Closed / Ready for Approval: ${task.title}`,
       text: `Task ${task.reference_no} (${task.title}) was completed by ${actor.full_name}. Remarks: ${remarks}`,
       html: `<p>Task <strong>${task.reference_no}</strong> (${task.title}) has been marked completed by <strong>${actor.full_name}</strong>.</p>

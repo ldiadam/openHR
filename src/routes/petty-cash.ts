@@ -609,7 +609,7 @@ const handleUpdateExpense = async (c: any) => {
     `SELECT * FROM petty_cash_expenses WHERE id = ? AND request_id = ?`
   )
     .bind(expenseId, id)
-    .first<any>();
+    .first();
   if (!existing) return c.json({ error: 'Pengeluaran tidak ditemukan.' }, 404);
 
   const expenseDate = String(body.expense_date ?? existing.expense_date).slice(0, 10);

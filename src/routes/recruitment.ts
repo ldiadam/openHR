@@ -284,7 +284,7 @@ recruitmentRoutes.put('/candidates/:id', async (c) => {
       let offerLetterUrl = '';
       if (cand.offer_letter_key) {
         const letterToken = await signJwt(
-          { userId: `offer:${cand.id}`, email: cand.email, name: 'offer', role: 'employee' },
+          { userId: `offer:${cand.id}`, email: cand.email, name: 'offer', role: 'employee', tenantId: 'default' },
           c.env.JWT_SECRET,
           30 * 86400
         );
@@ -507,7 +507,7 @@ recruitmentRoutes.get('/candidates/:id/resume', async (c) => {
   const safeName = String(cand.resume_name || 'resume.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
   const isPdf = file.contentType === 'application/pdf' || /\.pdf$/i.test(safeName);
 
-  return new Response(file.data, {
+  return new Response(file.data as any, {
     headers: {
       'Content-Type': file.contentType || 'application/octet-stream',
       'Content-Disposition': `${isPdf ? 'inline' : 'attachment'}; filename="${safeName}"`,
@@ -562,7 +562,7 @@ recruitmentRoutes.get('/candidates/:id/offer-letter', async (c) => {
   if (!file) return c.json({ error: 'File Offer Letter tidak ditemukan.' }, 404);
 
   const safeName = String(cand.offer_letter_name || 'Offer_Letter.pdf').replace(/[^a-zA-Z0-9._-]/g, '_');
-  return new Response(file.data, {
+  return new Response(file.data as any, {
     headers: {
       'Content-Type': file.contentType || 'application/pdf',
       'Content-Disposition': `inline; filename="${safeName}"`,

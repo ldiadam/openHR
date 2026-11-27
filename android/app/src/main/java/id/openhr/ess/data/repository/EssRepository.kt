@@ -1,5 +1,6 @@
 package id.openhr.ess.data.repository
 
+import android.os.Build
 import id.openhr.ess.data.local.SessionStore
 import id.openhr.ess.data.model.*
 import id.openhr.ess.data.remote.ApiClient
@@ -16,6 +17,23 @@ class EssRepository(
     private val sessionStore: SessionStore
 ) {
     private val api get() = apiClient.api
+    private val attendanceCache = mutableMapOf<String, MyAttendanceResponse>()
+    var cachedPayslips: List<PayslipSummaryItem>? = null
+        private set
+    var cachedProfile: EmployeeProfile? = null
+        private set
+    var cachedLeaveBalances: List<LeaveBalanceItem>? = null
+        private set
+    var cachedLeaveRequests: List<LeaveRequestItem>? = null
+        private set
+    var cachedOvertimeRequests: List<OvertimeRequestItem>? = null
+        private set
+    var cachedKasbonRequests: List<KasbonItem>? = null
+        private set
+    private val reimbursementCache = mutableMapOf<String, List<ReimbursementItem>>()
+
+    fun getCachedMyAttendance(month: String): MyAttendanceResponse? = attendanceCache[month]
+    fun getCachedReimbursements(month: String): List<ReimbursementItem>? = reimbursementCache[month]
 
     private suspend fun <T> safeCall(block: suspend () -> T): Result<T> {
         return try {
@@ -26,21 +44,40 @@ class EssRepository(
     }
 
     suspend fun login(email: String, password: String): Result<UserSession> = safeCall {
-        val response = api.login(LoginRequest(email.trim(), password))
-        sessionStore.saveSession(response.token, response.user)
+        val deviceLabel = "${Build.MANUFACTURER} ${Build.MODEL}".take(100)
+        val response = api.login(
+            LoginRequest(
+                email = email.trim(),
+                password = password,
+                client = "mobile",
+                deviceLabel = deviceLabel
+            )
+        )
+        sessionStore.saveSession(response.token, response.user, response.refreshToken)
         response.user
     }
 
+    suspend fun logout() {
+        val refreshToken = sessionStore.getRefreshToken()
+        sessionStore.clearSession()
+        if (!refreshToken.isNullOrBlank()) {
+            runCatching { api.logout(LogoutRequest(refreshToken)) }
+        }
+    }
+
     suspend fun getPublicCompany(): Result<PublicCompany?> = safeCall {
-        api.getPublicCompany().company
+        api.getPublicCompany().company?.also { comp ->
+            sessionStore.saveCompanyBranding(comp.name, comp.logo_url)
+            comp.modules?.let { sessionStore.saveModules(it) }
+        }
     }
 
     suspend fun getAttendanceBranch(): Result<BranchInfo?> = safeCall {
-        api.getAttendanceBranch().branch
+        api.getAttendanceBranch().branch?.also { sessionStore.saveCachedBranch(it) }
     }
 
     suspend fun getAttendanceSettings(): Result<AttendanceSettingsResponse> = safeCall {
-        api.getAttendanceSettings()
+        api.getAttendanceSettings().also { sessionStore.saveCachedSettings(it) }
     }
 
     suspend fun getTodayAttendance(date: String): Result<List<TodayAttendanceRecord>> = safeCall {
@@ -102,7 +139,7 @@ class EssRepository(
     }
 
     suspend fun getMyAttendance(month: String): Result<MyAttendanceResponse> = safeCall {
-        api.getMyAttendance(month)
+        api.getMyAttendance(month).also { attendanceCache[month] = it }
     }
 
     suspend fun requestAttendanceCorrection(req: AttendanceCorrectionRequest): Result<String> = safeCall {
@@ -114,11 +151,11 @@ class EssRepository(
     }
 
     suspend fun getLeaveBalances(): Result<List<LeaveBalanceItem>> = safeCall {
-        api.getLeaveBalances().balances
+        api.getLeaveBalances().balances.also { cachedLeaveBalances = it }
     }
 
     suspend fun getLeaveRequests(): Result<List<LeaveRequestItem>> = safeCall {
-        api.getLeaveRequests("mine").requests
+        api.getLeaveRequests("mine").requests.also { cachedLeaveRequests = it }
     }
 
     suspend fun createLeaveRequest(req: CreateLeaveRequest): Result<String> = safeCall {
@@ -126,7 +163,7 @@ class EssRepository(
     }
 
     suspend fun getOvertimeRequests(): Result<List<OvertimeRequestItem>> = safeCall {
-        api.getOvertimeRequests("mine").requests
+        api.getOvertimeRequests("mine").requests.also { cachedOvertimeRequests = it }
     }
 
     suspend fun createOvertimeRequest(req: CreateOvertimeRequest): Result<String> = safeCall {
@@ -134,7 +171,7 @@ class EssRepository(
     }
 
     suspend fun getReimbursements(month: String): Result<List<ReimbursementItem>> = safeCall {
-        api.getReimbursements(month, "mine").reimbursements
+        api.getReimbursements(month, "mine").reimbursements.also { reimbursementCache[month] = it }
     }
 
     suspend fun createReimbursement(req: CreateReimbursementRequest): Result<String> = safeCall {
@@ -142,7 +179,7 @@ class EssRepository(
     }
 
     suspend fun getKasbonRequests(): Result<List<KasbonItem>> = safeCall {
-        api.getKasbonRequests().kasbonList
+        api.getKasbonRequests().kasbonList.also { cachedKasbonRequests = it }
     }
 
     suspend fun createKasbonRequest(req: CreateKasbonRequest): Result<String> = safeCall {
@@ -150,7 +187,7 @@ class EssRepository(
     }
 
     suspend fun getMyPayslips(): Result<List<PayslipSummaryItem>> = safeCall {
-        api.getMyPayslips().payslips
+        api.getMyPayslips().payslips.also { cachedPayslips = it }
     }
 
     suspend fun getPayslipDetail(itemId: String): Result<PayslipDetail> = safeCall {
@@ -158,7 +195,7 @@ class EssRepository(
     }
 
     suspend fun getEmployee(employeeId: String): Result<EmployeeProfile?> = safeCall {
-        api.getEmployee(employeeId).employee
+        api.getEmployee(employeeId).employee?.also { cachedProfile = it }
     }
 
     suspend fun updateContact(employeeId: String, phone: String, address: String): Result<String> = safeCall {
@@ -167,5 +204,146 @@ class EssRepository(
 
     suspend fun updateBankDetails(employeeId: String, req: UpdateBankDetailsRequest): Result<String> = safeCall {
         api.updateBankDetails(employeeId, req).message
+    }
+
+    // Announcements
+    var cachedAnnouncements: List<AnnouncementItem>? = null
+        private set
+
+    suspend fun getAnnouncements(): Result<List<AnnouncementItem>> = safeCall {
+        api.getAnnouncements().announcements.also { cachedAnnouncements = it }
+    }
+
+    suspend fun acknowledgeAnnouncement(id: String): Result<Boolean> = safeCall {
+        api.acknowledgeAnnouncement(id).acknowledged
+    }
+
+    // Shifts Roster
+    suspend fun getShiftRoster(startDate: String, endDate: String): Result<List<RosterItem>> = safeCall {
+        api.getShiftRoster(startDate, endDate).roster
+    }
+
+    // Manager / Admin / Finance Approvals
+    suspend fun getTeamLeaveRequests(): Result<List<LeaveRequestItem>> = safeCall {
+        api.getTeamLeaveRequests("team").requests
+    }
+
+    suspend fun reviewLeaveRequest(id: String, status: String, note: String? = null): Result<String> = safeCall {
+        api.reviewLeaveRequest(id, ReviewRequestBody(status, note)).message
+    }
+
+    suspend fun getTeamOvertimeRequests(): Result<List<OvertimeRequestItem>> = safeCall {
+        api.getTeamOvertimeRequests("team").requests
+    }
+
+    suspend fun reviewOvertimeRequest(id: String, status: String, note: String? = null): Result<String> = safeCall {
+        api.reviewOvertimeRequest(id, ReviewRequestBody(status, note)).message
+    }
+
+    suspend fun getTeamAttendanceCorrections(): Result<List<AttendanceCorrectionItem>> = safeCall {
+        api.getAttendanceCorrections().corrections
+    }
+
+    suspend fun reviewAttendanceCorrection(id: String, status: String, note: String? = null): Result<String> = safeCall {
+        api.reviewAttendanceCorrection(id, ReviewRequestBody(status, note)).message
+    }
+
+    suspend fun getTeamReimbursements(month: String): Result<List<ReimbursementItem>> = safeCall {
+        api.getTeamReimbursements(month, "team").reimbursements
+    }
+
+    suspend fun reviewReimbursement(id: String, status: String, note: String? = null): Result<String> = safeCall {
+        api.reviewReimbursement(id, ReviewRequestBody(status, note)).message
+    }
+
+    suspend fun reviewKasbonRequest(id: String, status: String, note: String? = null): Result<String> = safeCall {
+        api.reviewKasbonRequest(id, ReviewRequestBody(status, note)).message
+    }
+
+    // Tasks (TMS)
+    suspend fun getTasks(tab: String = "inbox"): Result<TasksResponse> = safeCall {
+        api.getTasks(tab)
+    }
+
+    suspend fun takeTaskAction(id: String, status: String, note: String): Result<String> = safeCall {
+        api.takeTaskAction(id, TaskActionBody(status, note)).message
+    }
+
+    suspend fun closeTask(id: String, remarks: String): Result<String> = safeCall {
+        api.closeTask(id, TaskCloseBody(remarks)).message
+    }
+
+    suspend fun approveTask(id: String, decision: String, remarks: String? = null): Result<String> = safeCall {
+        api.approveTask(id, TaskApproveBody(decision, remarks)).message
+    }
+
+    // Petty Cash & Realization
+    suspend fun getMyPettyCash(): Result<List<PettyCashRequestItem>> = safeCall {
+        api.getPettyCashRequests("mine").requests
+    }
+
+    suspend fun getTeamPettyCash(): Result<List<PettyCashRequestItem>> = safeCall {
+        api.getPettyCashRequests("team").requests
+    }
+
+    suspend fun createPettyCash(purpose: String, amount: Double): Result<String> = safeCall {
+        api.createPettyCashRequest(CreatePettyCashRequest(purpose, amount)).message
+    }
+
+    suspend fun getPettyCashDetail(id: String): Result<PettyCashDetailResponse> = safeCall {
+        api.getPettyCashDetail(id)
+    }
+
+    suspend fun cancelPettyCash(id: String): Result<String> = safeCall {
+        api.cancelPettyCash(id).message
+    }
+
+    suspend fun approvePettyCash(id: String, disbursedAmount: Double? = null): Result<String> = safeCall {
+        api.approvePettyCash(id, ApprovePettyCashBody(disbursedAmount)).message
+    }
+
+    suspend fun rejectPettyCash(id: String, note: String): Result<String> = safeCall {
+        api.rejectPettyCash(id, ReviewRequestBody("rejected", note)).message
+    }
+
+    suspend fun addPettyCashExpense(id: String, req: AddPettyCashExpenseRequest): Result<String> = safeCall {
+        api.addPettyCashExpense(id, req).message
+    }
+
+    suspend fun deletePettyCashExpense(id: String, expenseId: String): Result<String> = safeCall {
+        api.deletePettyCashExpense(id, expenseId).message
+    }
+
+    suspend fun uploadPettyCashReceipt(
+        id: String,
+        expenseId: String,
+        req: UploadPettyCashReceiptRequest
+    ): Result<String> = safeCall {
+        api.uploadPettyCashReceipt(id, expenseId, req).message
+    }
+
+    suspend fun deletePettyCashReceipt(id: String, expenseId: String, receiptId: String): Result<String> = safeCall {
+        api.deletePettyCashReceipt(id, expenseId, receiptId).message
+    }
+
+    suspend fun submitPettyCashReport(id: String): Result<String> = safeCall {
+        api.submitPettyCashReport(id).message
+    }
+
+    suspend fun approvePettyCashReport(id: String): Result<String> = safeCall {
+        api.approvePettyCashReport(id).message
+    }
+
+    suspend fun rejectPettyCashReport(id: String, note: String): Result<String> = safeCall {
+        api.rejectPettyCashReport(id, ReviewRequestBody("report_rejected", note)).message
+    }
+
+    // My Assets & Signing Documents
+    suspend fun getMyAssets(): Result<List<AssignedAssetItem>> = safeCall {
+        api.getMyAssets().assets
+    }
+
+    suspend fun getMySigningRequests(): Result<List<SigningRequestItem>> = safeCall {
+        api.getSigningRequests().signingRequests
     }
 }

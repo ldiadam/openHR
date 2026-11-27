@@ -12,7 +12,8 @@ export type ToggleableModuleId =
   | 'performance'
   | 'recruitment'
   | 'signing'
-  | 'reports';
+  | 'reports'
+  | 'purelymail';
 
 export type LeaveWorkflowMode = 'three_stage' | 'simple';
 export type TaskReferencePreset = 'none' | 'project' | 'maritime' | 'custom';
@@ -38,6 +39,7 @@ export interface ModulesConfig {
   recruitment: boolean;
   signing: boolean;
   reports: boolean;
+  purelymail: boolean;
   leave_workflow: LeaveWorkflowMode;
   task_reference_preset: TaskReferencePreset;
   task_reference_fields: string[];
@@ -171,6 +173,15 @@ export const MODULE_DEFINITIONS: ModuleDefinition[] = [
     descEn: 'Centralized Excel exports for attendance, payroll, BPJS, and tax.',
     defaultEnabled: true,
   },
+  {
+    id: 'purelymail',
+    nameId: 'Purelymail Mailbox API (Opsional)',
+    nameEn: 'Purelymail Mailbox API (Optional)',
+    descId: 'Opsional: buat kotak surat email karyawan otomatis via Purelymail API v0. Pengiriman email SMTP dikonfigurasi terpisah.',
+    descEn: 'Optional: auto-provision company mailboxes via Purelymail API v0. SMTP email delivery is configured separately.',
+    defaultEnabled: false,
+    requiresExternalCreds: 'Purelymail API Token',
+  },
 ];
 
 export const DEFAULT_MODULES_CONFIG: ModulesConfig = {
@@ -188,6 +199,7 @@ export const DEFAULT_MODULES_CONFIG: ModulesConfig = {
   recruitment: true,
   signing: false,
   reports: true,
+  purelymail: false,
   leave_workflow: 'three_stage',
   task_reference_preset: 'none',
   task_reference_fields: [],
@@ -208,16 +220,33 @@ function parseTaskReferenceFields(preset: TaskReferencePreset, rawFields: unknow
     .slice(0, 8);
 }
 
+export function hasPurelymailConfig(
+  env?: { PURELYMAIL_API_TOKEN?: string; PURELYMAIL_DOMAIN?: string } | null,
+  comp?: { purelymail_api_token?: string | null; purelymail_domain?: string | null } | null
+): boolean {
+  if (comp?.purelymail_api_token?.trim() || env?.PURELYMAIL_API_TOKEN?.trim()) {
+    return true;
+  }
+  const dbDomain = comp?.purelymail_domain?.trim();
+  if (dbDomain && dbDomain !== 'company.id') return true;
+  const envDomain = env?.PURELYMAIL_DOMAIN?.trim();
+  if (envDomain && envDomain !== 'company.id') return true;
+  return false;
+}
+
 export function parseModulesConfig(
   raw?: string | Record<string, unknown> | null,
-  opts?: { hasDocuSealCreds?: boolean }
+  opts?: { hasDocuSealCreds?: boolean; hasPurelymailCreds?: boolean }
 ): ModulesConfig {
   const defaultSigning = opts?.hasDocuSealCreds === true;
-  if (!raw) return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning };
+  const defaultPurelymail = opts?.hasPurelymailCreds === true;
+  if (!raw) {
+    return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning, purelymail: defaultPurelymail };
+  }
   try {
     const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
     if (!parsed || typeof parsed !== 'object') {
-      return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning };
+      return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning, purelymail: defaultPurelymail };
     }
     const cleanStr = (v: unknown, fallback: string) =>
       typeof v === 'string' && v.trim() ? v.trim().slice(0, 40) : fallback;
@@ -241,6 +270,7 @@ export function parseModulesConfig(
       recruitment: parsed.recruitment !== false,
       signing: typeof parsed.signing === 'boolean' ? parsed.signing : defaultSigning,
       reports: parsed.reports !== false,
+      purelymail: typeof parsed.purelymail === 'boolean' ? parsed.purelymail : defaultPurelymail,
       leave_workflow: parsed.leave_workflow === 'simple' ? 'simple' : 'three_stage',
       task_reference_preset: taskPreset,
       task_reference_fields: parseTaskReferenceFields(taskPreset, parsed.task_reference_fields),
@@ -250,6 +280,6 @@ export function parseModulesConfig(
       template_approved_by: cleanStr(parsed.template_approved_by, 'APPROVED BY'),
     };
   } catch {
-    return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning };
+    return { ...DEFAULT_MODULES_CONFIG, signing: defaultSigning, purelymail: defaultPurelymail };
   }
 }

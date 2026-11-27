@@ -1,5 +1,6 @@
 package id.openhr.ess.ui.screens
 
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
@@ -18,7 +19,10 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.input.ImeAction
 import androidx.compose.ui.text.input.KeyboardType
@@ -26,43 +30,48 @@ import androidx.compose.ui.text.input.PasswordVisualTransformation
 import androidx.compose.ui.text.input.VisualTransformation
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import coil.ImageLoader
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import id.openhr.ess.BuildConfig
 import id.openhr.ess.data.local.SessionStore
+import id.openhr.ess.data.remote.ApiClient
 import id.openhr.ess.data.repository.EssRepository
 import id.openhr.ess.ui.components.FeedbackBanner
 import id.openhr.ess.ui.components.QrScannerDialog
+import id.openhr.ess.ui.components.pressScale
 import id.openhr.ess.ui.components.tr
-import id.openhr.ess.ui.theme.*
+import id.openhr.ess.ui.theme.LocalEssPalette
 import kotlinx.coroutines.launch
 
 @Composable
 fun LoginScreen(
     repository: EssRepository,
-    sessionStore: SessionStore
+    sessionStore: SessionStore,
+    apiClient: ApiClient,
+    onLoggedIn: () -> Unit = {}
 ) {
+    val context = LocalContext.current
     val scope = rememberCoroutineScope()
+    val palette = LocalEssPalette.current
     val lang by sessionStore.langFlow.collectAsState()
     val savedBaseUrl by sessionStore.baseUrlFlow.collectAsState()
+    val companyName by sessionStore.companyNameFlow.collectAsState()
+    val logoUrl by sessionStore.companyLogoUrlFlow.collectAsState()
 
     var email by remember { mutableStateOf("") }
     var password by remember { mutableStateOf("") }
     var showPassword by remember { mutableStateOf(false) }
     var showQrScanner by remember { mutableStateOf(false) }
-    var companyName by remember { mutableStateOf("openHR") }
     var loading by remember { mutableStateOf(false) }
     var feedback by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
 
-    fun testAndLoadCompany() {
-        scope.launch {
-            repository.getPublicCompany()
-                .onSuccess { comp ->
-                    val name = comp?.name?.takeIf { it.isNotBlank() } ?: "openHR"
-                    companyName = name
-                }
-        }
+    val imageLoader = remember(apiClient.okHttpClient) {
+        ImageLoader.Builder(context).okHttpClient(apiClient.okHttpClient).build()
     }
 
     LaunchedEffect(savedBaseUrl) {
-        testAndLoadCompany()
+        repository.getPublicCompany()
     }
 
     fun performLogin(targetEmail: String, targetPassword: String) {
@@ -70,6 +79,7 @@ fun LoginScreen(
             feedback = null
             loading = true
             repository.login(targetEmail, targetPassword)
+                .onSuccess { onLoggedIn() }
                 .onFailure { err ->
                     feedback = (err.message ?: tr(lang, "Login gagal", "Login failed")) to true
                 }
@@ -77,78 +87,121 @@ fun LoginScreen(
         }
     }
 
-    Scaffold(containerColor = Slate100) { innerPadding ->
+    Scaffold(containerColor = palette.canvas) { innerPadding ->
         Column(
             modifier = Modifier
                 .fillMaxSize()
                 .padding(innerPadding)
                 .verticalScroll(rememberScrollState())
-                .padding(horizontal = 20.dp, vertical = 24.dp),
-            verticalArrangement = Arrangement.Center,
-            horizontalAlignment = Alignment.CenterHorizontally
         ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
+            // Modern Hero Brand Header
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .background(Brush.linearGradient(listOf(palette.heroStart, palette.heroEnd)))
+                    .padding(horizontal = 22.dp, vertical = 28.dp)
             ) {
-                Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(42.dp)
-                            .clip(RoundedCornerShape(12.dp))
-                            .background(Slate900),
-                        contentAlignment = Alignment.Center
+                Column(verticalArrangement = Arrangement.spacedBy(18.dp)) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
                     ) {
-                        Text("HR", color = Color.White, fontWeight = FontWeight.Black, fontSize = 15.sp)
+                        if (!logoUrl.isNullOrBlank()) {
+                            Surface(
+                                shape = RoundedCornerShape(12.dp),
+                                color = Color.White
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data("$savedBaseUrl${logoUrl}")
+                                        .crossfade(true)
+                                        .build(),
+                                    imageLoader = imageLoader,
+                                    contentDescription = companyName,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .height(34.dp)
+                                        .widthIn(max = 150.dp)
+                                        .padding(horizontal = 10.dp, vertical = 5.dp)
+                                )
+                            }
+                        } else {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Box(
+                                    modifier = Modifier
+                                        .size(40.dp)
+                                        .clip(RoundedCornerShape(12.dp))
+                                        .background(Color(0xFF2563EB)),
+                                    contentAlignment = Alignment.Center
+                                ) {
+                                    Text("HR", color = Color.White, fontWeight = FontWeight.Black, fontSize = 14.sp)
+                                }
+                                Text(companyName, color = Color.White, fontWeight = FontWeight.Bold, fontSize = 16.sp)
+                            }
+                        }
+
+                        Surface(
+                            onClick = { sessionStore.setLanguage(if (lang == "id") "en" else "id") },
+                            shape = RoundedCornerShape(50),
+                            color = Color.White.copy(alpha = 0.14f)
+                        ) {
+                            Text(
+                                text = lang.uppercase(),
+                                color = Color.White,
+                                fontSize = 11.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
+                            )
+                        }
                     }
-                    Column {
-                        Text(companyName, fontWeight = FontWeight.Bold, fontSize = 16.sp, color = Slate900)
+
+                    Column(verticalArrangement = Arrangement.spacedBy(4.dp)) {
                         Text(
-                            tr(lang, "Portal Karyawan (ESS)", "Employee Self-Service"),
+                            text = tr(lang, "Portal Karyawan", "Employee Self-Service"),
+                            color = Color(0xFF93C5FD),
                             fontSize = 11.sp,
-                            color = Slate500
+                            fontWeight = FontWeight.Bold,
+                            letterSpacing = 0.8.sp
+                        )
+                        Text(
+                            text = tr(lang, "Masuk ke $companyName", "Sign in to $companyName"),
+                            color = Color.White,
+                            fontSize = 24.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            letterSpacing = (-0.4).sp
+                        )
+                        Text(
+                            text = tr(
+                                lang,
+                                "Presensi GPS, pengajuan cuti & klaim, hingga slip gaji.",
+                                "GPS attendance, leave & expense requests, and payslips."
+                            ),
+                            color = Color.White.copy(alpha = 0.72f),
+                            fontSize = 12.sp
                         )
                     }
                 }
-
-                FilledTonalButton(
-                    onClick = { sessionStore.setLanguage(if (lang == "id") "en" else "id") },
-                    contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp),
-                    modifier = Modifier.height(32.dp)
-                ) {
-                    Text(lang.uppercase(), fontSize = 11.sp, fontWeight = FontWeight.Bold)
-                }
             }
 
-            Spacer(modifier = Modifier.height(24.dp))
-
+            // Auth Card overlapping hero nicely
             Surface(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .offset(y = (-14).dp),
                 shape = RoundedCornerShape(24.dp),
-                color = Color.White,
+                color = palette.card,
+                border = BorderStroke(1.dp, palette.cardBorder),
                 shadowElevation = 2.dp
             ) {
                 Column(
-                    modifier = Modifier.padding(22.dp),
+                    modifier = Modifier.padding(20.dp),
                     verticalArrangement = Arrangement.spacedBy(14.dp)
                 ) {
-                    Text(
-                        text = tr(lang, "Masuk ke Akun Anda", "Sign In to Your Account"),
-                        style = MaterialTheme.typography.titleLarge
-                    )
-                    Text(
-                        text = tr(
-                            lang,
-                            "Gunakan email perusahaan atau NIK untuk presensi, cuti, dan slip gaji.",
-                            "Use your company email or employee ID for attendance, leave, and payslips."
-                        ),
-                        style = MaterialTheme.typography.bodySmall
-                    )
-
                     feedback?.let { (msg, isErr) ->
                         FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
                     }
@@ -195,7 +248,8 @@ fun LoginScreen(
                         enabled = !loading && email.isNotBlank() && password.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
-                            .height(50.dp),
+                            .height(52.dp)
+                            .pressScale(),
                         shape = RoundedCornerShape(14.dp)
                     ) {
                         if (loading) {
@@ -207,46 +261,53 @@ fun LoginScreen(
                         } else {
                             Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null, modifier = Modifier.size(18.dp))
                             Spacer(modifier = Modifier.width(8.dp))
-                            Text(tr(lang, "Masuk", "Sign In"), fontWeight = FontWeight.Bold)
+                            Text(tr(lang, "Masuk", "Sign In"), fontWeight = FontWeight.Bold, fontSize = 14.sp)
                         }
                     }
 
-                    HorizontalDivider(color = Slate200)
+                    HorizontalDivider(color = palette.cardBorder)
 
-                    Button(
+                    FilledTonalButton(
                         onClick = { showQrScanner = true },
                         enabled = !loading,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Blue50,
-                            contentColor = Blue600
+                        colors = ButtonDefaults.filledTonalButtonColors(
+                            containerColor = palette.accentSurface,
+                            contentColor = palette.accent
                         ),
-                        shape = RoundedCornerShape(12.dp),
-                        modifier = Modifier.fillMaxWidth()
+                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .height(48.dp)
+                            .pressScale()
                     ) {
                         Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
                         Spacer(modifier = Modifier.width(8.dp))
                         Text(
                             tr(lang, "Scan QR Server", "Scan Server QR"),
-                            fontSize = 12.sp,
+                            fontSize = 13.sp,
                             fontWeight = FontWeight.Bold
                         )
                     }
 
-                    OutlinedButton(
-                        onClick = {
-                            email = "admin@openhr.id"
-                            password = "Password123!"
-                            performLogin("admin@openhr.id", "Password123!")
-                        },
-                        enabled = !loading,
-                        modifier = Modifier.fillMaxWidth(),
-                        shape = RoundedCornerShape(12.dp)
-                    ) {
-                        Text(
-                            tr(lang, "Login Demo · admin@openhr.id", "Dev Login · admin@openhr.id"),
-                            fontSize = 12.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+                    if (BuildConfig.DEBUG) {
+                        OutlinedButton(
+                            onClick = {
+                                email = "admin@openhr.id"
+                                password = "Password123!"
+                                performLogin("admin@openhr.id", "Password123!")
+                            },
+                            enabled = !loading,
+                            border = BorderStroke(1.dp, palette.cardBorder),
+                            modifier = Modifier.fillMaxWidth(),
+                            shape = RoundedCornerShape(12.dp)
+                        ) {
+                            Text(
+                                tr(lang, "Login Demo · admin@openhr.id", "Dev Login · admin@openhr.id"),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = palette.textSecondary
+                            )
+                        }
                     }
                 }
             }
@@ -268,11 +329,10 @@ fun LoginScreen(
                     repository.getPublicCompany()
                         .onSuccess { comp ->
                             val name = comp?.name?.takeIf { it.isNotBlank() } ?: normalized
-                            companyName = name
                             feedback = tr(
                                 lang,
-                                "Terhubung ke $name ($normalized)",
-                                "Connected to $name ($normalized)"
+                                "Terhubung ke $name",
+                                "Connected to $name"
                             ) to false
                         }
                         .onFailure { err ->

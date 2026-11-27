@@ -3,8 +3,11 @@ package id.openhr.ess.data.local
 import android.content.Context
 import android.os.Build
 import id.openhr.ess.BuildConfig
+import id.openhr.ess.data.model.AttendanceSettingsResponse
+import id.openhr.ess.data.model.BranchInfo
 import id.openhr.ess.data.model.ModulesConfig
 import id.openhr.ess.data.model.OfflineClockRecord
+import id.openhr.ess.data.model.TodayAttendanceRecord
 import id.openhr.ess.data.model.UserSession
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
@@ -37,14 +40,112 @@ class SessionStore(context: Context) {
     private val _modulesFlow = MutableStateFlow(loadModules())
     val modulesFlow: StateFlow<ModulesConfig> = _modulesFlow.asStateFlow()
 
+    private val _themeModeFlow = MutableStateFlow(prefs.getString(KEY_THEME_MODE, "system") ?: "system")
+    val themeModeFlow: StateFlow<String> = _themeModeFlow.asStateFlow()
+
+    private val _biometricEnabledFlow = MutableStateFlow(prefs.getBoolean(KEY_BIOMETRIC, false))
+    val biometricEnabledFlow: StateFlow<Boolean> = _biometricEnabledFlow.asStateFlow()
+
+    private val _hideSalaryFlow = MutableStateFlow(prefs.getBoolean(KEY_HIDE_SALARY, false))
+    val hideSalaryFlow: StateFlow<Boolean> = _hideSalaryFlow.asStateFlow()
+
+    private val _companyLogoUrlFlow = MutableStateFlow(prefs.getString(KEY_LOGO_URL, null))
+    val companyLogoUrlFlow: StateFlow<String?> = _companyLogoUrlFlow.asStateFlow()
+
+    private val _companyNameFlow = MutableStateFlow(prefs.getString(KEY_COMPANY_NAME, "openHR") ?: "openHR")
+    val companyNameFlow: StateFlow<String> = _companyNameFlow.asStateFlow()
+
+    private val _cachedBranchFlow = MutableStateFlow(loadCachedBranch())
+    val cachedBranchFlow: StateFlow<BranchInfo?> = _cachedBranchFlow.asStateFlow()
+
+    private val _cachedSettingsFlow = MutableStateFlow(loadCachedSettings())
+    val cachedSettingsFlow: StateFlow<AttendanceSettingsResponse> = _cachedSettingsFlow.asStateFlow()
+
+    private val _shiftReminderEnabledFlow = MutableStateFlow(prefs.getBoolean(KEY_SHIFT_REMINDER, false))
+    val shiftReminderEnabledFlow: StateFlow<Boolean> = _shiftReminderEnabledFlow.asStateFlow()
+
+    fun setShiftReminderEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_SHIFT_REMINDER, enabled).apply()
+        _shiftReminderEnabledFlow.value = enabled
+    }
+
+    private fun loadCachedBranch(): BranchInfo? {
+        val raw = prefs.getString(KEY_CACHED_BRANCH, null) ?: return null
+        return runCatching { json.decodeFromString<BranchInfo>(raw) }.getOrNull()
+    }
+
+    fun saveCachedBranch(branch: BranchInfo?) {
+        if (branch == null) return
+        prefs.edit().putString(KEY_CACHED_BRANCH, json.encodeToString(branch)).apply()
+        _cachedBranchFlow.value = branch
+    }
+
+    private fun loadCachedSettings(): AttendanceSettingsResponse {
+        val raw = prefs.getString(KEY_CACHED_SETTINGS, null) ?: return AttendanceSettingsResponse()
+        return runCatching { json.decodeFromString<AttendanceSettingsResponse>(raw) }
+            .getOrDefault(AttendanceSettingsResponse())
+    }
+
+    fun saveCachedSettings(settings: AttendanceSettingsResponse) {
+        prefs.edit().putString(KEY_CACHED_SETTINGS, json.encodeToString(settings)).apply()
+        _cachedSettingsFlow.value = settings
+    }
+
+    fun getCachedTodayRecord(todayDate: String): TodayAttendanceRecord? {
+        val savedDate = prefs.getString(KEY_CACHED_TODAY_DATE, null)
+        if (savedDate != todayDate) return null
+        val raw = prefs.getString(KEY_CACHED_TODAY_RECORD, null) ?: return null
+        return runCatching { json.decodeFromString<TodayAttendanceRecord>(raw) }.getOrNull()
+    }
+
+    fun saveCachedTodayRecord(todayDate: String, record: TodayAttendanceRecord?) {
+        if (record == null) return
+        prefs.edit()
+            .putString(KEY_CACHED_TODAY_DATE, todayDate)
+            .putString(KEY_CACHED_TODAY_RECORD, json.encodeToString(record))
+            .apply()
+    }
+
     private fun loadModules(): ModulesConfig {
         val raw = prefs.getString(KEY_MODULES, null) ?: return ModulesConfig()
         return runCatching { json.decodeFromString<ModulesConfig>(raw) }.getOrDefault(ModulesConfig())
     }
 
     fun saveModules(modules: ModulesConfig) {
+        if (_modulesFlow.value == modules) return
         prefs.edit().putString(KEY_MODULES, json.encodeToString(modules)).apply()
         _modulesFlow.value = modules
+    }
+
+    fun saveCompanyBranding(name: String?, logoUrl: String?) {
+        val cleanName = name?.trim()?.takeIf { it.isNotEmpty() } ?: "openHR"
+        val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotEmpty() }
+        if (_companyNameFlow.value == cleanName && _companyLogoUrlFlow.value == cleanLogo) return
+        prefs.edit()
+            .putString(KEY_COMPANY_NAME, cleanName)
+            .putString(KEY_LOGO_URL, cleanLogo)
+            .apply()
+        _companyNameFlow.value = cleanName
+        _companyLogoUrlFlow.value = cleanLogo
+    }
+
+    fun setThemeMode(mode: String) {
+        val valid = when (mode) {
+            "light", "dark" -> mode
+            else -> "system"
+        }
+        prefs.edit().putString(KEY_THEME_MODE, valid).apply()
+        _themeModeFlow.value = valid
+    }
+
+    fun setBiometricEnabled(enabled: Boolean) {
+        prefs.edit().putBoolean(KEY_BIOMETRIC, enabled).apply()
+        _biometricEnabledFlow.value = enabled
+    }
+
+    fun setHideSalary(hidden: Boolean) {
+        prefs.edit().putBoolean(KEY_HIDE_SALARY, hidden).apply()
+        _hideSalaryFlow.value = hidden
     }
 
     private fun loadUser(): UserSession? {
@@ -78,14 +179,20 @@ class SessionStore(context: Context) {
     }
 
     fun getToken(): String? = _tokenFlow.value
+    fun getRefreshToken(): String? = prefs.getString(KEY_REFRESH_TOKEN, null)
 
     fun getBaseUrl(): String = _baseUrlFlow.value
 
-    fun saveSession(token: String, user: UserSession) {
-        prefs.edit()
+    fun saveSession(token: String, user: UserSession, refreshToken: String? = getRefreshToken()) {
+        val editor = prefs.edit()
             .putString(KEY_TOKEN, token)
             .putString(KEY_USER, json.encodeToString(user))
-            .apply()
+        if (!refreshToken.isNullOrBlank()) {
+            editor.putString(KEY_REFRESH_TOKEN, refreshToken)
+        } else {
+            editor.remove(KEY_REFRESH_TOKEN)
+        }
+        editor.apply()
         _tokenFlow.value = token
         _userFlow.value = user
     }
@@ -93,7 +200,10 @@ class SessionStore(context: Context) {
     fun clearSession() {
         prefs.edit()
             .remove(KEY_TOKEN)
+            .remove(KEY_REFRESH_TOKEN)
             .remove(KEY_USER)
+            .remove(KEY_CACHED_TODAY_DATE)
+            .remove(KEY_CACHED_TODAY_RECORD)
             .apply()
         _tokenFlow.value = null
         _userFlow.value = null
@@ -112,8 +222,10 @@ class SessionStore(context: Context) {
     }
 
     fun enqueueOfflineClock(record: OfflineClockRecord) {
-        val updated = _offlineQueueFlow.value + record
-        saveOfflineQueue(updated)
+        val deduped = _offlineQueueFlow.value.filterNot {
+            it.local_date == record.local_date && it.type == record.type
+        }
+        saveOfflineQueue(deduped + record)
     }
 
     fun replaceOfflineQueue(records: List<OfflineClockRecord>) {
@@ -127,11 +239,22 @@ class SessionStore(context: Context) {
 
     companion object {
         private const val KEY_TOKEN = "token"
+        private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_USER = "user"
         private const val KEY_BASE_URL = "base_url"
         private const val KEY_LANG = "lang"
         private const val KEY_OFFLINE_QUEUE = "offline_queue"
         private const val KEY_MODULES = "modules"
+        private const val KEY_THEME_MODE = "theme_mode"
+        private const val KEY_BIOMETRIC = "biometric_enabled"
+        private const val KEY_HIDE_SALARY = "hide_salary"
+        private const val KEY_LOGO_URL = "company_logo_url"
+        private const val KEY_COMPANY_NAME = "company_name"
+        private const val KEY_CACHED_BRANCH = "cached_branch"
+        private const val KEY_CACHED_SETTINGS = "cached_attendance_settings"
+        private const val KEY_CACHED_TODAY_DATE = "cached_today_date"
+        private const val KEY_CACHED_TODAY_RECORD = "cached_today_record"
+        private const val KEY_SHIFT_REMINDER = "shift_reminder_enabled"
 
         fun normalizeBaseUrl(url: String): String {
             var trimmed = url.trim().removeSuffix("/")

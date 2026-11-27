@@ -44,15 +44,15 @@ describe('Tasks (TMS) module workflow', () => {
     const { env } = createEnv();
 
     const adminToken = await signJwt(
-      { userId: 'usr-admin', employeeId: 'emp-001', email: 'admin@company.id', name: 'Admin', role: 'owner_admin' },
+      { userId: 'usr-admin', employeeId: 'emp-001', email: 'admin@company.id', name: 'Admin', role: 'owner_admin', tenantId: 'default' },
       SECRET
     );
     const emp2Token = await signJwt(
-      { userId: 'usr-emp2', employeeId: 'emp-002', email: 'emp2@company.id', name: 'Employee 2', role: 'employee' },
+      { userId: 'usr-emp2', employeeId: 'emp-002', email: 'emp2@company.id', name: 'Employee 2', role: 'employee', tenantId: 'default' },
       SECRET
     );
     const emp3Token = await signJwt(
-      { userId: 'usr-emp3', employeeId: 'emp-003', email: 'emp3@company.id', name: 'Employee 3', role: 'employee' },
+      { userId: 'usr-emp3', employeeId: 'emp-003', email: 'emp3@company.id', name: 'Employee 3', role: 'employee', tenantId: 'default' },
       SECRET
     );
 

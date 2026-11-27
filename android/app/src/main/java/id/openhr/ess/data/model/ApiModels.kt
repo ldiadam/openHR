@@ -45,13 +45,27 @@ data class ApiErrorBody(
 @Serializable
 data class LoginRequest(
     val email: String,
-    val password: String
+    val password: String,
+    val client: String = "mobile",
+    val deviceLabel: String? = null
 )
 
 @Serializable
 data class LoginResponse(
     val token: String,
+    val refreshToken: String? = null,
     val user: UserSession
+)
+
+@Serializable
+data class RefreshRequest(
+    val refreshToken: String,
+    val deviceLabel: String? = null
+)
+
+@Serializable
+data class LogoutRequest(
+    val refreshToken: String? = null
 )
 
 @Serializable
@@ -264,6 +278,10 @@ data class LeaveRequestsResponse(
 data class LeaveRequestItem(
     val id: String,
     val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
     val leave_type_id: String? = null,
     val leave_type_name: String? = null,
     val leave_type_code: String? = null,
@@ -296,6 +314,11 @@ data class OvertimeRequestsResponse(
 @Serializable
 data class OvertimeRequestItem(
     val id: String,
+    val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
     val date: String,
     val start_time: String? = null,
     val end_time: String? = null,
@@ -326,6 +349,11 @@ data class ReimbursementsResponse(
 @Serializable
 data class ReimbursementItem(
     val id: String,
+    val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
     val category: String = "OTHERS",
     val amount: Double = 0.0,
     val description: String? = null,
@@ -362,6 +390,11 @@ data class KasbonRequestsResponse(
 @Serializable
 data class KasbonItem(
     val id: String,
+    val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
     val amount: Double = 0.0,
     val reason: String? = null,
     val total_instalments: Int = 1,
@@ -446,6 +479,8 @@ data class PayslipDetail(
     val bpjs_jp_employer: Double = 0.0,
     val bpjs_jkk_employer: Double = 0.0,
     val bpjs_jkm_employer: Double = 0.0,
+    val jkk_employer: Double = 0.0,
+    val jkm_employer: Double = 0.0,
     val total_employer_cost: Double = 0.0,
     val run_title: String? = null,
     val period_start: String? = null,
@@ -454,10 +489,13 @@ data class PayslipDetail(
     val company_name: String? = null,
     val company_address: String? = null,
     val company_npwp: String? = null,
+    val company_logo_url: String? = null,
     val approver_name: String? = null,
     val approver_title: String? = null,
+    @Serializable(with = FlexibleBooleanSerializer::class) val authorized_by_company: Boolean = false,
     val alpha_dates: List<String> = emptyList(),
-    val alpha_daily_rate: Double = 0.0
+    val alpha_daily_rate: Double = 0.0,
+    val alpha_daily_rate_exact: Double = 0.0
 )
 
 @Serializable
@@ -510,4 +548,284 @@ data class UpdateBankDetailsRequest(
     val bank_branch_address: String,
     val bank_account_number: String,
     val bank_account_holder: String
+)
+
+@Serializable
+data class ReviewRequestBody(
+    val status: String,
+    val note: String? = null
+)
+
+@Serializable
+data class CorrectionsResponse(
+    val corrections: List<AttendanceCorrectionItem> = emptyList()
+)
+
+@Serializable
+data class AttendanceCorrectionItem(
+    val id: String,
+    val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
+    val correction_date: String = "",
+    val requested_clock_in: String? = null,
+    val requested_clock_out: String? = null,
+    val reason: String? = null,
+    val status: String = "pending",
+    val reviewer_note: String? = null,
+    val created_at: String? = null
+)
+
+@Serializable
+data class AnnouncementsResponse(
+    val announcements: List<AnnouncementItem> = emptyList()
+)
+
+@Serializable
+data class AnnouncementItem(
+    val id: String,
+    val title: String = "",
+    val body: String = "",
+    val category: String = "memo",
+    @Serializable(with = FlexibleBooleanSerializer::class) val require_ack: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val pinned: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val acknowledged: Boolean = false,
+    val publisher_name: String? = null,
+    val published_at: String? = null,
+    val expires_at: String? = null,
+    val attachment_name: String? = null,
+    val attachment_url: String? = null
+)
+
+@Serializable
+data class AnnouncementAckResponse(
+    @Serializable(with = FlexibleBooleanSerializer::class) val acknowledged: Boolean = true
+)
+
+@Serializable
+data class ShiftRosterResponse(
+    val roster: List<RosterItem> = emptyList()
+)
+
+@Serializable
+data class RosterItem(
+    val id: String,
+    val employee_id: String = "",
+    val date: String = "",
+    val shift_pattern_id: String? = null,
+    val shift_name: String? = null,
+    val start_time: String? = null,
+    val end_time: String? = null,
+    @Serializable(with = FlexibleBooleanSerializer::class) val is_off: Boolean = false
+)
+
+@Serializable
+data class TasksResponse(
+    val tasks: List<TaskItem> = emptyList(),
+    val counts: TaskCounts = TaskCounts()
+)
+
+@Serializable
+data class TaskCounts(
+    val inbox: Int = 0,
+    val assigned: Int = 0,
+    val approvals: Int = 0,
+    val results: Int = 0,
+    val overdue: Int = 0,
+    val total: Int = 0
+)
+
+@Serializable
+data class TaskItem(
+    val id: String,
+    val reference_no: String = "",
+    val title: String = "",
+    val description: String? = null,
+    val category: String = "adhoc",
+    val priority: String = "medium",
+    val status: String = "open",
+    val assignor_id: String = "",
+    val assignee_id: String = "",
+    val assignor_name: String? = null,
+    val assignee_name: String? = null,
+    val due_at: String = "",
+    val completion_remarks: String? = null,
+    val approval_remarks: String? = null,
+    val created_at: String? = null
+)
+
+@Serializable
+data class TaskActionBody(
+    val status: String = "in_progress",
+    val note: String
+)
+
+@Serializable
+data class TaskCloseBody(
+    val remarks: String
+)
+
+@Serializable
+data class TaskApproveBody(
+    val decision: String = "approve",
+    val remarks: String? = null
+)
+
+@Serializable
+data class PettyCashRequestsResponse(
+    val requests: List<PettyCashRequestItem> = emptyList()
+)
+
+@Serializable
+data class PettyCashRequestItem(
+    val id: String,
+    val employee_id: String? = null,
+    val full_name: String? = null,
+    val nik: String? = null,
+    val job_title: String? = null,
+    val department_name: String? = null,
+    val reference_no: String = "",
+    val department_label: String? = null,
+    val purpose: String = "",
+    val requested_amount: Double = 0.0,
+    val approved_amount: Double? = null,
+    val disbursed_amount: Double? = null,
+    val total_realized: Double = 0.0,
+    val variance: Double = 0.0,
+    val status: String = "pending",
+    val rejection_note: String? = null,
+    val report_note: String? = null,
+    val approver_name: String? = null,
+    val reviewer_name: String? = null,
+    val expense_count: Int = 0,
+    val receipt_count: Int = 0,
+    val created_at: String? = null
+)
+
+@Serializable
+data class CreatePettyCashRequest(
+    val purpose: String,
+    val requested_amount: Double
+)
+
+@Serializable
+data class ApprovePettyCashBody(
+    val disbursed_amount: Double? = null
+)
+
+@Serializable
+data class PettyCashDetailResponse(
+    val request: PettyCashRequestItem,
+    val expenses: List<PettyCashExpenseItem> = emptyList(),
+    val totals: PettyCashTotals = PettyCashTotals(),
+    val rights: PettyCashRights = PettyCashRights()
+)
+
+@Serializable
+data class PettyCashTotals(
+    val requested_amount: Double = 0.0,
+    val disbursed_amount: Double = 0.0,
+    val total_realized: Double = 0.0,
+    val variance: Double = 0.0
+)
+
+@Serializable
+data class PettyCashRights(
+    @Serializable(with = FlexibleBooleanSerializer::class) val canApprove: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val canReject: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val canCancel: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val canEditExpenses: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val canSubmitReport: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val canReviewReport: Boolean = false
+)
+
+@Serializable
+data class PettyCashExpenseItem(
+    val id: String,
+    val request_id: String = "",
+    val expense_date: String = "",
+    val category: String = "other",
+    val description: String = "",
+    val amount: Double = 0.0,
+    val vendor: String? = null,
+    val notes: String? = null,
+    val receipts: List<PettyCashReceiptItem> = emptyList()
+)
+
+@Serializable
+data class PettyCashReceiptItem(
+    val id: String,
+    val request_id: String = "",
+    val expense_id: String = "",
+    val file_name: String = "receipt",
+    val mime_type: String? = null,
+    val file_size: Long = 0,
+    val url: String? = null
+)
+
+@Serializable
+data class PettyCashReceiptUpload(
+    val base64: String,
+    val mime_type: String = "image/jpeg",
+    val file_name: String = "receipt.jpg"
+)
+
+@Serializable
+data class AddPettyCashExpenseRequest(
+    val expense_date: String,
+    val category: String,
+    val description: String,
+    val amount: Double,
+    val vendor: String? = null,
+    val notes: String? = null,
+    val receipts: List<PettyCashReceiptUpload> = emptyList()
+)
+
+@Serializable
+data class UploadPettyCashReceiptRequest(
+    val base64: String,
+    val mime_type: String = "image/jpeg",
+    val file_name: String = "receipt.jpg"
+)
+
+@Serializable
+data class MyAssetsResponse(
+    val assets: List<AssignedAssetItem> = emptyList()
+)
+
+@Serializable
+data class AssignedAssetItem(
+    val id: String,
+    val asset_tag: String = "",
+    val name: String = "",
+    val category: String = "laptop",
+    val serial_number: String? = null,
+    val condition: String = "good",
+    val condition_out: String? = null,
+    val assigned_at: String? = null,
+    val expected_return_at: String? = null,
+    val notes: String? = null
+)
+
+@Serializable
+data class SigningRequestsResponse(
+    val signingRequests: List<SigningRequestItem> = emptyList()
+)
+
+@Serializable
+data class SigningRequestItem(
+    val id: String,
+    val employee_id: String? = null,
+    val employee_name: String? = null,
+    val template_code: String? = null,
+    val workflow: String? = null,
+    val status: String = "sent",
+    val due_at: String? = null,
+    val completed_at: String? = null,
+    val signer_total: Int = 0,
+    val signer_signed: Int = 0,
+    val document_count: Int = 0,
+    val created_at: String? = null
 )

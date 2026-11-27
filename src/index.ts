@@ -12,6 +12,7 @@ import { pettyCashRoutes } from './routes/petty-cash';
 import { reportRoutes } from './routes/reports';
 import { settingsRoutes } from './routes/settings';
 import { signingRoutes } from './routes/signing';
+import { templateRoutes } from './routes/templates';
 import { taskRoutes } from './routes/tasks';
 import { announcementRoutes } from './routes/announcements';
 import { assetRoutes } from './routes/assets';
@@ -23,7 +24,7 @@ import { webhookRoutes } from './routes/webhooks';
 import { getFile } from './services/storage';
 import { verifyPettyCashToken } from './services/petty-cash-workflow';
 import { requireModule } from './middleware/modules';
-import { parseModulesConfig } from '../shared/modules';
+import { hasPurelymailConfig, parseModulesConfig } from '../shared/modules';
 
 const app = new Hono<{ Bindings: Bindings }>();
 
@@ -53,17 +54,22 @@ app.get('/api/public/company', async (c) => {
     let comp: any = null;
     try {
       comp = await c.env.DB.prepare(
-        `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain, modules_json FROM companies LIMIT 1`
+        `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain, purelymail_api_token, purelymail_smtp_pass, modules_json FROM companies LIMIT 1`
       ).first<any>();
     } catch {
       comp = await c.env.DB.prepare(
         `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain FROM companies LIMIT 1`
       ).first<any>();
     }
+    const hasPurelymailCreds = hasPurelymailConfig(c.env, comp);
+    if (comp) {
+      delete comp.purelymail_api_token;
+      delete comp.purelymail_smtp_pass;
+    }
     const hasDocuSealCreds = Boolean(
       c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
     );
-    const modules = parseModulesConfig(comp?.modules_json, { hasDocuSealCreds });
+    const modules = parseModulesConfig(comp?.modules_json, { hasDocuSealCreds, hasPurelymailCreds });
     return c.json({ company: comp ? { ...comp, modules } : null });
   } catch (err: any) {
     return c.json({ company: null });
@@ -289,6 +295,7 @@ app.route('/api/recruitment', recruitmentRoutes);
 app.route('/api/public/careers', careersRoutes);
 app.route('/api/reports', reportRoutes);
 app.route('/api/settings', settingsRoutes);
+app.route('/api/templates', templateRoutes);
 app.route('/api/hr', signingRoutes);
 
 // DocuSeal webhook (unauthenticated; verified via HMAC signature header)

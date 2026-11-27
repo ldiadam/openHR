@@ -237,7 +237,7 @@ export const TasksPage: React.FC = () => {
       body: fd,
     });
     if (!res.ok) {
-      const err = await res.json().catch(() => ({}));
+      const err = (await res.json().catch(() => ({}))) as any;
       throw new Error(err.error || 'Upload failed');
     }
   };

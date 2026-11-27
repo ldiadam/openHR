@@ -360,7 +360,7 @@ attendanceRoutes.get('/today', async (c) => {
            COALESCE(a.status, 'absent') as status,
            COALESCE(a.late_minutes, 0) as late_minutes,
            COALESCE(a.early_minutes, 0) as early_minutes,
-           a.clock_in_status, a.is_offline_sync, a.clock_in_photo_key, a.clock_out_photo_key,
+           a.clock_in_status, COALESCE(a.is_offline_sync, 0) as is_offline_sync, a.clock_in_photo_key, a.clock_out_photo_key,
            a.clock_in_lat, a.clock_in_lng, a.clock_in_distance_meters,
            a.clock_out_lat, a.clock_out_lng, a.clock_out_distance_meters,
            a.clock_out_status,

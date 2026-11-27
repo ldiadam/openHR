@@ -5,7 +5,7 @@ import { sendEmail } from '../services/smtp';
 import { getTestEmail } from '../services/email-templates';
 import { deleteFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
-import { parseModulesConfig } from '../../shared/modules';
+import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
 
 export const settingsRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -19,45 +19,109 @@ settingsRoutes.get('/company', async (c) => {
 
 settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json();
-  const user = c.get('user');
+  const smtpPortVal =
+    body.smtp_port !== undefined && body.smtp_port !== '' && body.smtp_port !== null
+      ? Number(body.smtp_port) || null
+      : null;
 
-  await c.env.DB.prepare(
-    `UPDATE companies SET
-      name = COALESCE(?, name),
-      legal_name = COALESCE(?, legal_name),
-      logo_url = CASE WHEN ? = 1 THEN ? ELSE logo_url END,
-      npwp = COALESCE(?, npwp),
-      bpjs_kesehatan_code = COALESCE(?, bpjs_kesehatan_code),
-      bpjs_tk_code = COALESCE(?, bpjs_tk_code),
-      address = COALESCE(?, address),
-      phone = COALESCE(?, phone),
-      email = COALESCE(?, email),
-      custom_domain = COALESCE(?, custom_domain),
-      purelymail_domain = COALESCE(?, purelymail_domain),
-      purelymail_from_address = COALESCE(?, purelymail_from_address),
-      purelymail_api_token = COALESCE(?, purelymail_api_token),
-      purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
-      updated_at = CURRENT_TIMESTAMP
-     WHERE tenant_id = 'default'`
-  )
-    .bind(
-      body.name,
-      body.legal_name,
-      body.logo_url !== undefined ? 1 : 0,
-      body.logo_url !== undefined ? (body.logo_url?.trim() || null) : null,
-      body.npwp,
-      body.bpjs_kesehatan_code,
-      body.bpjs_tk_code,
-      body.address,
-      body.phone,
-      body.email,
-      body.custom_domain !== undefined ? (body.custom_domain?.trim() || null) : null,
-      body.purelymail_domain !== undefined ? (body.purelymail_domain?.trim() || null) : null,
-      body.purelymail_from_address !== undefined ? (body.purelymail_from_address?.trim() || null) : null,
-      body.purelymail_api_token !== undefined ? (body.purelymail_api_token?.trim() || null) : null,
-      body.purelymail_smtp_pass !== undefined ? (body.purelymail_smtp_pass?.trim() || null) : null
-    )
-    .run();
+  const runUpdate = async (withSmtpCols: boolean) => {
+    if (withSmtpCols) {
+      await c.env.DB.prepare(
+        `UPDATE companies SET
+          name = COALESCE(?, name),
+          legal_name = COALESCE(?, legal_name),
+          logo_url = CASE WHEN ? = 1 THEN ? ELSE logo_url END,
+          npwp = COALESCE(?, npwp),
+          bpjs_kesehatan_code = COALESCE(?, bpjs_kesehatan_code),
+          bpjs_tk_code = COALESCE(?, bpjs_tk_code),
+          address = COALESCE(?, address),
+          phone = COALESCE(?, phone),
+          email = COALESCE(?, email),
+          custom_domain = COALESCE(?, custom_domain),
+          purelymail_domain = COALESCE(?, purelymail_domain),
+          purelymail_from_address = COALESCE(?, purelymail_from_address),
+          purelymail_api_token = COALESCE(?, purelymail_api_token),
+          purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
+          smtp_host = COALESCE(?, smtp_host),
+          smtp_port = COALESCE(?, smtp_port),
+          smtp_user = COALESCE(?, smtp_user),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = 'default'`
+      )
+        .bind(
+          body.name,
+          body.legal_name,
+          body.logo_url !== undefined ? 1 : 0,
+          body.logo_url !== undefined ? (body.logo_url?.trim() || null) : null,
+          body.npwp,
+          body.bpjs_kesehatan_code,
+          body.bpjs_tk_code,
+          body.address,
+          body.phone,
+          body.email,
+          body.custom_domain !== undefined ? (body.custom_domain?.trim() || null) : null,
+          body.purelymail_domain !== undefined ? (body.purelymail_domain?.trim() || null) : null,
+          body.purelymail_from_address !== undefined ? (body.purelymail_from_address?.trim() || null) : null,
+          body.purelymail_api_token !== undefined ? (body.purelymail_api_token?.trim() || null) : null,
+          body.purelymail_smtp_pass !== undefined ? (body.purelymail_smtp_pass?.trim() || null) : null,
+          body.smtp_host !== undefined ? (body.smtp_host?.trim() || null) : null,
+          smtpPortVal,
+          body.smtp_user !== undefined ? (body.smtp_user?.trim() || null) : null
+        )
+        .run();
+    } else {
+      await c.env.DB.prepare(
+        `UPDATE companies SET
+          name = COALESCE(?, name),
+          legal_name = COALESCE(?, legal_name),
+          logo_url = CASE WHEN ? = 1 THEN ? ELSE logo_url END,
+          npwp = COALESCE(?, npwp),
+          bpjs_kesehatan_code = COALESCE(?, bpjs_kesehatan_code),
+          bpjs_tk_code = COALESCE(?, bpjs_tk_code),
+          address = COALESCE(?, address),
+          phone = COALESCE(?, phone),
+          email = COALESCE(?, email),
+          custom_domain = COALESCE(?, custom_domain),
+          purelymail_domain = COALESCE(?, purelymail_domain),
+          purelymail_from_address = COALESCE(?, purelymail_from_address),
+          purelymail_api_token = COALESCE(?, purelymail_api_token),
+          purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
+          updated_at = CURRENT_TIMESTAMP
+         WHERE tenant_id = 'default'`
+      )
+        .bind(
+          body.name,
+          body.legal_name,
+          body.logo_url !== undefined ? 1 : 0,
+          body.logo_url !== undefined ? (body.logo_url?.trim() || null) : null,
+          body.npwp,
+          body.bpjs_kesehatan_code,
+          body.bpjs_tk_code,
+          body.address,
+          body.phone,
+          body.email,
+          body.custom_domain !== undefined ? (body.custom_domain?.trim() || null) : null,
+          body.purelymail_domain !== undefined ? (body.purelymail_domain?.trim() || null) : null,
+          body.purelymail_from_address !== undefined ? (body.purelymail_from_address?.trim() || null) : null,
+          body.purelymail_api_token !== undefined ? (body.purelymail_api_token?.trim() || null) : null,
+          body.purelymail_smtp_pass !== undefined ? (body.purelymail_smtp_pass?.trim() || null) : null
+        )
+        .run();
+    }
+  };
+
+  try {
+    await runUpdate(true);
+  } catch (err: any) {
+    if (String(err?.message || '').includes('no such column')) {
+      await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_host TEXT`).run().catch(() => {});
+      await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_port INTEGER`).run().catch(() => {});
+      await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_user TEXT`).run().catch(() => {});
+      await runUpdate(true);
+    } else {
+      throw err;
+    }
+  }
 
   return c.json({ message: 'Profil perusahaan & konfigurasi domain/email berhasil diperbarui' });
 });
@@ -68,15 +132,19 @@ settingsRoutes.get('/modules', async (c) => {
     c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
   );
   try {
-    const comp = await c.env.DB.prepare(`SELECT modules_json FROM companies LIMIT 1`).first<any>();
+    const comp = await c.env.DB.prepare(
+      `SELECT modules_json, purelymail_domain, purelymail_api_token, purelymail_smtp_pass FROM companies LIMIT 1`
+    ).first<any>();
+    const hasPurelymailCreds = hasPurelymailConfig(c.env, comp);
     return c.json({
-      modules: parseModulesConfig(comp?.modules_json, { hasDocuSealCreds }),
-      integrations: { docusealConfigured: hasDocuSealCreds },
+      modules: parseModulesConfig(comp?.modules_json, { hasDocuSealCreds, hasPurelymailCreds }),
+      integrations: { docusealConfigured: hasDocuSealCreds, purelymailConfigured: hasPurelymailCreds },
     });
   } catch {
+    const hasPurelymailCreds = hasPurelymailConfig(c.env, null);
     return c.json({
-      modules: parseModulesConfig(null, { hasDocuSealCreds }),
-      integrations: { docusealConfigured: hasDocuSealCreds },
+      modules: parseModulesConfig(null, { hasDocuSealCreds, hasPurelymailCreds }),
+      integrations: { docusealConfigured: hasDocuSealCreds, purelymailConfigured: hasPurelymailCreds },
     });
   }
 });
@@ -86,7 +154,16 @@ settingsRoutes.put('/modules', requireRole(['owner_admin']), async (c) => {
   const hasDocuSealCreds = Boolean(
     c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
   );
-  const normalized = parseModulesConfig(body.modules || body, { hasDocuSealCreds });
+  let comp: any = null;
+  try {
+    comp = await c.env.DB.prepare(
+      `SELECT purelymail_domain, purelymail_api_token, purelymail_smtp_pass FROM companies LIMIT 1`
+    ).first<any>();
+  } catch {
+    // ignore
+  }
+  const hasPurelymailCreds = hasPurelymailConfig(c.env, comp);
+  const normalized = parseModulesConfig(body.modules || body, { hasDocuSealCreds, hasPurelymailCreds });
   const json = JSON.stringify(normalized);
 
   try {
@@ -213,143 +290,199 @@ settingsRoutes.delete('/company/logo', requireRole(['owner_admin']), async (c) =
   return c.json({ message: 'Logo perusahaan berhasil dihapus.', logo_url: null });
 });
 
-// Test Purelymail Connection (API Token & SMTP)
-settingsRoutes.post('/test-purelymail', requireRole(['owner_admin']), async (c) => {
+async function runPurelymailApiTest(c: any, apiToken: string | null) {
+  if (!apiToken) {
+    return {
+      status: 'warning',
+      message: 'API Token belum diisi. Otomatisasi pembuatan email karyawan dalam mode simulasi.',
+    };
+  }
+  try {
+    const baseUrl = c.env.PURELYMAIL_API_BASE_URL || 'https://purelymail.com';
+    const apiRes = await fetch(`${baseUrl}/api/v0/checkAccountCredit`, {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'Purelymail-Api-Token': apiToken,
+      },
+      body: JSON.stringify({}),
+    });
+    const apiData: any = await apiRes.json().catch(() => null);
+    if (apiRes.ok && apiData?.type === 'success') {
+      const credit = apiData?.result?.credit !== undefined ? `$${apiData.result.credit}` : 'Aktif';
+      return {
+        status: 'ok',
+        message: `Token API Purelymail VALID! Saldo Akun: ${credit}`,
+        credit: apiData?.result?.credit,
+      };
+    }
+    const errDetail = apiData?.message || apiData?.code || `HTTP ${apiRes.status}`;
+    return { status: 'error', message: `Token API GAGAL: ${errDetail}` };
+  } catch (err: any) {
+    return { status: 'error', message: `Koneksi API Purelymail gagal: ${err.message}` };
+  }
+}
+
+async function runSmtpTest(
+  c: any,
+  comp: any,
+  params: {
+    smtpHost: string;
+    smtpPort: number;
+    smtpUser: string;
+    fromAddress: string;
+    smtpPass: string | null;
+    domainName?: string;
+    testRecipient: string;
+  }
+) {
+  if (!params.smtpPass || !params.fromAddress || !params.testRecipient) {
+    return {
+      status: 'warning',
+      message: 'Isi alamat pengirim, password SMTP, dan penerima uji coba terlebih dahulu.',
+    };
+  }
+  try {
+    const compName = comp?.legal_name || comp?.name || 'Portal HR';
+    const emailData = getTestEmail({
+      companyName: compName,
+      fromAddress: params.fromAddress,
+      smtpHost: params.smtpHost,
+    });
+    const sendRes = await sendEmail(c.env, {
+      to: params.testRecipient,
+      subject: `Uji koneksi email (Email connection test) - ${compName}`,
+      text: emailData.text,
+      html: emailData.html,
+      type: 'general',
+      fromAddress: params.fromAddress,
+      smtpHost: params.smtpHost,
+      smtpPort: params.smtpPort,
+      smtpUser: params.smtpUser,
+      smtpPass: params.smtpPass,
+      domainName: params.domainName,
+      senderName: compName,
+    });
+    if (sendRes.success && !sendRes.simulated) {
+      return {
+        status: 'ok',
+        message: `Email uji coba berhasil dikirim ke ${params.testRecipient} via ${params.smtpHost}:${params.smtpPort}!`,
+      };
+    }
+    if (sendRes.simulated) {
+      return {
+        status: 'warning',
+        message: 'Password SMTP belum dikonfigurasi (pengiriman masih simulasi lokal).',
+      };
+    }
+    return { status: 'error', message: sendRes.error || 'Gagal mengirim email melalui server SMTP.' };
+  } catch (err: any) {
+    return { status: 'error', message: `Error SMTP: ${err.message}` };
+  }
+}
+
+// Separate Test: Purelymail API Token (Mailbox Provisioning)
+settingsRoutes.post('/test-purelymail-api', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const comp = await c.env.DB.prepare(`SELECT * FROM companies LIMIT 1`).first<any>();
+  const apiToken = (body.purelymail_api_token !== undefined ? body.purelymail_api_token?.trim() : null) || comp?.purelymail_api_token || c.env.PURELYMAIL_API_TOKEN || null;
+  const domainName = (body.purelymail_domain !== undefined ? body.purelymail_domain?.trim() : null) || comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN || null;
+
+  if (body.purelymail_api_token || body.purelymail_domain) {
+    await c.env.DB.prepare(
+      `UPDATE companies SET
+        purelymail_domain = COALESCE(?, purelymail_domain),
+        purelymail_api_token = COALESCE(?, purelymail_api_token),
+        updated_at = CURRENT_TIMESTAMP
+       WHERE tenant_id = 'default'`
+    )
+      .bind(domainName, apiToken)
+      .run()
+      .catch(() => {});
+  }
+
+  return c.json(await runPurelymailApiTest(c, apiToken));
+});
+
+// Separate Test: SMTP Email Delivery
+settingsRoutes.post('/test-smtp', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json().catch(() => ({}));
   const user = c.get('user');
-
-  // Load from DB if not passed in body
   const comp = await c.env.DB.prepare(`SELECT * FROM companies LIMIT 1`).first<any>();
-  const apiToken = (body.purelymail_api_token !== undefined ? body.purelymail_api_token?.trim() : null) || comp?.purelymail_api_token || c.env.PURELYMAIL_API_TOKEN;
-  const domainName = (body.purelymail_domain !== undefined ? body.purelymail_domain?.trim() : null) || comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN;
-  const fromAddress = (body.purelymail_from_address !== undefined ? body.purelymail_from_address?.trim() : null) || comp?.purelymail_from_address || c.env.PURELYMAIL_FROM_ADDRESS;
-  const smtpPass = (body.purelymail_smtp_pass !== undefined ? body.purelymail_smtp_pass?.trim() : null) || comp?.purelymail_smtp_pass || c.env.PURELYMAIL_SMTP_PASS;
+
+  const smtpHost = (body.smtp_host !== undefined ? body.smtp_host?.trim() : null) || comp?.smtp_host || c.env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com';
+  const smtpPort = Number((body.smtp_port !== undefined ? body.smtp_port : null) || comp?.smtp_port || c.env.PURELYMAIL_SMTP_PORT || 465);
+  const fromAddress = (body.purelymail_from_address !== undefined ? body.purelymail_from_address?.trim() : null) || comp?.purelymail_from_address || c.env.PURELYMAIL_FROM_ADDRESS || '';
+  const smtpUser = (body.smtp_user !== undefined ? body.smtp_user?.trim() : null) || comp?.smtp_user || c.env.PURELYMAIL_SMTP_USER || fromAddress;
+  const smtpPass = (body.purelymail_smtp_pass !== undefined ? body.purelymail_smtp_pass?.trim() : null) || comp?.purelymail_smtp_pass || c.env.PURELYMAIL_SMTP_PASS || null;
+  const domainName = comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN;
   const testRecipient = body.test_recipient?.trim() || user?.email || fromAddress;
 
-  // Persist entered credentials immediately so they become active across the application
-  if (body.purelymail_api_token || body.purelymail_domain || body.purelymail_from_address || body.purelymail_smtp_pass || body.custom_domain) {
+  if (body.smtp_host || body.smtp_port || body.smtp_user || body.purelymail_from_address || body.purelymail_smtp_pass) {
     try {
       await c.env.DB.prepare(
         `UPDATE companies SET
-          custom_domain = COALESCE(?, custom_domain),
-          purelymail_domain = COALESCE(?, purelymail_domain),
           purelymail_from_address = COALESCE(?, purelymail_from_address),
-          purelymail_api_token = COALESCE(?, purelymail_api_token),
           purelymail_smtp_pass = COALESCE(?, purelymail_smtp_pass),
+          smtp_host = COALESCE(?, smtp_host),
+          smtp_port = COALESCE(?, smtp_port),
+          smtp_user = COALESCE(?, smtp_user),
           updated_at = CURRENT_TIMESTAMP
          WHERE tenant_id = 'default'`
       )
         .bind(
-          body.custom_domain?.trim() || null,
-          body.purelymail_domain?.trim() || null,
           body.purelymail_from_address?.trim() || null,
-          body.purelymail_api_token?.trim() || null,
-          body.purelymail_smtp_pass?.trim() || null
+          body.purelymail_smtp_pass?.trim() || null,
+          body.smtp_host?.trim() || null,
+          Number.isFinite(smtpPort) && smtpPort > 0 ? smtpPort : null,
+          body.smtp_user?.trim() || null
         )
         .run();
-    } catch (e: any) {
-      console.warn('Auto-save in test-purelymail failed:', e.message);
+    } catch {
+      // fallback if smtp_* columns are not yet present
     }
   }
 
-  const result: any = {
-    api: { status: 'untested', message: 'Tidak ada token API yang dikonfigurasi' },
-    smtp: { status: 'untested', message: 'SMTP belum diuji' }
-  };
+  return c.json(
+    await runSmtpTest(c, comp, {
+      smtpHost,
+      smtpPort: Number.isFinite(smtpPort) && smtpPort > 0 ? smtpPort : 465,
+      smtpUser,
+      fromAddress,
+      smtpPass,
+      domainName,
+      testRecipient,
+    })
+  );
+});
 
-  // 1. Test Purelymail API Token
-  if (apiToken) {
-    try {
-      const baseUrl = c.env.PURELYMAIL_API_BASE_URL || 'https://purelymail.com';
-      const apiRes = await fetch(`${baseUrl}/api/v0/checkAccountCredit`, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-          'Purelymail-Api-Token': apiToken,
-        },
-        body: JSON.stringify({}),
-      });
+// Combined Purelymail test endpoint (kept for backward compatibility)
+settingsRoutes.post('/test-purelymail', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const user = c.get('user');
+  const comp = await c.env.DB.prepare(`SELECT * FROM companies LIMIT 1`).first<any>();
+  const apiToken = (body.purelymail_api_token !== undefined ? body.purelymail_api_token?.trim() : null) || comp?.purelymail_api_token || c.env.PURELYMAIL_API_TOKEN || null;
+  const domainName = (body.purelymail_domain !== undefined ? body.purelymail_domain?.trim() : null) || comp?.purelymail_domain || c.env.PURELYMAIL_DOMAIN;
+  const fromAddress = (body.purelymail_from_address !== undefined ? body.purelymail_from_address?.trim() : null) || comp?.purelymail_from_address || c.env.PURELYMAIL_FROM_ADDRESS || '';
+  const smtpHost = (body.smtp_host !== undefined ? body.smtp_host?.trim() : null) || comp?.smtp_host || c.env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com';
+  const smtpPort = Number((body.smtp_port !== undefined ? body.smtp_port : null) || comp?.smtp_port || c.env.PURELYMAIL_SMTP_PORT || 465);
+  const smtpUser = (body.smtp_user !== undefined ? body.smtp_user?.trim() : null) || comp?.smtp_user || c.env.PURELYMAIL_SMTP_USER || fromAddress;
+  const smtpPass = (body.purelymail_smtp_pass !== undefined ? body.purelymail_smtp_pass?.trim() : null) || comp?.purelymail_smtp_pass || c.env.PURELYMAIL_SMTP_PASS || null;
+  const testRecipient = body.test_recipient?.trim() || user?.email || fromAddress;
 
-      const apiData: any = await apiRes.json().catch(() => null);
-
-      if (apiRes.ok && apiData?.type === 'success') {
-        const credit = apiData?.result?.credit !== undefined ? `$${apiData.result.credit}` : 'Aktif';
-        result.api = {
-          status: 'ok',
-          message: `Token API Purelymail VALID! Saldo Akun: ${credit}`,
-          credit: apiData?.result?.credit
-        };
-      } else {
-        const errDetail = apiData?.message || apiData?.code || `HTTP ${apiRes.status}`;
-        result.api = {
-          status: 'error',
-          message: `Token API GAGAL: ${errDetail}`
-        };
-      }
-    } catch (err: any) {
-      result.api = {
-        status: 'error',
-        message: `Koneksi API Purelymail gagal: ${err.message}`
-      };
-    }
-  } else {
-    result.api = {
-      status: 'warning',
-      message: 'API Token belum diisi. Otomatisasi pembuatan email karyawan dalam mode simulasi.'
-    };
-  }
-
-  // 2. Test SMTP Sending
-  if (smtpPass && fromAddress && testRecipient) {
-    try {
-      const compName = comp?.legal_name || comp?.name || 'Portal HR';
-      const emailData = getTestEmail({
-        companyName: compName,
-        fromAddress,
-        smtpHost: c.env.PURELYMAIL_SMTP_HOST || 'smtp.purelymail.com',
-      });
-      const sendRes = await sendEmail(c.env, {
-        to: testRecipient,
-        subject: `Uji koneksi email (Email connection test) - ${compName}`,
-        text: emailData.text,
-        html: emailData.html,
-        type: 'general',
-        fromAddress,
-        smtpPass,
-        domainName,
-        senderName: compName,
-      });
-
-      if (sendRes.success && !sendRes.simulated) {
-        result.smtp = {
-          status: 'ok',
-          message: `Email uji coba berhasil dikirim ke ${testRecipient} via SMTP!`
-        };
-      } else if (sendRes.simulated) {
-        result.smtp = {
-          status: 'warning',
-          message: `Password SMTP belum dikonfigurasi (pengiriman masih simulasi lokal).`
-        };
-      } else {
-        result.smtp = {
-          status: 'error',
-          message: sendRes.error || 'Gagal mengirim email melalui server SMTP.'
-        };
-      }
-    } catch (err: any) {
-      result.smtp = {
-        status: 'error',
-        message: `Error SMTP: ${err.message}`
-      };
-    }
-  } else if (!smtpPass) {
-    result.smtp = {
-      status: 'warning',
-      message: 'Password SMTP belum diisi. Pengiriman email masih disimulasikan.'
-    };
-  }
-
-  return c.json(result);
+  const [api, smtp] = await Promise.all([
+    runPurelymailApiTest(c, apiToken),
+    runSmtpTest(c, comp, {
+      smtpHost,
+      smtpPort: Number.isFinite(smtpPort) && smtpPort > 0 ? smtpPort : 465,
+      smtpUser,
+      fromAddress,
+      smtpPass,
+      domainName,
+      testRecipient,
+    }),
+  ]);
+  return c.json({ api, smtp });
 });
 
 // 2. Branches (with geofence lat/lng, radius, and UMK)

@@ -1,7 +1,10 @@
 package id.openhr.ess.ui.components
 
+import androidx.compose.animation.core.*
+import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
@@ -10,50 +13,155 @@ import androidx.compose.material.icons.filled.CloudOff
 import androidx.compose.material.icons.filled.ErrorOutline
 import androidx.compose.material.icons.filled.Sync
 import androidx.compose.material3.*
-import androidx.compose.runtime.Composable
+import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.composed
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.geometry.Offset
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.graphicsLayer
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.text.font.FontWeight
+import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import id.openhr.ess.ui.theme.*
+import id.openhr.ess.ui.theme.LocalEssPalette
+import java.time.Instant
+import java.time.LocalDate
+import java.time.ZoneOffset
 
 fun tr(lang: String, id: String, en: String): String = if (lang == "id") id else en
 
+fun Modifier.pressScale(pressedScale: Float = 0.97f): Modifier = composed {
+    var pressed by remember { mutableStateOf(false) }
+    val scale by animateFloatAsState(
+        targetValue = if (pressed) pressedScale else 1f,
+        animationSpec = spring(dampingRatio = Spring.DampingRatioMediumBouncy, stiffness = Spring.StiffnessMedium),
+        label = "press_scale"
+    )
+    this
+        .graphicsLayer {
+            scaleX = scale
+            scaleY = scale
+        }
+        .pointerInput(Unit) {
+            detectTapGestures(
+                onPress = {
+                    pressed = true
+                    tryAwaitRelease()
+                    pressed = false
+                }
+            )
+        }
+}
+
+@Composable
+fun ShimmerBox(
+    modifier: Modifier = Modifier,
+    cornerRadius: Dp = 12.dp
+) {
+    val palette = LocalEssPalette.current
+    val transition = rememberInfiniteTransition(label = "shimmer")
+    val translate by transition.animateFloat(
+        initialValue = 0f,
+        targetValue = 900f,
+        animationSpec = infiniteRepeatable(
+            animation = tween(durationMillis = 1100, easing = LinearEasing),
+            repeatMode = RepeatMode.Restart
+        ),
+        label = "shimmer_x"
+    )
+    val brush = Brush.linearGradient(
+        colors = listOf(palette.shimmerBase, palette.shimmerHighlight, palette.shimmerBase),
+        start = Offset(translate - 300f, 0f),
+        end = Offset(translate, 200f)
+    )
+    Box(
+        modifier = modifier
+            .clip(RoundedCornerShape(cornerRadius))
+            .background(brush)
+    )
+}
+
+@Composable
+fun ListSkeletonCards(count: Int = 4) {
+    val palette = LocalEssPalette.current
+    Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        repeat(count) {
+            Surface(
+                modifier = Modifier.fillMaxWidth(),
+                shape = RoundedCornerShape(18.dp),
+                color = palette.card,
+                border = BorderStroke(1.dp, palette.cardBorder)
+            ) {
+                Column(
+                    modifier = Modifier.padding(14.dp),
+                    verticalArrangement = Arrangement.spacedBy(10.dp)
+                ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        ShimmerBox(modifier = Modifier.width(120.dp).height(14.dp), cornerRadius = 6.dp)
+                        ShimmerBox(modifier = Modifier.width(64.dp).height(18.dp), cornerRadius = 8.dp)
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        ShimmerBox(modifier = Modifier.weight(1f).height(44.dp), cornerRadius = 10.dp)
+                        ShimmerBox(modifier = Modifier.weight(1f).height(44.dp), cornerRadius = 10.dp)
+                    }
+                }
+            }
+        }
+    }
+}
+
 @Composable
 fun StatusPill(status: String, lang: String, lateMinutes: Int = 0) {
+    val palette = LocalEssPalette.current
     val (bg, fg, label) = when (status.lowercase()) {
-        "present" -> Triple(Emerald50, Emerald600, tr(lang, "Hadir", "Present"))
+        "present" -> Triple(palette.successSurface, palette.success, tr(lang, "Hadir", "Present"))
         "late" -> Triple(
-            Amber50,
-            Amber600,
+            palette.warningSurface,
+            palette.warning,
             tr(lang, "Terlambat", "Late") + if (lateMinutes > 0) " ${lateMinutes}m" else ""
         )
-        "early_leave" -> Triple(Color(0xFFF5F3FF), Color(0xFF7C3AED), tr(lang, "Pulang Awal", "Early Leave"))
-        "on_leave" -> Triple(Blue50, Blue600, tr(lang, "Cuti", "On Leave"))
-        "sick" -> Triple(Color(0xFFEEF2FF), Color(0xFF4F46E5), tr(lang, "Sakit", "Sick"))
-        "absent" -> Triple(Rose50, Rose600, tr(lang, "Alpa", "Absent"))
-        "approved" -> Triple(Emerald50, Emerald600, tr(lang, "Disetujui", "Approved"))
-        "paid" -> Triple(Blue50, Blue600, tr(lang, "Dibayar", "Paid"))
-        "rejected" -> Triple(Rose50, Rose600, tr(lang, "Ditolak", "Rejected"))
-        "pending" -> Triple(Amber50, Amber600, tr(lang, "Menunggu", "Pending"))
-        else -> Triple(Slate100, Slate600, status)
+        "early_leave" -> Triple(
+            if (palette.isDark) Color(0xFF2E1065) else Color(0xFFF5F3FF),
+            if (palette.isDark) Color(0xFFC4B5FD) else Color(0xFF7C3AED),
+            tr(lang, "Pulang Awal", "Early Leave")
+        )
+        "on_leave" -> Triple(palette.accentSurface, palette.accent, tr(lang, "Cuti", "On Leave"))
+        "sick" -> Triple(
+            if (palette.isDark) Color(0xFF1E1B4B) else Color(0xFFEEF2FF),
+            if (palette.isDark) Color(0xFFA5B4FC) else Color(0xFF4F46E5),
+            tr(lang, "Sakit", "Sick")
+        )
+        "absent" -> Triple(palette.dangerSurface, palette.danger, tr(lang, "Alpa", "Absent"))
+        "approved" -> Triple(palette.successSurface, palette.success, tr(lang, "Disetujui", "Approved"))
+        "report_submitted" -> Triple(palette.accentSurface, palette.accent, tr(lang, "Realisasi Dikirim", "Report Submitted"))
+        "report_approved" -> Triple(palette.successSurface, palette.success, tr(lang, "Realisasi Disetujui", "Report Approved"))
+        "report_rejected" -> Triple(palette.dangerSurface, palette.danger, tr(lang, "Perlu Revisi", "Report Returned"))
+        "cancelled" -> Triple(palette.subtleSurface, palette.textMuted, tr(lang, "Dibatalkan", "Cancelled"))
+        "paid" -> Triple(palette.accentSurface, palette.accent, tr(lang, "Dibayar", "Paid"))
+        "rejected" -> Triple(palette.dangerSurface, palette.danger, tr(lang, "Ditolak", "Rejected"))
+        "pending" -> Triple(palette.warningSurface, palette.warning, tr(lang, "Menunggu", "Pending"))
+        else -> Triple(palette.subtleSurface, palette.textSecondary, status)
     }
 
     Box(
         modifier = Modifier
-            .clip(RoundedCornerShape(8.dp))
+            .clip(RoundedCornerShape(50))
             .background(bg)
-            .border(1.dp, fg.copy(alpha = 0.25f), RoundedCornerShape(8.dp))
-            .padding(horizontal = 8.dp, vertical = 3.dp)
+            .border(1.dp, fg.copy(alpha = 0.25f), RoundedCornerShape(50))
+            .padding(horizontal = 9.dp, vertical = 3.dp)
     ) {
         Text(
             text = label,
             color = fg,
             fontSize = 10.sp,
-            fontWeight = FontWeight.SemiBold
+            fontWeight = FontWeight.Bold
         )
     }
 }
@@ -64,8 +172,9 @@ fun FeedbackBanner(
     isError: Boolean,
     onDismiss: () -> Unit
 ) {
-    val bg = if (isError) Rose50 else Emerald50
-    val fg = if (isError) Rose600 else Emerald600
+    val palette = LocalEssPalette.current
+    val bg = if (isError) palette.dangerSurface else palette.successSurface
+    val fg = if (isError) palette.danger else palette.success
     Row(
         modifier = Modifier
             .fillMaxWidth()
@@ -108,7 +217,7 @@ fun OfflineQueueBanner(
     Row(
         modifier = Modifier
             .fillMaxWidth()
-            .background(Amber600)
+            .background(Color(0xFFD97706))
             .padding(horizontal = 14.dp, vertical = 8.dp),
         verticalAlignment = Alignment.CenterVertically,
         horizontalArrangement = Arrangement.SpaceBetween
@@ -150,7 +259,7 @@ fun OfflineQueueBanner(
                 enabled = !syncing,
                 colors = ButtonDefaults.textButtonColors(
                     containerColor = Color.White,
-                    contentColor = Amber600
+                    contentColor = Color(0xFFD97706)
                 ),
                 contentPadding = PaddingValues(horizontal = 10.dp, vertical = 2.dp),
                 modifier = Modifier.height(28.dp)
@@ -163,4 +272,85 @@ fun OfflineQueueBanner(
             }
         }
     }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppDatePickerDialog(
+    initialDate: String,
+    lang: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val initialMillis = remember(initialDate) {
+        runCatching {
+            LocalDate.parse(initialDate.take(10))
+                .atStartOfDay(ZoneOffset.UTC)
+                .toInstant()
+                .toEpochMilli()
+        }.getOrElse { System.currentTimeMillis() }
+    }
+    val state = rememberDatePickerState(initialSelectedDateMillis = initialMillis)
+
+    DatePickerDialog(
+        onDismissRequest = onDismiss,
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val millis = state.selectedDateMillis ?: initialMillis
+                    val date = Instant.ofEpochMilli(millis).atZone(ZoneOffset.UTC).toLocalDate().toString()
+                    onConfirm(date)
+                }
+            ) {
+                Text(tr(lang, "Pilih", "Select"), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(tr(lang, "Batal", "Cancel"))
+            }
+        }
+    ) {
+        DatePicker(state = state)
+    }
+}
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+fun AppTimePickerDialog(
+    initialTime: String,
+    title: String,
+    lang: String,
+    onDismiss: () -> Unit,
+    onConfirm: (String) -> Unit
+) {
+    val parts = initialTime.split(":")
+    val initHour = parts.getOrNull(0)?.toIntOrNull()?.coerceIn(0, 23) ?: 8
+    val initMin = parts.getOrNull(1)?.toIntOrNull()?.coerceIn(0, 59) ?: 30
+    val state = rememberTimePickerState(initialHour = initHour, initialMinute = initMin, is24Hour = true)
+
+    AlertDialog(
+        onDismissRequest = onDismiss,
+        title = { Text(title, fontWeight = FontWeight.Bold, fontSize = 15.sp) },
+        text = {
+            Box(modifier = Modifier.fillMaxWidth(), contentAlignment = Alignment.Center) {
+                TimePicker(state = state)
+            }
+        },
+        confirmButton = {
+            TextButton(
+                onClick = {
+                    val formatted = "%02d:%02d".format(state.hour, state.minute)
+                    onConfirm(formatted)
+                }
+            ) {
+                Text(tr(lang, "Pilih", "Select"), fontWeight = FontWeight.Bold)
+            }
+        },
+        dismissButton = {
+            TextButton(onClick = onDismiss) {
+                Text(tr(lang, "Batal", "Cancel"))
+            }
+        }
+    )
 }

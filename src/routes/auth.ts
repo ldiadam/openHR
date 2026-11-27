@@ -12,10 +12,51 @@ import { getPasswordResetEmail } from '../services/email-templates';
 
 export const authRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
+const MOBILE_ACCESS_TTL_SECS = 86400; // 24 hours
+const WEB_ACCESS_TTL_SECS = 7 * 86400; // 7 days
+const REFRESH_TTL_MS = 90 * 86400 * 1000; // 90 days sliding
+
+function generateRefreshToken(): string {
+  return `rt-${crypto.randomUUID().replace(/-/g, '')}${crypto.randomUUID().replace(/-/g, '')}`;
+}
+
+async function issueRefreshSession(
+  db: D1Database,
+  params: { userId: string; tenantId: string; deviceLabel?: string | null }
+) {
+  const rawToken = generateRefreshToken();
+  const tokenHash = await hashPassword(rawToken);
+  const expiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+  const id = `rs-${crypto.randomUUID()}`;
+
+  await db
+    .prepare(
+      `INSERT INTO refresh_sessions (id, tenant_id, user_id, token_hash, device_label, expires_at, last_used_at)
+       VALUES (?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP)`
+    )
+    .bind(id, params.tenantId || 'default', params.userId, tokenHash, params.deviceLabel || null, expiresAt)
+    .run();
+
+  return { refreshToken: rawToken, refreshExpiresAt: expiresAt };
+}
+
+function toUserSessionDto(user: any) {
+  return {
+    id: user.id,
+    email: user.email,
+    role: user.role,
+    employeeId: user.employee_id,
+    name: user.employee_name || user.email,
+    jobTitle: user.job_title,
+    departmentId: user.department_id,
+    branchId: user.branch_id,
+  };
+}
+
 // 1. Login
 authRoutes.post('/login', async (c) => {
   const body = await c.req.json();
-  const { email, password } = body;
+  const { email, password, client, deviceLabel } = body;
 
   if (!email || !password) {
     return c.json({ error: 'Email dan kata sandi wajib diisi' }, 400);
@@ -23,7 +64,8 @@ authRoutes.post('/login', async (c) => {
 
   const identifier = email.toLowerCase().trim();
   const user = await c.env.DB.prepare(
-    `SELECT u.*, e.full_name as employee_name, e.job_title, e.department_id, e.branch_id, e.company_email, e.personal_email, e.nik
+    `SELECT u.*, e.full_name as employee_name, e.job_title, e.department_id, e.branch_id, e.company_email, e.personal_email, e.nik,
+            e.lifecycle_status
      FROM users u
      LEFT JOIN employees e ON u.employee_id = e.id
      WHERE (
@@ -50,6 +92,9 @@ authRoutes.post('/login', async (c) => {
     .bind(user.id)
     .run();
 
+  const accessTtl = client === 'mobile' || client === 'android' ? MOBILE_ACCESS_TTL_SECS : WEB_ACCESS_TTL_SECS;
+  const userDto = toUserSessionDto(user);
+
   const token = await signJwt(
     {
       userId: user.id,
@@ -57,24 +102,118 @@ authRoutes.post('/login', async (c) => {
       email: user.email,
       role: user.role,
       employeeId: user.employee_id,
-      name: user.employee_name || user.email,
+      name: userDto.name,
     },
-    c.env.JWT_SECRET
+    c.env.JWT_SECRET,
+    accessTtl
+  );
+
+  const { refreshToken, refreshExpiresAt } = await issueRefreshSession(c.env.DB, {
+    userId: user.id,
+    tenantId: user.tenant_id || 'default',
+    deviceLabel: typeof deviceLabel === 'string' ? deviceLabel.slice(0, 120) : null,
+  });
+
+  return c.json({
+    token,
+    refreshToken,
+    refreshExpiresAt,
+    user: userDto,
+  });
+});
+
+// 1b. Refresh Access Token (sliding rotation for persistent sessions)
+authRoutes.post('/refresh', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const rawRefresh = typeof body?.refreshToken === 'string' ? body.refreshToken.trim() : '';
+  const deviceLabel = typeof body?.deviceLabel === 'string' ? body.deviceLabel.slice(0, 120) : null;
+
+  if (!rawRefresh) {
+    return c.json({ error: 'Refresh token wajib disertakan', code: 'INVALID_REFRESH_TOKEN' }, 401);
+  }
+
+  const tokenHash = await hashPassword(rawRefresh);
+  const session = await c.env.DB.prepare(
+    `SELECT * FROM refresh_sessions WHERE token_hash = ?`
+  )
+    .bind(tokenHash)
+    .first<any>();
+
+  if (!session || session.revoked_at || new Date(session.expires_at).getTime() <= Date.now()) {
+    return c.json({ error: 'Sesi telah berakhir. Silakan login kembali.', code: 'INVALID_REFRESH_TOKEN' }, 401);
+  }
+
+  const user = await c.env.DB.prepare(
+    `SELECT u.*, e.full_name as employee_name, e.job_title, e.department_id, e.branch_id, e.lifecycle_status
+     FROM users u
+     LEFT JOIN employees e ON u.employee_id = e.id
+     WHERE u.id = ? AND u.is_active = 1`
+  )
+    .bind(session.user_id)
+    .first<any>();
+
+  if (!user || user.lifecycle_status === 'resigned' || user.lifecycle_status === 'terminated') {
+    await c.env.DB.prepare(`UPDATE refresh_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE id = ?`)
+      .bind(session.id)
+      .run();
+    return c.json({ error: 'Akun sudah tidak aktif.', code: 'INVALID_REFRESH_TOKEN' }, 401);
+  }
+
+  // Rotate refresh token atomically (prevents replay of old refresh tokens)
+  const nextRefreshToken = generateRefreshToken();
+  const nextHash = await hashPassword(nextRefreshToken);
+  const nextExpiresAt = new Date(Date.now() + REFRESH_TTL_MS).toISOString();
+
+  const updateRes = await c.env.DB.prepare(
+    `UPDATE refresh_sessions
+     SET token_hash = ?,
+         expires_at = ?,
+         last_used_at = CURRENT_TIMESTAMP,
+         device_label = COALESCE(?, device_label)
+     WHERE id = ? AND token_hash = ? AND revoked_at IS NULL`
+  )
+    .bind(nextHash, nextExpiresAt, deviceLabel, session.id, tokenHash)
+    .run();
+
+  if (updateRes.meta?.changes === 0) {
+    return c.json({ error: 'Sesi refresh tidak valid', code: 'INVALID_REFRESH_TOKEN' }, 401);
+  }
+
+  const userDto = toUserSessionDto(user);
+  const token = await signJwt(
+    {
+      userId: user.id,
+      tenantId: user.tenant_id,
+      email: user.email,
+      role: user.role,
+      employeeId: user.employee_id,
+      name: userDto.name,
+    },
+    c.env.JWT_SECRET,
+    MOBILE_ACCESS_TTL_SECS
   );
 
   return c.json({
     token,
-    user: {
-      id: user.id,
-      email: user.email,
-      role: user.role,
-      employeeId: user.employee_id,
-      name: user.employee_name || user.email,
-      jobTitle: user.job_title,
-      departmentId: user.department_id,
-      branchId: user.branch_id,
-    },
+    refreshToken: nextRefreshToken,
+    refreshExpiresAt: nextExpiresAt,
+    user: userDto,
   });
+});
+
+// 1c. Logout (revoke refresh token)
+authRoutes.post('/logout', async (c) => {
+  const body = await c.req.json().catch(() => ({}));
+  const rawRefresh = typeof body?.refreshToken === 'string' ? body.refreshToken.trim() : '';
+  if (rawRefresh) {
+    const tokenHash = await hashPassword(rawRefresh);
+    await c.env.DB.prepare(
+      `UPDATE refresh_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE token_hash = ? AND revoked_at IS NULL`
+    )
+      .bind(tokenHash)
+      .run();
+  }
+  return c.json({ message: 'Berhasil keluar' });
 });
 
 // 2. Current User Profile
@@ -272,6 +411,9 @@ authRoutes.post('/confirm-reset', async (c) => {
     ),
     c.env.DB.prepare(`UPDATE password_resets SET used_at = CURRENT_TIMESTAMP WHERE id = ?`).bind(
       resetRecord.id
+    ),
+    c.env.DB.prepare(`UPDATE refresh_sessions SET revoked_at = CURRENT_TIMESTAMP WHERE user_id = ? AND revoked_at IS NULL`).bind(
+      resetRecord.user_id
     ),
   ]);
 
