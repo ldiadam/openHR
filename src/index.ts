@@ -70,6 +70,27 @@ app.get('/api/public/company', async (c) => {
   }
 });
 
+// Public Mobile App Connect Info (returns LAN URL in local dev, or configured domain in prod)
+app.get('/api/public/connect-info', async (c) => {
+  const devLan = c.env.DEV_LAN_URL?.trim();
+  if (devLan) {
+    return c.json({ url: devLan });
+  }
+  try {
+    const comp = await c.env.DB.prepare(`SELECT custom_domain FROM companies LIMIT 1`).first<any>();
+    const rawDomain = comp?.custom_domain?.trim();
+    if (rawDomain) {
+      const url = rawDomain.startsWith('http://') || rawDomain.startsWith('https://')
+        ? rawDomain.replace(/\/+$/, '')
+        : `https://${rawDomain.replace(/\/+$/, '')}`;
+      return c.json({ url });
+    }
+  } catch {
+    // ignore DB errors
+  }
+  return c.json({ url: null });
+});
+
 // Public Company Logo binary endpoint
 app.get('/api/public/company-logo', async (c) => {
   try {

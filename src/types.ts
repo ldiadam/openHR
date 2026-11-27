@@ -28,6 +28,7 @@ export interface Bindings {
   PURELYMAIL_SMTP_USER?: string;
   PURELYMAIL_SMTP_PASS?: string;
   APP_URL?: string;
+  DEV_LAN_URL?: string;
   JWT_SECRET?: string;
   // DocuSeal e-signature (server-side only)
   DOCUSEAL_URL?: string;
