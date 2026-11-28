@@ -547,16 +547,35 @@ export const HREmployeeDetail: React.FC = () => {
           {data.recentAttendance.length === 0 ? (
             <p className="text-xs text-slate-400">{tr('Belum ada data presensi.', 'No attendance records yet.')}</p>
           ) : (
-            <div className="space-y-1.5">
-              {data.recentAttendance.map((a: any) => (
-                <div key={a.date} className="flex items-center justify-between rounded-lg border border-slate-100 bg-slate-50/60 px-2.5 py-1.5 text-[11px]">
-                  <span className="font-semibold text-slate-700">{formatDate(a.date)}</span>
-                  <span className="font-mono text-slate-600">
-                    {a.clock_in_time || '--:--'} → {a.clock_out_time || '--:--'}
-                  </span>
-                  <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${statusPill(a.status)}`}>{a.status}</span>
-                </div>
-              ))}
+            <div className="divide-y divide-slate-100 rounded-xl border border-slate-200/80 overflow-hidden bg-white">
+              {data.recentAttendance.map((a: any) => {
+                const inStr = a.clock_in_time ? String(a.clock_in_time).slice(0, 5) : '--:--';
+                const outStr = a.clock_out_time ? String(a.clock_out_time).slice(0, 5) : '--:--';
+                const statusLabel =
+                  a.status === 'present'
+                    ? tr('Tepat', 'On Time')
+                    : a.status === 'late'
+                      ? tr('Telat', 'Late')
+                      : a.status === 'early_leave'
+                        ? tr('Pulang Awal', 'Early')
+                        : String(a.status || '-');
+                return (
+                  <div
+                    key={a.date}
+                    className="grid grid-cols-[1fr_112px_78px] items-center gap-2 px-3 py-2 text-[11px] hover:bg-slate-50/70"
+                  >
+                    <span className="font-semibold text-slate-700 truncate">{formatDate(a.date)}</span>
+                    <span className="font-mono tabular-nums text-slate-600 text-center">
+                      {inStr} → {outStr}
+                    </span>
+                    <div className="flex justify-end">
+                      <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold whitespace-nowrap ${statusPill(a.status)}`}>
+                        {statusLabel}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })}
             </div>
           )}
         </Section>
