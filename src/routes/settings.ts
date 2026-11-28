@@ -574,13 +574,20 @@ settingsRoutes.delete('/branches/:id', requireRole(['owner_admin']), async (c) =
 
 // 3. Departments
 settingsRoutes.get('/departments', async (c) => {
-  const rows = await c.env.DB.prepare(`SELECT * FROM departments ORDER BY name ASC`).all<any>();
+  const rows = await c.env.DB.prepare(
+    `SELECT d.*, m.full_name AS manager_name
+     FROM departments d
+     LEFT JOIN employees m ON d.manager_id = m.id
+     ORDER BY d.name ASC`
+  )
+    .all<any>()
+    .catch(() => c.env.DB.prepare(`SELECT * FROM departments ORDER BY name ASC`).all<any>());
   return c.json({ departments: rows.results || [] });
 });
 
 settingsRoutes.post('/departments', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json();
-  const { name, code } = body;
+  const { name, code, manager_id } = body;
   if (!name) return c.json({ error: 'Nama departemen wajib diisi' }, 400);
 
   const id = `dept-${Date.now()}`;
@@ -591,19 +598,34 @@ settingsRoutes.post('/departments', requireRole(['owner_admin']), async (c) => {
     .bind(id, name, code || null)
     .run();
 
+  if (manager_id) {
+    await c.env.DB.prepare(`UPDATE departments SET manager_id = ? WHERE id = ?`)
+      .bind(manager_id, id)
+      .run()
+      .catch(() => {});
+  }
+
   return c.json({ message: 'Departemen berhasil ditambahkan', departmentId: id });
 });
 
 settingsRoutes.put('/departments/:id', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json();
-  const { name, code } = body;
+  const { name, code, manager_id } = body;
   if (!name) return c.json({ error: 'Nama departemen wajib diisi' }, 400);
 
+  const deptId = c.req.param('id');
   await c.env.DB.prepare(
     `UPDATE departments SET name = ?, code = COALESCE(?, code) WHERE id = ?`
   )
-    .bind(name, code || null, c.req.param('id'))
+    .bind(name, code || null, deptId)
     .run();
+
+  if (manager_id !== undefined) {
+    await c.env.DB.prepare(`UPDATE departments SET manager_id = ? WHERE id = ?`)
+      .bind(manager_id || null, deptId)
+      .run()
+      .catch(() => {});
+  }
 
   return c.json({ message: 'Departemen berhasil diperbarui' });
 });

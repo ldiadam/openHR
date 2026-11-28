@@ -13,6 +13,7 @@ import { getWelcomeInviteEmail } from '../services/email-templates';
 import { getFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
 import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
+import { getOrgHierarchyConfig, wouldCreateManagerCycle } from '../services/org-hierarchy';
 
 export const employeeRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -35,10 +36,24 @@ employeeRoutes.get('/', async (c) => {
 
   const params: any[] = [];
 
-  // Managers can only see themselves and their direct subordinates
+  // Managers see subordinates according to company hierarchy_mode
   if (user.role === 'manager') {
-    query += ` WHERE e.manager_id = ? OR e.id = ?`;
-    params.push(user.employeeId, user.employeeId);
+    const orgCfg = await getOrgHierarchyConfig(c.env.DB);
+    if (orgCfg.hierarchy_mode === 'single_manager') {
+      // In single_manager mode, the primary manager (or manager when no primary is pinned) sees all employees
+      if (!orgCfg.primary_manager_id || orgCfg.primary_manager_id === user.employeeId) {
+        // full visibility
+      } else {
+        query += ` WHERE e.manager_id = ? OR e.id = ?`;
+        params.push(user.employeeId, user.employeeId);
+      }
+    } else if (orgCfg.hierarchy_mode === 'department_head') {
+      query += ` WHERE e.manager_id = ? OR e.id = ? OR d.manager_id = ?`;
+      params.push(user.employeeId, user.employeeId, user.employeeId);
+    } else {
+      query += ` WHERE e.manager_id = ? OR e.id = ?`;
+      params.push(user.employeeId, user.employeeId);
+    }
   } else if (user.role === 'employee') {
     query += ` WHERE e.id = ?`;
     params.push(user.employeeId);
@@ -542,6 +557,17 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
     const nikTaken = await c.env.DB.prepare(`SELECT id FROM employees WHERE nik = ? AND id != ?`).bind(newNik, empId).first();
     if (nikTaken) {
       return c.json({ error: `NIK '${newNik}' sudah digunakan oleh karyawan lain` }, 400);
+    }
+  }
+
+  if (body.manager_id !== undefined && body.manager_id !== oldEmp.manager_id) {
+    const allEmps = await c.env.DB.prepare(`SELECT id, manager_id FROM employees`).all<any>();
+    const parentMap = new Map<string, string | null>();
+    for (const row of allEmps.results || []) {
+      parentMap.set(row.id, row.manager_id ?? null);
+    }
+    if (wouldCreateManagerCycle(empId, body.manager_id || null, parentMap)) {
+      return c.json({ error: 'Tidak dapat memilih atasan yang menyebabkan siklus pelaporan (cycle).' }, 400);
     }
   }
 

@@ -5,6 +5,7 @@ import {
   CheckCircle2,
   GitBranch,
   Layers,
+  Network,
   Plus,
   ShieldAlert,
   ShieldCheck,
@@ -16,6 +17,7 @@ import {
 } from 'lucide-react';
 import { apiFetch, formatRupiah } from '../api';
 import { useLanguage } from '../context/LanguageContext';
+import { OrgChartView } from '../components/OrgChartView';
 import {
   ApprovalScope,
   DEFAULT_LEVEL_BYPASS,
@@ -52,6 +54,7 @@ export const LevelBuilder: React.FC = () => {
 
   const [levels, setLevels] = useState<EmployeeLevelDto[]>([]);
   const [presets, setPresets] = useState<LevelPresetDefinition[]>([]);
+  const [activeTab, setActiveTab] = useState<'levels' | 'chart'>('levels');
   const [selectedId, setSelectedId] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
@@ -322,14 +325,43 @@ export const LevelBuilder: React.FC = () => {
           </p>
         </div>
 
-        <button
-          onClick={startNewLevel}
-          className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 shadow-sm"
-        >
-          <Plus size={16} />
-          <span>{tr('Tambah Level', 'New Level')}</span>
-        </button>
+        <div className="flex items-center gap-2">
+          <div className="inline-flex rounded-xl bg-slate-100 p-1">
+            <button
+              onClick={() => setActiveTab('levels')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                activeTab === 'levels' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Layers size={14} />
+              <span>{tr('Level Builder', 'Level Builder')}</span>
+            </button>
+            <button
+              onClick={() => setActiveTab('chart')}
+              className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${
+                activeTab === 'chart' ? 'bg-white text-slate-900 shadow-sm' : 'text-slate-600 hover:text-slate-900'
+              }`}
+            >
+              <Network size={14} />
+              <span>{tr('Bagan Organisasi', 'Org Chart')}</span>
+            </button>
+          </div>
+          {activeTab === 'levels' && (
+            <button
+              onClick={startNewLevel}
+              className="inline-flex items-center gap-2 px-4 py-2.5 rounded-xl bg-blue-600 text-white text-sm font-semibold hover:bg-blue-700 shadow-sm"
+            >
+              <Plus size={16} />
+              <span>{tr('Tambah Level', 'New Level')}</span>
+            </button>
+          )}
+        </div>
       </div>
+
+      {activeTab === 'chart' ? (
+        <OrgChartView />
+      ) : (
+        <>
 
       {message && (
         <div
@@ -346,26 +378,28 @@ export const LevelBuilder: React.FC = () => {
         </div>
       )}
 
-      {/* 1-Click Presets */}
-      <div className="bg-white rounded-2xl border border-slate-200 p-4">
-        <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
-          <Sparkles size={14} className="text-amber-500" />
-          <span>{tr('Template Hierarki Cepat (Open Source Presets)', 'Quick Hierarchy Presets')}</span>
+      {/* 1-Click Presets (only shown when no levels are configured yet) */}
+      {!loading && levels.length === 0 && (
+        <div className="bg-white rounded-2xl border border-slate-200 p-4">
+          <div className="flex items-center gap-2 text-xs font-bold uppercase tracking-wider text-slate-500 mb-3">
+            <Sparkles size={14} className="text-amber-500" />
+            <span>{tr('Template Hierarki Cepat (Open Source Presets)', 'Quick Hierarchy Presets')}</span>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+            {presets.map((preset) => (
+              <button
+                key={preset.key}
+                onClick={() => handleApplyPreset(preset.key)}
+                disabled={saving}
+                className="text-left p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50/40 transition-colors"
+              >
+                <div className="font-semibold text-sm text-slate-900">{preset.name}</div>
+                <div className="text-xs text-slate-500 mt-0.5">{preset.description}</div>
+              </button>
+            ))}
+          </div>
         </div>
-        <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {presets.map((preset) => (
-            <button
-              key={preset.key}
-              onClick={() => handleApplyPreset(preset.key)}
-              disabled={saving}
-              className="text-left p-3.5 rounded-xl border border-slate-200 hover:border-blue-400 hover:bg-blue-50/40 transition-colors"
-            >
-              <div className="font-semibold text-sm text-slate-900">{preset.name}</div>
-              <div className="text-xs text-slate-500 mt-0.5">{preset.description}</div>
-            </button>
-          ))}
-        </div>
-      </div>
+      )}
 
       {/* Main Split: Ladder (left) + Inspector (right) */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
@@ -866,6 +900,8 @@ export const LevelBuilder: React.FC = () => {
             </div>
           </div>
         </div>
+      )}
+        </>
       )}
     </div>
   );

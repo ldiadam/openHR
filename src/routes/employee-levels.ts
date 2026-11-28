@@ -13,6 +13,12 @@ import {
   rowToEmployeeLevel,
   simulateApprovalFlow,
 } from '../services/employee-levels';
+import {
+  buildOrgChartTree,
+  getOrgHierarchyConfig,
+  normalizeHierarchyMode,
+  wouldCreateManagerCycle,
+} from '../services/org-hierarchy';
 
 export const employeeLevelRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -309,4 +315,93 @@ employeeLevelRoutes.post('/simulate', requireRole(['owner_admin']), async (c) =>
   const levels = await listEmployeeLevels(c.env.DB, tenantId);
   const steps = simulateApprovalFlow(levels, levelId, module, amount);
   return c.json({ steps });
+});
+
+async function loadHierarchyPayload(db: D1Database) {
+  const config = await getOrgHierarchyConfig(db);
+  const [deptsRes, empsRes] = await Promise.all([
+    db
+      .prepare(
+        `SELECT d.*, m.full_name AS manager_name
+         FROM departments d
+         LEFT JOIN employees m ON d.manager_id = m.id
+         ORDER BY d.name ASC`
+      )
+      .all<any>()
+      .catch(() => db.prepare(`SELECT * FROM departments ORDER BY name ASC`).all<any>()),
+    db
+      .prepare(
+        `SELECT e.id, e.nik, e.full_name, e.job_title, e.department_id, e.manager_id, e.level_id,
+                d.name AS department_name, b.name AS branch_name,
+                l.code AS level_code, l.name AS level_name, l.rank AS level_rank, l.color AS level_color,
+                (SELECT u.role FROM users u WHERE u.employee_id = e.id ORDER BY u.created_at ASC LIMIT 1) AS user_role
+         FROM employees e
+         LEFT JOIN departments d ON e.department_id = d.id
+         LEFT JOIN branches b ON e.branch_id = b.id
+         LEFT JOIN employee_levels l ON e.level_id = l.id
+         WHERE COALESCE(e.lifecycle_status, 'active') NOT IN ('resigned', 'terminated')
+         ORDER BY COALESCE(l.rank, 0) DESC, e.full_name ASC`
+      )
+      .all<any>(),
+  ]);
+
+  const departments = deptsRes.results || [];
+  const employees = empsRes.results || [];
+  const deptMgrMap = new Map<string, string | null>();
+  for (const d of departments) {
+    deptMgrMap.set(d.id, d.manager_id ?? null);
+  }
+
+  const tree = buildOrgChartTree(employees, config, deptMgrMap);
+  return { config, departments, employees, tree };
+}
+
+// Get Org Hierarchy Config + Org Chart Tree
+employeeLevelRoutes.get('/hierarchy', async (c) => {
+  const payload = await loadHierarchyPayload(c.env.DB);
+  return c.json(payload);
+});
+
+// Update Org Hierarchy Mode, Primary Manager, Department Heads, or Direct Managers
+employeeLevelRoutes.put('/hierarchy', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const mode = normalizeHierarchyMode(body.hierarchy_mode);
+  const primaryManagerId = body.primary_manager_id ? String(body.primary_manager_id).trim() : null;
+
+  await c.env.DB.prepare(
+    `UPDATE companies SET hierarchy_mode = ?, primary_manager_id = ?, updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(mode, primaryManagerId)
+    .run();
+
+  if (Array.isArray(body.departmentManagers)) {
+    for (const dm of body.departmentManagers) {
+      if (!dm?.id) continue;
+      await c.env.DB.prepare(`UPDATE departments SET manager_id = ? WHERE id = ?`)
+        .bind(dm.manager_id || null, dm.id)
+        .run();
+    }
+  }
+
+  if (Array.isArray(body.employeeManagers)) {
+    const allEmps = await c.env.DB.prepare(`SELECT id, manager_id FROM employees`).all<any>();
+    const parentMap = new Map<string, string | null>();
+    for (const row of allEmps.results || []) {
+      parentMap.set(row.id, row.manager_id ?? null);
+    }
+    for (const em of body.employeeManagers) {
+      if (!em?.id) continue;
+      const nextMgr = em.manager_id || null;
+      if (wouldCreateManagerCycle(em.id, nextMgr, parentMap)) {
+        return c.json({ error: 'Tidak dapat membuat struktur pelaporan melingkar (cycle).' }, 400);
+      }
+      parentMap.set(em.id, nextMgr);
+      await c.env.DB.prepare(`UPDATE employees SET manager_id = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`)
+        .bind(nextMgr, em.id)
+        .run();
+    }
+  }
+
+  const payload = await loadHierarchyPayload(c.env.DB);
+  return c.json(payload);
 });
