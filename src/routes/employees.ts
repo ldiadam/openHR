@@ -24,11 +24,13 @@ employeeRoutes.get('/', async (c) => {
 
   let query = `
     SELECT e.*, d.name as department_name, b.name as branch_name, m.full_name as manager_name,
+           l.code as level_code, l.name as level_name, l.rank as level_rank, l.color as level_color,
            (SELECT u.role FROM users u WHERE u.employee_id = e.id ORDER BY u.created_at ASC LIMIT 1) as user_role
     FROM employees e
     LEFT JOIN departments d ON e.department_id = d.id
     LEFT JOIN branches b ON e.branch_id = b.id
     LEFT JOIN employees m ON e.manager_id = m.id
+    LEFT JOIN employee_levels l ON e.level_id = l.id
   `;
 
   const params: any[] = [];
@@ -423,6 +425,13 @@ employeeRoutes.post('/', requireRole(['owner_admin']), async (c) => {
     )
     .run();
 
+  if (body.level_id) {
+    await c.env.DB.prepare(`UPDATE employees SET level_id = ? WHERE id = ?`)
+      .bind(body.level_id, employeeId)
+      .run()
+      .catch(() => {});
+  }
+
   // Initialize Leave Balance
   await c.env.DB.prepare(
     `INSERT OR IGNORE INTO leave_balances (id, tenant_id, employee_id, leave_type_id, year, total_entitled, used_days, remaining_days)
@@ -642,6 +651,13 @@ employeeRoutes.put('/:id', requireRole(['owner_admin']), async (c) => {
       empId
     )
     .run();
+
+  if (body.level_id !== undefined) {
+    await c.env.DB.prepare(`UPDATE employees SET level_id = ? WHERE id = ?`)
+      .bind(body.level_id || null, empId)
+      .run()
+      .catch(() => {});
+  }
 
   // Update linked user role if changed by owner_admin
   const requestedRole = body.user_role || body.role;

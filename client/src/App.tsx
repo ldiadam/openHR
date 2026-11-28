@@ -37,6 +37,7 @@ const SigningComplete = React.lazy(() => import('./pages/SigningComplete').then(
 const PublicPettyCashVerify = React.lazy(() => import('./pages/PublicPettyCashVerify').then((m) => ({ default: m.PublicPettyCashVerify })));
 const HRReports = React.lazy(() => import('./pages/HRReports').then((m) => ({ default: m.HRReports })));
 const HRSettings = React.lazy(() => import('./pages/HRSettings').then((m) => ({ default: m.HRSettings })));
+const LevelBuilder = React.lazy(() => import('./pages/LevelBuilder').then((m) => ({ default: m.LevelBuilder })));
 
 const ProtectedRoute: React.FC<{
   children: React.ReactNode;
@@ -339,6 +340,14 @@ export const App: React.FC = () => {
             element={
               <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin']}>
                 <HRSettings />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/levels"
+            element={
+              <ProtectedRoute allowSelfService={false} allowedRoles={['owner_admin']}>
+                <LevelBuilder />
               </ProtectedRoute>
             }
           />

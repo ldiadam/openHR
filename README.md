@@ -129,7 +129,7 @@ Kata sandi default seluruh akun demo: `Password123!`
 ### Prasyarat
 - Node.js v20+ / v22+
 - **pnpm** (`corepack enable && pnpm -v`)
-- *(Opsional untuk Android)* Android SDK + JDK 17 (`cd android && ./gradlew assembleDebug`)
+- *(Opsional untuk Android)* Android SDK + JDK 17 (`cd android && ./gradlew assembleRelease`, dengan `android/keystore.properties` atau env `OPENHR_KEYSTORE_*` untuk penandatanganan rilis; setiap pengguna wajib memindai **QR Connect** terlebih dahulu sebelum login)
 
 ### Pengembangan Lokal
 ```bash

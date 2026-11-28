@@ -4,6 +4,7 @@ import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
 import { putFile, getFile } from '../services/storage';
 import { resolveAttendanceDateTime, getZonedDateString, getZonedMonthString } from '../utils/date';
 import { makeId } from '../utils/id';
+import { getEmployeeLevelContext, hasLevelBypassOnly } from '../services/employee-levels';
 
 export const attendanceRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -138,18 +139,23 @@ attendanceRoutes.post('/clock', async (c) => {
     }
   }
 
-  const geofenceReason =
+  let geofenceReason =
     typeof body.geofence_reason === 'string' ? body.geofence_reason.trim() : '';
 
   if (geofenceStatus === 'out_of_geofence' && !geofenceReason) {
-    return c.json(
-      {
-        error: 'Anda berada di luar radius kantor. Mohon isi alasan presensi.',
-        code: 'OUT_OF_GEOFENCE',
-        distanceMeters,
-      },
-      400
-    );
+    const actorCtx = await getEmployeeLevelContext(c.env.DB, user);
+    if (hasLevelBypassOnly(actorCtx, 'bypass_geofence')) {
+      geofenceReason = `Level bypass (${actorCtx.level?.code || 'LVL'})`;
+    } else {
+      return c.json(
+        {
+          error: 'Anda berada di luar radius kantor. Mohon isi alasan presensi.',
+          code: 'OUT_OF_GEOFENCE',
+          distanceMeters,
+        },
+        400
+      );
+    }
   }
 
   // Save photo to R2 / Storage if present

@@ -42,15 +42,12 @@ class ApiClient(private val sessionStore: SessionStore) {
     private val dynamicHostInterceptor = Interceptor { chain ->
         val original = chain.request()
         val baseUrl = sessionStore.getBaseUrl().toHttpUrlOrNull()
-        val newUrl = if (baseUrl != null) {
-            original.url.newBuilder()
-                .scheme(baseUrl.scheme)
-                .host(baseUrl.host)
-                .port(baseUrl.port)
-                .build()
-        } else {
-            original.url
-        }
+            ?: throw IOException("Server not configured. Please scan the company QR code first.")
+        val newUrl = original.url.newBuilder()
+            .scheme(baseUrl.scheme)
+            .host(baseUrl.host)
+            .port(baseUrl.port)
+            .build()
 
         val builder = original.newBuilder().url(newUrl)
         val path = original.url.encodedPath
@@ -168,7 +165,7 @@ class ApiClient(private val sessionStore: SessionStore) {
         .build()
 
     private val retrofit: Retrofit = Retrofit.Builder()
-        .baseUrl("http://10.0.2.2:8787/")
+        .baseUrl("https://placeholder.invalid/")
         .client(okHttpClient)
         .addConverterFactory(json.asConverterFactory("application/json".toMediaType()))
         .build()

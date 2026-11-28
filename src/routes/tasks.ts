@@ -5,6 +5,14 @@ import { putFile, getFile } from '../services/storage';
 import { makeId } from '../utils/id';
 import { parseModulesConfig } from '../../shared/modules';
 import { sendEmailInBackground } from '../services/smtp';
+import {
+  ActorLevelContext,
+  canAssignTaskToRank,
+  canForceCloseTask,
+  canViewAllTasks,
+  getEmployeeLevelContext,
+  hasLevelBypassOnly,
+} from '../services/employee-levels';
 
 export const taskRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -58,8 +66,8 @@ function parseJsonSafe<T>(raw: unknown, fallback: T): T {
   }
 }
 
-function canAccessTask(task: any, user: AuthContext['user']): boolean {
-  if (user.role === 'owner_admin' || user.role === 'manager') return true;
+function canAccessTask(task: any, user: AuthContext['user'], actorCtx?: ActorLevelContext): boolean {
+  if (actorCtx ? canViewAllTasks(actorCtx) : (user.role === 'owner_admin' || user.role === 'manager')) return true;
   const empId = user.employeeId;
   if (!empId) return false;
   if (task.assignor_id === empId || task.assignee_id === empId) return true;
@@ -153,8 +161,9 @@ taskRoutes.get('/', async (c) => {
      ORDER BY t.created_at DESC`
   ).all<any>();
 
+  const actorCtx = await getEmployeeLevelContext(c.env.DB, user);
   const allAccessible = (rowsRes.results || [])
-    .filter((row: any) => canAccessTask(row, user))
+    .filter((row: any) => canAccessTask(row, user, actorCtx))
     .map((row: any) => ({
       ...row,
       watchers: parseJsonSafe<string[]>(row.watchers_json, []),
@@ -243,15 +252,20 @@ taskRoutes.post('/', async (c) => {
     : 'medium';
 
   const actor = await resolveActorEmployee(c.env.DB, user);
+  const actorCtx = await getEmployeeLevelContext(c.env.DB, user);
   const assignee = await c.env.DB.prepare(
-    `SELECT e.id, e.full_name, u.email
+    `SELECT e.id, e.full_name, u.email, l.rank AS level_rank
      FROM employees e
      LEFT JOIN users u ON u.employee_id = e.id
+     LEFT JOIN employee_levels l ON e.level_id = l.id
      WHERE e.id = ?`
   )
     .bind(assigneeId)
     .first<any>();
   if (!assignee) return c.json({ error: 'Karyawan penerima tugas tidak ditemukan.' }, 404);
+  if (actorCtx.level && !canAssignTaskToRank(actorCtx, assignee.level_rank)) {
+    return c.json({ error: 'Level Anda tidak memiliki izin menugaskan ke level karyawan ini.' }, 403);
+  }
 
   const watchers: string[] = Array.isArray(body.watchers)
     ? body.watchers.map((w: any) => String(w)).filter(Boolean)
@@ -625,7 +639,30 @@ taskRoutes.post('/:id/close', async (c) => {
   if (!remarks) return c.json({ error: 'Catatan penyelesaian tugas wajib diisi.' }, 400);
 
   const actor = await resolveActorEmployee(c.env.DB, user);
+  const actorCtx = await getEmployeeLevelContext(c.env.DB, user);
   const completedAt = new Date().toISOString();
+  const autoApprove = hasLevelBypassOnly(actorCtx, 'bypass_task_approval') || canForceCloseTask(actorCtx);
+
+  if (autoApprove) {
+    await c.env.DB.prepare(
+      `UPDATE tasks
+       SET status = 'approved', completed_at = ?, completed_by = ?, completion_remarks = ?,
+           approved_at = ?, approved_by = ?, approval_remarks = ?, updated_at = CURRENT_TIMESTAMP
+       WHERE id = ?`
+    )
+      .bind(completedAt, actor.id, remarks, completedAt, actor.id, 'Auto-approved by level bypass', id)
+      .run();
+
+    const activityId = await logActivity(c.env.DB, {
+      taskId: id,
+      actorId: actor.id,
+      actorName: actor.full_name,
+      actionType: 'approved',
+      statusAfter: 'approved',
+      note: `${remarks} (Auto-approved by level bypass)`,
+    });
+    return c.json({ status: 'approved', completed_at: completedAt, approved_at: completedAt, activity_id: activityId });
+  }
 
   await c.env.DB.prepare(
     `UPDATE tasks

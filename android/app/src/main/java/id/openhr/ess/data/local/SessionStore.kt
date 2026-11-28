@@ -154,24 +154,11 @@ class SessionStore(context: Context) {
     }
 
     private fun loadBaseUrl(): String {
-        val saved = prefs.getString(KEY_BASE_URL, null)
-        val defaultUrl = if (isEmulator()) BuildConfig.DEFAULT_BASE_URL else "http://127.0.0.1:8787"
-        return normalizeBaseUrl(saved ?: defaultUrl)
+        val saved = prefs.getString(KEY_BASE_URL, null) ?: return ""
+        return normalizeBaseUrl(saved)
     }
 
-    private fun isEmulator(): Boolean {
-        return (Build.BRAND.startsWith("generic") && Build.DEVICE.startsWith("generic")) ||
-            Build.FINGERPRINT.startsWith("generic") ||
-            Build.FINGERPRINT.startsWith("unknown") ||
-            Build.HARDWARE.contains("goldfish") ||
-            Build.HARDWARE.contains("ranchu") ||
-            Build.MODEL.contains("google_sdk") ||
-            Build.MODEL.contains("Emulator") ||
-            Build.MODEL.contains("Android SDK built for x86") ||
-            Build.MANUFACTURER.contains("Genymotion") ||
-            Build.PRODUCT.contains("sdk_gphone") ||
-            Build.PRODUCT.contains("emulator")
-    }
+    fun isServerConfigured(): Boolean = _baseUrlFlow.value.isNotBlank()
 
     private fun loadOfflineQueue(): List<OfflineClockRecord> {
         val raw = prefs.getString(KEY_OFFLINE_QUEUE, null) ?: return emptyList()
@@ -211,7 +198,11 @@ class SessionStore(context: Context) {
 
     fun setBaseUrl(rawUrl: String) {
         val normalized = normalizeBaseUrl(rawUrl)
-        prefs.edit().putString(KEY_BASE_URL, normalized).apply()
+        if (normalized.isEmpty()) {
+            prefs.edit().remove(KEY_BASE_URL).apply()
+        } else {
+            prefs.edit().putString(KEY_BASE_URL, normalized).apply()
+        }
         _baseUrlFlow.value = normalized
     }
 
@@ -258,9 +249,15 @@ class SessionStore(context: Context) {
 
         fun normalizeBaseUrl(url: String): String {
             var trimmed = url.trim().removeSuffix("/")
-            if (trimmed.isEmpty()) trimmed = BuildConfig.DEFAULT_BASE_URL
-            if (!trimmed.startsWith("http://") && !trimmed.startsWith("https://")) {
-                trimmed = "http://$trimmed"
+            if (trimmed.isEmpty()) return ""
+            if (!trimmed.startsWith("http://", ignoreCase = true) &&
+                !trimmed.startsWith("https://", ignoreCase = true)
+            ) {
+                val isLocal = trimmed.startsWith("localhost", ignoreCase = true) ||
+                    trimmed.startsWith("127.") ||
+                    trimmed.startsWith("10.") ||
+                    trimmed.startsWith("192.168.")
+                trimmed = if (isLocal) "http://$trimmed" else "https://$trimmed"
             }
             return trimmed
         }

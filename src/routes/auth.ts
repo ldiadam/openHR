@@ -9,6 +9,7 @@ import {
 } from '../middleware/auth';
 import { sendEmailInBackground } from '../services/smtp';
 import { getPasswordResetEmail } from '../services/email-templates';
+import { getEmployeeLevelContext } from '../services/employee-levels';
 
 export const authRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -94,6 +95,12 @@ authRoutes.post('/login', async (c) => {
 
   const accessTtl = client === 'mobile' || client === 'android' ? MOBILE_ACCESS_TTL_SECS : WEB_ACCESS_TTL_SECS;
   const userDto = toUserSessionDto(user);
+  const lvlCtx = await getEmployeeLevelContext(c.env.DB, {
+    userId: user.id,
+    tenantId: user.tenant_id || 'default',
+    role: user.role,
+    employeeId: user.employee_id,
+  });
 
   const token = await signJwt(
     {
@@ -118,7 +125,7 @@ authRoutes.post('/login', async (c) => {
     token,
     refreshToken,
     refreshExpiresAt,
-    user: userDto,
+    user: { ...userDto, level: lvlCtx.level },
   });
 });
 
@@ -180,6 +187,13 @@ authRoutes.post('/refresh', async (c) => {
   }
 
   const userDto = toUserSessionDto(user);
+  const lvlCtx = await getEmployeeLevelContext(c.env.DB, {
+    userId: user.id,
+    tenantId: user.tenant_id || 'default',
+    role: user.role,
+    employeeId: user.employee_id,
+  });
+
   const token = await signJwt(
     {
       userId: user.id,
@@ -197,7 +211,7 @@ authRoutes.post('/refresh', async (c) => {
     token,
     refreshToken: nextRefreshToken,
     refreshExpiresAt: nextExpiresAt,
-    user: userDto,
+    user: { ...userDto, level: lvlCtx.level },
   });
 });
 
@@ -237,7 +251,8 @@ authRoutes.get('/me', authMiddleware, async (c) => {
     return c.json({ error: 'User tidak ditemukan' }, 404);
   }
 
-  return c.json({ user });
+  const lvlCtx = await getEmployeeLevelContext(c.env.DB, jwtUser);
+  return c.json({ user: { ...user, level: lvlCtx.level } });
 });
 
 // 3. Request Password Reset

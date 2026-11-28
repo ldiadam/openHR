@@ -21,6 +21,7 @@ import { performanceRoutes } from './routes/performance';
 import { recruitmentRoutes } from './routes/recruitment';
 import { careersRoutes } from './routes/careers';
 import { webhookRoutes } from './routes/webhooks';
+import { employeeLevelRoutes } from './routes/employee-levels';
 import { getFile } from './services/storage';
 import { verifyPettyCashToken } from './services/petty-cash-workflow';
 import { requireModule } from './middleware/modules';
@@ -295,6 +296,7 @@ app.route('/api/recruitment', recruitmentRoutes);
 app.route('/api/public/careers', careersRoutes);
 app.route('/api/reports', reportRoutes);
 app.route('/api/settings', settingsRoutes);
+app.route('/api/levels', employeeLevelRoutes);
 app.route('/api/templates', templateRoutes);
 app.route('/api/hr', signingRoutes);
 

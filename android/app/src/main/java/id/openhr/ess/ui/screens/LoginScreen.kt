@@ -71,8 +71,12 @@ fun LoginScreen(
     }
 
     LaunchedEffect(savedBaseUrl) {
-        repository.getPublicCompany()
+        if (savedBaseUrl.isNotBlank()) {
+            repository.getPublicCompany()
+        }
     }
+
+    val isServerConfigured = savedBaseUrl.isNotBlank()
 
     fun performLogin(targetEmail: String, targetPassword: String) {
         scope.launch {
@@ -168,18 +172,30 @@ fun LoginScreen(
                             letterSpacing = 0.8.sp
                         )
                         Text(
-                            text = tr(lang, "Masuk ke $companyName", "Sign in to $companyName"),
+                            text = if (isServerConfigured) {
+                                tr(lang, "Masuk ke $companyName", "Sign in to $companyName")
+                            } else {
+                                tr(lang, "Hubungkan Server Anda", "Connect Your Server")
+                            },
                             color = Color.White,
                             fontSize = 24.sp,
                             fontWeight = FontWeight.ExtraBold,
                             letterSpacing = (-0.4).sp
                         )
                         Text(
-                            text = tr(
-                                lang,
-                                "Presensi GPS, pengajuan cuti & klaim, hingga slip gaji.",
-                                "GPS attendance, leave & expense requests, and payslips."
-                            ),
+                            text = if (isServerConfigured) {
+                                tr(
+                                    lang,
+                                    "Presensi GPS, pengajuan cuti & klaim, hingga slip gaji.",
+                                    "GPS attendance, leave & expense requests, and payslips."
+                                )
+                            } else {
+                                tr(
+                                    lang,
+                                    "Scan QR Code dari portal web perusahaan untuk memulai.",
+                                    "Scan the QR Code from your company web portal to begin."
+                                )
+                            },
                             color = Color.White.copy(alpha = 0.72f),
                             fontSize = 12.sp
                         )
@@ -206,9 +222,61 @@ fun LoginScreen(
                         FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
                     }
 
+                    if (!isServerConfigured) {
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = palette.accentSurface,
+                            border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.25f)),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(14.dp),
+                                verticalArrangement = Arrangement.spacedBy(10.dp)
+                            ) {
+                                Text(
+                                    text = tr(
+                                        lang,
+                                        "Belum terhubung ke server perusahaan",
+                                        "Not connected to a company server"
+                                    ),
+                                    fontWeight = FontWeight.Bold,
+                                    fontSize = 13.sp,
+                                    color = palette.textPrimary
+                                )
+                                Text(
+                                    text = tr(
+                                        lang,
+                                        "Buka menu QR Connect di portal web perusahaan Anda lalu scan QR code di bawah ini.",
+                                        "Open QR Connect on your company web portal and scan the QR code below."
+                                    ),
+                                    fontSize = 12.sp,
+                                    color = palette.textSecondary
+                                )
+                                Button(
+                                    onClick = { showQrScanner = true },
+                                    enabled = !loading,
+                                    shape = RoundedCornerShape(12.dp),
+                                    modifier = Modifier
+                                        .fillMaxWidth()
+                                        .height(48.dp)
+                                        .pressScale()
+                                ) {
+                                    Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        tr(lang, "Scan QR Server", "Scan Server QR"),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp
+                                    )
+                                }
+                            }
+                        }
+                    }
+
                     OutlinedTextField(
                         value = email,
                         onValueChange = { email = it },
+                        enabled = isServerConfigured && !loading,
                         label = { Text(tr(lang, "Email atau NIK", "Email or Employee ID")) },
                         leadingIcon = { Icon(Icons.Default.Mail, contentDescription = null) },
                         singleLine = true,
@@ -223,10 +291,11 @@ fun LoginScreen(
                     OutlinedTextField(
                         value = password,
                         onValueChange = { password = it },
+                        enabled = isServerConfigured && !loading,
                         label = { Text(tr(lang, "Kata Sandi", "Password")) },
                         leadingIcon = { Icon(Icons.Default.Lock, contentDescription = null) },
                         trailingIcon = {
-                            IconButton(onClick = { showPassword = !showPassword }) {
+                            IconButton(onClick = { showPassword = !showPassword }, enabled = isServerConfigured && !loading) {
                                 Icon(
                                     imageVector = if (showPassword) Icons.Default.VisibilityOff else Icons.Default.Visibility,
                                     contentDescription = null
@@ -245,7 +314,7 @@ fun LoginScreen(
 
                     Button(
                         onClick = { performLogin(email, password) },
-                        enabled = !loading && email.isNotBlank() && password.isNotBlank(),
+                        enabled = isServerConfigured && !loading && email.isNotBlank() && password.isNotBlank(),
                         modifier = Modifier
                             .fillMaxWidth()
                             .height(52.dp)
@@ -265,31 +334,7 @@ fun LoginScreen(
                         }
                     }
 
-                    HorizontalDivider(color = palette.cardBorder)
-
-                    FilledTonalButton(
-                        onClick = { showQrScanner = true },
-                        enabled = !loading,
-                        colors = ButtonDefaults.filledTonalButtonColors(
-                            containerColor = palette.accentSurface,
-                            contentColor = palette.accent
-                        ),
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .height(48.dp)
-                            .pressScale()
-                    ) {
-                        Icon(Icons.Default.QrCodeScanner, contentDescription = null, modifier = Modifier.size(18.dp))
-                        Spacer(modifier = Modifier.width(8.dp))
-                        Text(
-                            tr(lang, "Scan QR Server", "Scan Server QR"),
-                            fontSize = 13.sp,
-                            fontWeight = FontWeight.Bold
-                        )
-                    }
-
-                    if (BuildConfig.DEBUG) {
+                    if (BuildConfig.DEBUG && isServerConfigured) {
                         OutlinedButton(
                             onClick = {
                                 email = "admin@openhr.id"

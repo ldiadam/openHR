@@ -128,6 +128,7 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
     { name: tr('Offboarding', 'Offboarding'), path: '/offboarding', icon: UserMinus, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('offboarding') },
     { name: tr('Dokumen & Tanda Tangan', 'Documents & Signing'), path: '/documents', icon: PenLine, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('signing') },
     { name: t.nav.reports, path: '/reports', icon: FileText, show: (isOwnerAdmin || isFinance || isManager) && isModuleEnabled('reports') },
+    { name: tr('Level Builder', 'Level Builder'), path: '/levels', icon: Layers, show: isOwnerAdmin },
     { name: t.nav.settings, path: '/settings', icon: Settings, show: isOwnerAdmin },
   ].filter((item) => item.show !== false);
 

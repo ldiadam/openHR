@@ -22,6 +22,7 @@ import {
   type LeaveStatus,
 } from '../services/leave-workflow';
 import { loadLeaveFormTemplate } from '../services/form-templates';
+import { getEmployeeLevelContext, hasLevelBypassOnly } from '../services/employee-levels';
 
 export const leaveRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -531,6 +532,20 @@ leaveRoutes.post('/applications', async (c) => {
 
   const requestId = makeId('lvr');
   const slaDueAt = workingDaySlaDueAt(submissionDate, holidays);
+  const computedDays = totalDays ?? Math.max(1, countWorkingDaysFallback(startDate, endDate, holidays));
+
+  const applicantCtx = await getEmployeeLevelContext(c.env.DB, { ...user, employeeId });
+  let initialStatus: LeaveStatus = 'pending_administrator';
+  if (hasLevelBypassOnly(applicantCtx, 'bypass_approval_chain')) {
+    initialStatus = 'approved';
+  } else if (
+    hasLevelBypassOnly(applicantCtx, 'bypass_leave_admin_check') &&
+    hasLevelBypassOnly(applicantCtx, 'bypass_leave_dept_head')
+  ) {
+    initialStatus = 'pending_management';
+  } else if (hasLevelBypassOnly(applicantCtx, 'bypass_leave_admin_check')) {
+    initialStatus = 'pending_dept_head';
+  }
 
   await c.env.DB.prepare(
     `INSERT INTO leave_requests (
@@ -538,7 +553,7 @@ leaveRoutes.post('/applications', async (c) => {
        reason, status, reference_no, submission_date, department_id, department_label,
        leave_type_label, leave_type_other_note, applicant_signature, applicant_signed_at,
        submitted_at, sla_due_at
-     ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, 'pending_administrator', ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`
+     ) VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, CURRENT_TIMESTAMP, CURRENT_TIMESTAMP, ?)`
   )
     .bind(
       requestId,
@@ -546,8 +561,9 @@ leaveRoutes.post('/applications', async (c) => {
       leaveTypeId,
       startDate,
       endDate,
-      totalDays ?? Math.max(1, countWorkingDaysFallback(startDate, endDate, holidays)),
+      computedDays,
       reason,
+      initialStatus,
       referenceNo,
       submissionDate,
       department.id,
@@ -559,16 +575,28 @@ leaveRoutes.post('/applications', async (c) => {
     )
     .run();
 
+  if (initialStatus === 'approved') {
+    await applyApprovalSideEffects(c.env, {
+      id: requestId,
+      employee_id: employeeId,
+      leave_type_id: leaveTypeId,
+      start_date: startDate,
+      end_date: endDate,
+      total_days: computedDays,
+    });
+  }
+
   await auditLeaveAction(c.env.DB, user.userId, 'LEAVE_SUBMITTED', requestId, {
     reference_no: referenceNo,
-    status: 'pending_administrator',
+    status: initialStatus,
     department: department.name,
     leave_type: leaveType.name,
-    total_days: totalDays ?? null,
+    total_days: computedDays,
+    level_code: applicantCtx.level?.code ?? null,
   });
 
   return c.json(
-    { message: 'Pengajuan cuti berhasil dikirim.', requestId, referenceNo, status: 'pending_administrator', slaDueAt },
+    { message: 'Pengajuan cuti berhasil dikirim.', requestId, referenceNo, status: initialStatus, slaDueAt },
     201
   );
 });

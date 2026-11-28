@@ -1,8 +1,17 @@
+import java.util.Properties
+
 plugins {
     alias(libs.plugins.android.application)
     alias(libs.plugins.kotlin.android)
     alias(libs.plugins.kotlin.compose)
     alias(libs.plugins.kotlin.serialization)
+}
+
+val keystorePropertiesFile = rootProject.file("keystore.properties")
+val keystoreProperties = Properties().apply {
+    if (keystorePropertiesFile.exists()) {
+        keystorePropertiesFile.inputStream().use { load(it) }
+    }
 }
 
 android {
@@ -13,19 +22,43 @@ android {
         applicationId = "id.openhr.ess"
         minSdk = 26
         targetSdk = 35
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.0"
+    }
 
-        buildConfigField("String", "DEFAULT_BASE_URL", "\"http://10.0.2.2:8787\"")
+    signingConfigs {
+        val storePath = keystoreProperties.getProperty("storeFile") ?: System.getenv("OPENHR_KEYSTORE_PATH")
+        val storePass = keystoreProperties.getProperty("storePassword") ?: System.getenv("OPENHR_KEYSTORE_PASSWORD")
+        val keyAliasVal = keystoreProperties.getProperty("keyAlias") ?: System.getenv("OPENHR_KEY_ALIAS")
+        val keyPass = keystoreProperties.getProperty("keyPassword") ?: System.getenv("OPENHR_KEY_PASSWORD")
+        if (!storePath.isNullOrBlank() && !storePass.isNullOrBlank() && !keyAliasVal.isNullOrBlank() && !keyPass.isNullOrBlank()) {
+            create("release") {
+                storeFile = file(storePath)
+                storePassword = storePass
+                keyAlias = keyAliasVal
+                keyPassword = keyPass
+            }
+        }
     }
 
     buildTypes {
         release {
-            isMinifyEnabled = false
+            isMinifyEnabled = true
+            isShrinkResources = true
+            signingConfig = signingConfigs.findByName("release")
             proguardFiles(
                 getDefaultProguardFile("proguard-android-optimize.txt"),
                 "proguard-rules.pro"
             )
+        }
+    }
+
+    splits {
+        abi {
+            isEnable = true
+            reset()
+            include("arm64-v8a", "armeabi-v7a")
+            isUniversalApk = true
         }
     }
 
@@ -78,5 +111,6 @@ dependencies {
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
 
+    testImplementation(libs.junit)
     debugImplementation(libs.androidx.ui.tooling)
 }
