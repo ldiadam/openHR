@@ -72,6 +72,7 @@ export const HREmployees: React.FC = () => {
   // Modals & Actions
   const [showAddModal, setShowAddModal] = useState(false);
   const [showImportModal, setShowImportModal] = useState(false);
+  const [levels, setLevels] = useState<any[]>([]);
   const [editingEmp, setEditingEmp] = useState<any>(null);
   const [deletingEmp, setDeletingEmp] = useState<any>(null);
   const [resendingId, setResendingId] = useState<string | null>(null);
@@ -103,6 +104,7 @@ export const HREmployees: React.FC = () => {
     contract_start_date: '',
     contract_end_date: '',
     job_title: '',
+    level_id: '',
     user_role: 'employee',
     department_id: '',
     branch_id: '',
@@ -144,22 +146,27 @@ export const HREmployees: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [empRes, deptRes, branchRes, spRes] = await Promise.all([
+      const [empRes, deptRes, branchRes, spRes, lvlRes] = await Promise.all([
         apiFetch('/employees'),
         apiFetch('/settings/departments'),
         apiFetch('/settings/branches'),
         apiFetch('/shifts/patterns'),
+        apiFetch('/levels').catch(() => ({ levels: [] })),
       ]);
       setEmployees(empRes.employees || []);
       setDepartments(deptRes.departments || []);
       setBranches(branchRes.branches || []);
       setShiftPatterns(spRes.patterns || []);
+      const lvlList = lvlRes.levels || [];
+      setLevels(lvlList);
 
+      const defaultLvl = lvlList.find((l: any) => l.is_default)?.id || '';
       if (deptRes.departments?.[0] && !formData.department_id) {
         setFormData((prev) => ({
           ...prev,
           department_id: deptRes.departments[0].id,
           branch_id: branchRes.branches?.[0]?.id || '',
+          level_id: prev.level_id || defaultLvl,
         }));
       }
     } catch (err: any) {
@@ -655,8 +662,22 @@ export const HREmployees: React.FC = () => {
                       </div>
                     </td>
                     <td className="py-3 px-4">
-                      <div className="font-medium text-slate-800">{emp.job_title}</div>
-                      <div className="text-[11px] text-slate-400">{emp.department_name || '-'}</div>
+                      <div className="font-medium text-slate-800 flex items-center gap-1.5 flex-wrap">
+                        <span>{emp.job_title}</span>
+                        {emp.level_code && (
+                          <span
+                            className="inline-block px-1.5 py-0.5 rounded text-[10px] font-bold text-white"
+                            style={{ backgroundColor: emp.level_color || '#2563EB' }}
+                            title={emp.level_name || emp.level_code}
+                          >
+                            {emp.level_code}
+                          </span>
+                        )}
+                      </div>
+                      <div className="text-[11px] text-slate-400">
+                        {emp.department_name || '-'}
+                        {emp.level_name ? ` · ${emp.level_name}` : ''}
+                      </div>
                     </td>
                     <td className="py-3 px-4 text-slate-700">{emp.branch_name || '-'}</td>
                     <td className="py-3 px-4">
@@ -1050,6 +1071,22 @@ export const HREmployees: React.FC = () => {
                         "Use 'Director' if this account signs off as APPROVED BY on Claim Excel sheets."
                       )}
                     </span>
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">{tr('Level Karyawan', 'Employee Level')}</label>
+                    <select
+                      value={formData.level_id}
+                      onChange={(e) => setFormData({ ...formData, level_id: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl bg-white"
+                    >
+                      <option value="">{tr('-- Default / Tanpa Level Khusus --', '-- Default / No Custom Level --')}</option>
+                      {levels.map((lvl) => (
+                        <option key={lvl.id} value={lvl.id}>
+                          {lvl.code} · {lvl.name} (Rank {lvl.rank})
+                        </option>
+                      ))}
+                    </select>
                   </div>
 
                   <div>
@@ -1631,6 +1668,22 @@ export const HREmployees: React.FC = () => {
                           "Use 'Director' if this account signs off as APPROVED BY on Claim Excel."
                         )}
                       </span>
+                    </div>
+
+                    <div>
+                      <label className="block text-slate-700 font-semibold mb-1">{tr('Level Karyawan', 'Employee Level')}</label>
+                      <select
+                        value={editingEmp.level_id || ''}
+                        onChange={(e) => setEditingEmp({ ...editingEmp, level_id: e.target.value || null })}
+                        className="w-full p-2.5 border border-slate-300 rounded-xl bg-white"
+                      >
+                        <option value="">{tr('-- Default / Tanpa Level Khusus --', '-- Default / No Custom Level --')}</option>
+                        {levels.map((lvl) => (
+                          <option key={lvl.id} value={lvl.id}>
+                            {lvl.code} · {lvl.name} (Rank {lvl.rank})
+                          </option>
+                        ))}
+                      </select>
                     </div>
 
                     <div>

@@ -170,6 +170,11 @@ export const HREmployeeDetail: React.FC = () => {
                 {emp.user_role && (
                   <span className="rounded-full bg-white/15 px-2.5 py-1">{tr('Peran', 'Role')}: {emp.user_role}</span>
                 )}
+                {emp.level_name && (
+                  <span className="rounded-full bg-white/25 px-2.5 py-1">
+                    {emp.level_code} · {emp.level_name}
+                  </span>
+                )}
               </div>
             </div>
           </div>
@@ -270,6 +275,10 @@ export const HREmployeeDetail: React.FC = () => {
             <Field label={tr('Departemen', 'Department')} value={emp.department_name} />
             <Field label={tr('Cabang', 'Branch')} value={emp.branch_name} />
             <Field label={tr('Atasan Langsung', 'Direct Manager')} value={emp.manager_name} />
+            <Field
+              label={tr('Level Karyawan', 'Employee Level')}
+              value={emp.level_name ? `${emp.level_code} · ${emp.level_name} (Rank ${emp.level_rank})` : '-'}
+            />
             <Field label={tr('Status Kepegawaian', 'Employment Status')} value={`${emp.employment_status} (${emp.lifecycle_status})`} />
             <Field label={t.employees.joinDate} value={emp.join_date ? formatDate(emp.join_date) : '-'} />
             <Field label={tr('Awal Kontrak', 'Contract Start')} value={emp.contract_start_date ? formatDate(emp.contract_start_date) : '-'} />

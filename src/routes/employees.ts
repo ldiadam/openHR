@@ -102,11 +102,13 @@ employeeRoutes.get('/:id', async (c) => {
 
   const emp = await c.env.DB.prepare(
     `SELECT e.*, d.name as department_name, b.name as branch_name, m.full_name as manager_name,
+            l.code as level_code, l.name as level_name, l.rank as level_rank, l.color as level_color,
             u.role as user_role
      FROM employees e
      LEFT JOIN departments d ON e.department_id = d.id
      LEFT JOIN branches b ON e.branch_id = b.id
      LEFT JOIN employees m ON e.manager_id = m.id
+     LEFT JOIN employee_levels l ON e.level_id = l.id
      LEFT JOIN users u ON u.employee_id = e.id
      WHERE e.id = ?`
   )
@@ -136,12 +138,14 @@ employeeRoutes.get('/:id/profile', async (c) => {
 
   const emp = await c.env.DB.prepare(
     `SELECT e.*, d.name as department_name, b.name as branch_name, m.full_name as manager_name,
+            l.code as level_code, l.name as level_name, l.rank as level_rank, l.color as level_color,
             u.role as user_role, u.email as login_email, u.is_active as login_active,
             sp.name as shift_name, sp.start_time as shift_start, sp.end_time as shift_end, sp.break_minutes
      FROM employees e
      LEFT JOIN departments d ON e.department_id = d.id
      LEFT JOIN branches b ON e.branch_id = b.id
      LEFT JOIN employees m ON e.manager_id = m.id
+     LEFT JOIN employee_levels l ON e.level_id = l.id
      LEFT JOIN users u ON u.employee_id = e.id
      LEFT JOIN shift_patterns sp ON e.shift_pattern_id = sp.id
      WHERE e.id = ?`
