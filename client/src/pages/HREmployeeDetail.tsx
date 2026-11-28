@@ -279,6 +279,24 @@ export const HREmployeeDetail: React.FC = () => {
               label={tr('Level Karyawan', 'Employee Level')}
               value={emp.level_name ? `${emp.level_code} · ${emp.level_name} (Rank ${emp.level_rank})` : '-'}
             />
+            {emp.bound_device_id && (
+              <div className="col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+                <div>
+                  <div className="text-[11px] font-semibold text-slate-500">{tr('Perangkat Terikat', 'Bound Mobile Device')}</div>
+                  <div className="text-xs font-bold text-slate-800">{emp.bound_device_label || emp.bound_device_id}</div>
+                </div>
+                <button
+                  type="button"
+                  onClick={async () => {
+                    await apiFetch(`/employees/${emp.id}/unbind-device`, { method: 'POST' });
+                    window.location.reload();
+                  }}
+                  className="px-2.5 py-1 rounded-lg bg-white border border-slate-200 text-[11px] font-bold text-red-600 hover:bg-red-50"
+                >
+                  {tr('Reset Perangkat', 'Unbind Device')}
+                </button>
+              </div>
+            )}
             <Field label={tr('Status Kepegawaian', 'Employment Status')} value={`${emp.employment_status} (${emp.lifecycle_status})`} />
             <Field label={t.employees.joinDate} value={emp.join_date ? formatDate(emp.join_date) : '-'} />
             <Field label={tr('Awal Kontrak', 'Contract Start')} value={emp.contract_start_date ? formatDate(emp.contract_start_date) : '-'} />

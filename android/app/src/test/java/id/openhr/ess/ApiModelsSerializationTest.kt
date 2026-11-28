@@ -40,7 +40,15 @@ class ApiModelsSerializationTest {
                 "id": "u1",
                 "email": "agus@nusantara.id",
                 "name": "Agus Setiawan",
-                "role": "employee"
+                "role": "employee",
+                "level": {
+                  "id": "lvl-1",
+                  "code": "MGR",
+                  "name": "Manager",
+                  "rank": 30,
+                  "capabilities": { "can_approve_leave": true },
+                  "bypass": { "bypass_geofence": true, "bypass_task_approval": true }
+                }
               }
             }
         """.trimIndent()
@@ -48,5 +56,8 @@ class ApiModelsSerializationTest {
         assertEquals("access-jwt", parsed.token)
         assertEquals("refresh-opaque-token", parsed.refreshToken)
         assertEquals("agus@nusantara.id", parsed.user.email)
+        assertTrue(parsed.user.canApproveAny())
+        assertTrue(parsed.user.hasGeofenceBypass())
+        assertTrue(parsed.user.hasTaskApprovalBypass())
     }
 }

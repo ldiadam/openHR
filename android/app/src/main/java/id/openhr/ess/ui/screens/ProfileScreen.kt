@@ -3,6 +3,7 @@ package id.openhr.ess.ui.screens
 import android.Manifest
 import android.content.pm.PackageManager
 import android.os.Build
+import android.widget.Toast
 import androidx.activity.compose.rememberLauncherForActivityResult
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.biometric.BiometricManager
@@ -28,6 +29,9 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
+import androidx.compose.ui.layout.ContentScale
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.AnnotatedString
@@ -67,6 +71,8 @@ fun ProfileScreen(
     val biometricEnabled by sessionStore.biometricEnabledFlow.collectAsState()
     val shiftReminderEnabled by sessionStore.shiftReminderEnabledFlow.collectAsState()
     val companyName by sessionStore.companyNameFlow.collectAsState()
+    val companyLogoUrl by sessionStore.companyLogoUrlFlow.collectAsState()
+    val baseUrl by sessionStore.baseUrlFlow.collectAsState()
 
     var profile by remember { mutableStateOf(repository.cachedProfile) }
     var loading by remember { mutableStateOf(repository.cachedProfile == null) }
@@ -79,9 +85,9 @@ fun ProfileScreen(
         if (granted) {
             sessionStore.setShiftReminderEnabled(true)
             ShiftReminderScheduler.schedule(context, null, null, lang)
-            feedback = tr(lang, "Pengingat presensi diaktifkan", "Shift reminders enabled") to false
+            Toast.makeText(context, tr(lang, "Pengingat presensi diaktifkan", "Shift reminders enabled"), Toast.LENGTH_SHORT).show()
         } else {
-            feedback = tr(lang, "Izin notifikasi diperlukan untuk pengingat shift.", "Notification permission required for reminders.") to true
+            Toast.makeText(context, tr(lang, "Izin notifikasi diperlukan untuk pengingat shift.", "Notification permission required for reminders."), Toast.LENGTH_SHORT).show()
         }
     }
 
@@ -169,24 +175,62 @@ fun ProfileScreen(
                             horizontalArrangement = Arrangement.SpaceBetween,
                             verticalAlignment = Alignment.CenterVertically
                         ) {
-                            Text(
-                                text = (companyName ?: "openHR").uppercase(),
-                                color = Color(0xFF93C5FD),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.ExtraBold,
-                                letterSpacing = 1.sp
-                            )
-                            Surface(
-                                shape = RoundedCornerShape(50),
-                                color = Color(0xFF10B981).copy(alpha = 0.22f)
-                            ) {
+                            if (!companyLogoUrl.isNullOrBlank() && baseUrl.isNotBlank()) {
+                                Surface(
+                                    shape = RoundedCornerShape(10.dp),
+                                    color = Color.White
+                                ) {
+                                    AsyncImage(
+                                        model = ImageRequest.Builder(context)
+                                            .data("$baseUrl$companyLogoUrl")
+                                            .crossfade(true)
+                                            .build(),
+                                        contentDescription = companyName,
+                                        contentScale = ContentScale.Fit,
+                                        modifier = Modifier
+                                            .height(26.dp)
+                                            .widthIn(max = 120.dp)
+                                            .padding(horizontal = 8.dp, vertical = 4.dp)
+                                    )
+                                }
+                            } else {
                                 Text(
-                                    text = (profile?.employment_status ?: "ACTIVE").uppercase(),
-                                    color = Color(0xFF6EE7B7),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.Bold,
-                                    modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    text = (companyName ?: "openHR").uppercase(),
+                                    color = Color(0xFF93C5FD),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.ExtraBold,
+                                    letterSpacing = 1.sp
                                 )
+                            }
+                            Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                val levelLabel = user?.level?.let { "${it.code} · ${it.name}" }
+                                    ?: profile?.level_code?.let { "$it · ${profile?.level_name ?: it}" }
+                                if (!levelLabel.isNullOrBlank()) {
+                                    Surface(
+                                        shape = RoundedCornerShape(50),
+                                        color = Color.White.copy(alpha = 0.2f)
+                                    ) {
+                                        Text(
+                                            text = levelLabel,
+                                            color = Color.White,
+                                            fontSize = 10.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                        )
+                                    }
+                                }
+                                Surface(
+                                    shape = RoundedCornerShape(50),
+                                    color = Color(0xFF10B981).copy(alpha = 0.22f)
+                                ) {
+                                    Text(
+                                        text = (profile?.employment_status ?: "ACTIVE").uppercase(),
+                                        color = Color(0xFF6EE7B7),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
+                                    )
+                                }
                             }
                         }
 
@@ -233,39 +277,16 @@ fun ProfileScreen(
                                 }
                             }
                         }
-
-                        // Copyable Chips (NIK, NPWP, Bank Acc)
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.spacedBy(8.dp)
-                        ) {
-                            CopyChip(
-                                label = "NIK",
-                                value = profile?.nik,
-                                modifier = Modifier.weight(1f),
-                                onClick = { copyToClipboard("NIK", profile?.nik) }
-                            )
-                            CopyChip(
-                                label = "NPWP",
-                                value = profile?.npwp_number,
-                                modifier = Modifier.weight(1f),
-                                onClick = { copyToClipboard("NPWP", profile?.npwp_number) }
-                            )
-                            CopyChip(
-                                label = tr(lang, "Rek", "Acct"),
-                                value = profile?.bank_account_number,
-                                modifier = Modifier.weight(1f),
-                                onClick = { copyToClipboard(tr(lang, "No. Rekening", "Account Number"), profile?.bank_account_number) }
-                            )
-                        }
                     }
                 }
 
-                // Identity & Legal Info
+                // Identity & Legal Info (collapsed by default)
                 ProfileSectionCard(
                     title = tr(lang, "Identitas & Pajak", "Identity & Tax"),
                     icon = Icons.Default.VerifiedUser,
-                    iconTint = palette.accent
+                    iconTint = palette.accent,
+                    collapsible = true,
+                    initiallyExpanded = false
                 ) {
                     ProfileRow(
                         label = if (profile?.is_foreign_worker == true) tr(lang, "No. Paspor", "Passport No.") else "KTP",
@@ -278,11 +299,13 @@ fun ProfileScreen(
                     ProfileRow(tr(lang, "Tanggal Bergabung", "Join Date"), Formatters.formatDisplayDate(profile?.join_date, lang))
                 }
 
-                // Payroll Bank Account (Sheet Edit)
+                // Payroll Bank Account (collapsed by default)
                 ProfileSectionCard(
                     title = tr(lang, "Rekening Bank Payroll", "Payroll Bank Account"),
                     icon = Icons.Default.CreditCard,
                     iconTint = Color(0xFF6366F1),
+                    collapsible = true,
+                    initiallyExpanded = false,
                     actionLabel = tr(lang, "Ubah", "Edit"),
                     onAction = {
                         val p = profile
@@ -304,11 +327,13 @@ fun ProfileScreen(
                     ProfileRow(tr(lang, "Atas Nama", "Account Holder"), profile?.bank_account_holder)
                 }
 
-                // Contact & Address (Sheet Edit)
+                // Contact & Address (collapsed by default)
                 ProfileSectionCard(
                     title = tr(lang, "Kontak & Alamat", "Contact & Address"),
                     icon = Icons.Default.Phone,
                     iconTint = palette.success,
+                    collapsible = true,
+                    initiallyExpanded = false,
                     actionLabel = tr(lang, "Ubah", "Edit"),
                     onAction = {
                         val p = profile
@@ -403,16 +428,21 @@ fun ProfileScreen(
                                     )
                                     if (authStatus == BiometricManager.BIOMETRIC_SUCCESS) {
                                         sessionStore.setBiometricEnabled(true)
-                                        feedback = tr(lang, "Kunci biometrik diaktifkan", "Biometric lock enabled") to false
+                                        Toast.makeText(context, tr(lang, "Kunci biometrik diaktifkan", "Biometric lock enabled"), Toast.LENGTH_SHORT).show()
                                     } else {
-                                        feedback = tr(
-                                            lang,
-                                            "Perangkat belum memiliki sidik jari / wajah aktif.",
-                                            "No biometrics enrolled on this device."
-                                        ) to true
+                                        Toast.makeText(
+                                            context,
+                                            tr(
+                                                lang,
+                                                "Perangkat belum memiliki sidik jari / wajah aktif.",
+                                                "No biometrics enrolled on this device."
+                                            ),
+                                            Toast.LENGTH_SHORT
+                                        ).show()
                                     }
                                 } else {
                                     sessionStore.setBiometricEnabled(false)
+                                    Toast.makeText(context, tr(lang, "Kunci biometrik dimatikan", "Biometric lock disabled"), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         )
@@ -451,11 +481,12 @@ fun ProfileScreen(
                                     } else {
                                         sessionStore.setShiftReminderEnabled(true)
                                         ShiftReminderScheduler.schedule(context, null, null, lang)
-                                        feedback = tr(lang, "Pengingat presensi diaktifkan", "Shift reminders enabled") to false
+                                        Toast.makeText(context, tr(lang, "Pengingat presensi diaktifkan", "Shift reminders enabled"), Toast.LENGTH_SHORT).show()
                                     }
                                 } else {
                                     sessionStore.setShiftReminderEnabled(false)
                                     ShiftReminderScheduler.cancel(context)
+                                    Toast.makeText(context, tr(lang, "Pengingat presensi dimatikan", "Shift reminders disabled"), Toast.LENGTH_SHORT).show()
                                 }
                             }
                         )
@@ -729,11 +760,14 @@ private fun ProfileSectionCard(
     title: String,
     icon: ImageVector,
     iconTint: Color,
+    collapsible: Boolean = false,
+    initiallyExpanded: Boolean = true,
     actionLabel: String? = null,
     onAction: (() -> Unit)? = null,
     content: @Composable ColumnScope.() -> Unit
 ) {
     val palette = LocalEssPalette.current
+    var expanded by remember { mutableStateOf(initiallyExpanded) }
     Surface(
         modifier = Modifier.fillMaxWidth(),
         shape = RoundedCornerShape(20.dp),
@@ -743,7 +777,9 @@ private fun ProfileSectionCard(
     ) {
         Column(modifier = Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) {
             Row(
-                modifier = Modifier.fillMaxWidth(),
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .then(if (collapsible) Modifier.clickable { expanded = !expanded } else Modifier),
                 horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
@@ -751,13 +787,25 @@ private fun ProfileSectionCard(
                     Icon(icon, contentDescription = null, tint = iconTint, modifier = Modifier.size(18.dp))
                     Text(title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.textPrimary)
                 }
-                if (actionLabel != null && onAction != null) {
-                    TextButton(onClick = onAction, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
-                        Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.accent)
+                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+                    if (actionLabel != null && onAction != null && expanded) {
+                        TextButton(onClick = onAction, contentPadding = PaddingValues(horizontal = 8.dp, vertical = 0.dp)) {
+                            Text(actionLabel, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.accent)
+                        }
+                    }
+                    if (collapsible) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = palette.textMuted,
+                            modifier = Modifier.size(20.dp)
+                        )
                     }
                 }
             }
-            content()
+            if (expanded) {
+                content()
+            }
         }
     }
 }

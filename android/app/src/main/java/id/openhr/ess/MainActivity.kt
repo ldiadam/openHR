@@ -7,6 +7,7 @@ import androidx.activity.enableEdgeToEdge
 import androidx.biometric.BiometricManager
 import androidx.biometric.BiometricPrompt
 import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.core.FastOutSlowInEasing
 import androidx.compose.animation.core.tween
 import androidx.compose.animation.fadeIn
@@ -24,7 +25,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import coil.ImageLoader
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
+import kotlinx.coroutines.delay
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -49,6 +55,26 @@ class MainActivity : FragmentActivity() {
             val themeMode by app.sessionStore.themeModeFlow.collectAsState()
             val biometricEnabled by app.sessionStore.biometricEnabledFlow.collectAsState()
             val lang by app.sessionStore.langFlow.collectAsState()
+            val baseUrl by app.sessionStore.baseUrlFlow.collectAsState()
+            val companyName by app.sessionStore.companyNameFlow.collectAsState()
+            val companyLogoUrl by app.sessionStore.companyLogoUrlFlow.collectAsState()
+            val context = LocalContext.current
+            val splashImageLoader = remember(app.apiClient.okHttpClient) {
+                ImageLoader.Builder(context).okHttpClient(app.apiClient.okHttpClient).build()
+            }
+            var showDynamicSplash by remember { mutableStateOf(baseUrl.isNotBlank() && !companyLogoUrl.isNullOrBlank()) }
+
+            LaunchedEffect(baseUrl) {
+                if (baseUrl.isNotBlank()) {
+                    app.repository.getPublicCompany()
+                }
+            }
+            LaunchedEffect(Unit) {
+                if (showDynamicSplash) {
+                    delay(650)
+                    showDynamicSplash = false
+                }
+            }
 
             val isLoggedIn = !token.isNullOrBlank() && user != null
             var biometricUnlocked by remember { mutableStateOf(!biometricEnabled) }
@@ -101,6 +127,50 @@ class MainActivity : FragmentActivity() {
                             sessionStore = app.sessionStore,
                             apiClient = app.apiClient
                         )
+                    }
+                }
+
+                AnimatedVisibility(
+                    visible = showDynamicSplash && !companyLogoUrl.isNullOrBlank(),
+                    enter = fadeIn(tween(150)),
+                    exit = fadeOut(tween(260))
+                ) {
+                    Box(
+                        modifier = Modifier
+                            .fillMaxSize()
+                            .background(Color(0xFF0F172A)),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        Column(
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(16.dp)
+                        ) {
+                            Surface(
+                                shape = RoundedCornerShape(20.dp),
+                                color = Color.White,
+                                shadowElevation = 8.dp
+                            ) {
+                                AsyncImage(
+                                    model = ImageRequest.Builder(context)
+                                        .data("$baseUrl$companyLogoUrl")
+                                        .crossfade(true)
+                                        .build(),
+                                    imageLoader = splashImageLoader,
+                                    contentDescription = companyName,
+                                    contentScale = ContentScale.Fit,
+                                    modifier = Modifier
+                                        .height(64.dp)
+                                        .widthIn(max = 200.dp)
+                                        .padding(horizontal = 18.dp, vertical = 10.dp)
+                                )
+                            }
+                            Text(
+                                text = companyName,
+                                color = Color.White.copy(alpha = 0.85f),
+                                fontWeight = FontWeight.Bold,
+                                fontSize = 15.sp
+                            )
+                        }
                     }
                 }
 

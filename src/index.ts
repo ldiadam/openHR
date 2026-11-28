@@ -55,7 +55,7 @@ app.get('/api/public/company', async (c) => {
     let comp: any = null;
     try {
       comp = await c.env.DB.prepare(
-        `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain, purelymail_api_token, purelymail_smtp_pass, modules_json FROM companies LIMIT 1`
+        `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain, purelymail_api_token, purelymail_smtp_pass, modules_json, anti_fake_gps_mode, block_rooted_devices, enforce_device_binding FROM companies LIMIT 1`
       ).first<any>();
     } catch {
       comp = await c.env.DB.prepare(
@@ -71,7 +71,12 @@ app.get('/api/public/company', async (c) => {
       c.env.DOCUSEAL_URL?.trim() && c.env.DOCUSEAL_API_TOKEN?.trim()
     );
     const modules = parseModulesConfig(comp?.modules_json, { hasDocuSealCreds, hasPurelymailCreds });
-    return c.json({ company: comp ? { ...comp, modules } : null });
+    const securityPolicy = {
+      anti_fake_gps_mode: comp?.anti_fake_gps_mode || 'block',
+      block_rooted_devices: Boolean(comp?.block_rooted_devices),
+      enforce_device_binding: Boolean(comp?.enforce_device_binding),
+    };
+    return c.json({ company: comp ? { ...comp, modules, securityPolicy } : null });
   } catch (err: any) {
     return c.json({ company: null });
   }

@@ -69,6 +69,42 @@ data class LogoutRequest(
 )
 
 @Serializable
+data class LevelCapabilitiesDto(
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_approve_leave: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_approve_overtime: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_approve_claims: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_approve_petty_cash: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_approve_kasbon: Boolean = false,
+    val approval_scope: String = "direct_reports",
+    val can_assign_tasks_to: String = "none",
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_view_all_tasks: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val can_force_close_tasks: Boolean = false
+)
+
+@Serializable
+data class LevelBypassDto(
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_approval_chain: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_leave_admin_check: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_leave_dept_head: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_leave_management: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_task_approval: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_geofence: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_claim_cutoff: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val bypass_petty_cash_limit: Boolean = false
+)
+
+@Serializable
+data class EmployeeLevelDto(
+    val id: String,
+    val code: String,
+    val name: String,
+    val rank: Int = 10,
+    val color: String = "#2563EB",
+    val capabilities: LevelCapabilitiesDto = LevelCapabilitiesDto(),
+    val bypass: LevelBypassDto = LevelBypassDto()
+)
+
+@Serializable
 data class UserSession(
     val id: String,
     val email: String,
@@ -77,12 +113,38 @@ data class UserSession(
     val name: String = "",
     val jobTitle: String? = null,
     val departmentId: String? = null,
-    val branchId: String? = null
-)
+    val branchId: String? = null,
+    val level: EmployeeLevelDto? = null
+) {
+    fun canApproveAny(): Boolean = level?.capabilities?.let {
+        it.can_approve_leave || it.can_approve_overtime || it.can_approve_claims || it.can_approve_petty_cash || it.can_approve_kasbon
+    } == true
+
+    fun hasGeofenceBypass(): Boolean = level?.bypass?.bypass_geofence == true
+
+    fun hasTaskApprovalBypass(): Boolean =
+        level?.bypass?.bypass_task_approval == true || level?.capabilities?.can_force_close_tasks == true
+}
 
 @Serializable
 data class PublicCompanyResponse(
     val company: PublicCompany? = null
+)
+
+@Serializable
+data class SecurityPolicyDto(
+    val anti_fake_gps_mode: String = "block",
+    @Serializable(with = FlexibleBooleanSerializer::class) val block_rooted_devices: Boolean = false,
+    @Serializable(with = FlexibleBooleanSerializer::class) val enforce_device_binding: Boolean = false
+)
+
+@Serializable
+data class ClientSecurityPayload(
+    @Serializable(with = FlexibleBooleanSerializer::class) val is_mock_location: Boolean = false,
+    val spoof_apps: List<String> = emptyList(),
+    @Serializable(with = FlexibleBooleanSerializer::class) val is_rooted: Boolean = false,
+    val device_id: String? = null,
+    val device_label: String? = null
 )
 
 @Serializable
@@ -93,7 +155,8 @@ data class PublicCompany(
     val address: String? = null,
     val phone: String? = null,
     val email: String? = null,
-    val modules: ModulesConfig? = null
+    val modules: ModulesConfig? = null,
+    val securityPolicy: SecurityPolicyDto? = null
 )
 
 @Serializable
@@ -163,7 +226,8 @@ data class ClockRequest(
     val device_timestamp: String,
     val local_date: String,
     val local_time: String,
-    val is_offline_sync: Int? = null
+    val is_offline_sync: Int? = null,
+    val security: ClientSecurityPayload? = null
 )
 
 @Serializable
@@ -187,7 +251,8 @@ data class OfflineClockRecord(
     val geofence_reason: String? = null,
     val device_timestamp: String,
     val local_date: String,
-    val local_time: String
+    val local_time: String,
+    val security: ClientSecurityPayload? = null
 )
 
 @Serializable
@@ -515,6 +580,10 @@ data class EmployeeProfile(
     val ptkp_status: String? = null,
     val join_date: String? = null,
     val job_title: String? = null,
+    val level_code: String? = null,
+    val level_name: String? = null,
+    val level_rank: Int? = null,
+    val level_color: String? = null,
     val employment_status: String? = null,
     val lifecycle_status: String? = null,
     val phone: String? = null,

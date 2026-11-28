@@ -5,6 +5,12 @@ import { putFile, getFile } from '../services/storage';
 import { resolveAttendanceDateTime, getZonedDateString, getZonedMonthString } from '../utils/date';
 import { makeId } from '../utils/id';
 import { getEmployeeLevelContext, hasLevelBypassOnly } from '../services/employee-levels';
+import {
+  ClientSecurityPayload,
+  detectTeleportSpeedKmh,
+  getSecurityPolicy,
+  logSecurityEvent,
+} from '../services/security';
 
 export const attendanceRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
 
@@ -123,6 +129,129 @@ attendanceRoutes.post('/clock', async (c) => {
   }
 
   const { todayDate, clockTime } = resolveAttendanceDateTime(body, emp.branch_timezone);
+  const ipAddress = c.req.header('CF-Connecting-IP') || c.req.header('X-Forwarded-For') || null;
+  const sec: ClientSecurityPayload = (body.security && typeof body.security === 'object') ? body.security : {};
+  const deviceId = typeof sec.device_id === 'string' && sec.device_id.trim() ? sec.device_id.trim() : null;
+  const deviceLabel = typeof sec.device_label === 'string' && sec.device_label.trim() ? sec.device_label.trim() : null;
+  const secFlags: string[] = [];
+
+  const securityPolicy = await getSecurityPolicy(c.env.DB);
+  const spoofApps = Array.isArray(sec.spoof_apps) ? sec.spoof_apps.filter((s) => typeof s === 'string' && s.trim()) : [];
+
+  if (sec.is_mock_location || spoofApps.length > 0) {
+    const eventType = sec.is_mock_location ? 'MOCK_LOCATION' : 'SPOOF_APP';
+    secFlags.push(eventType);
+    if (securityPolicy.anti_fake_gps_mode !== 'off') {
+      const blocked = securityPolicy.anti_fake_gps_mode === 'block';
+      await logSecurityEvent(c.env.DB, {
+        employeeId,
+        userId: user.userId,
+        eventType,
+        severity: 'critical',
+        actionTaken: blocked ? 'blocked' : 'flagged',
+        deviceId,
+        deviceLabel,
+        ipAddress,
+        latitude: latNum,
+        longitude: lngNum,
+        details: { spoofApps, isMock: Boolean(sec.is_mock_location), type },
+      });
+      if (blocked) {
+        return c.json(
+          {
+            error: 'Fake GPS / Mock Location terdeteksi. Nonaktifkan aplikasi lokasi palsu untuk presensi.',
+            code: 'MOCK_LOCATION_BLOCKED',
+          },
+          403
+        );
+      }
+    }
+  }
+
+  if (sec.is_rooted) {
+    secFlags.push('ROOT_DETECTED');
+    if (securityPolicy.block_rooted_devices) {
+      await logSecurityEvent(c.env.DB, {
+        employeeId,
+        userId: user.userId,
+        eventType: 'ROOT_DETECTED',
+        severity: 'high',
+        actionTaken: 'blocked',
+        deviceId,
+        deviceLabel,
+        ipAddress,
+        latitude: latNum,
+        longitude: lngNum,
+      });
+      return c.json(
+        {
+          error: 'Perangkat terdeteksi root / dimodifikasi dan diblokir oleh kebijakan perusahaan.',
+          code: 'ROOTED_DEVICE_BLOCKED',
+        },
+        403
+      );
+    }
+  }
+
+  if (securityPolicy.enforce_device_binding && deviceId) {
+    if (emp.bound_device_id && emp.bound_device_id !== deviceId) {
+      await logSecurityEvent(c.env.DB, {
+        employeeId,
+        userId: user.userId,
+        eventType: 'DEVICE_MISMATCH',
+        severity: 'high',
+        actionTaken: 'blocked',
+        deviceId,
+        deviceLabel,
+        ipAddress,
+        latitude: latNum,
+        longitude: lngNum,
+        details: { expectedDeviceId: emp.bound_device_id },
+      });
+      return c.json(
+        {
+          error: 'Akun ini terikat ke perangkat lain. Hubungi HR untuk reset perangkat.',
+          code: 'DEVICE_MISMATCH',
+        },
+        403
+      );
+    }
+    if (!emp.bound_device_id) {
+      await c.env.DB.prepare(
+        `UPDATE employees SET bound_device_id = ?, bound_device_label = ?, bound_device_at = CURRENT_TIMESTAMP WHERE id = ?`
+      )
+        .bind(deviceId, deviceLabel, employeeId)
+        .run()
+        .catch(() => {});
+    }
+  }
+
+  if (is_offline_sync && typeof body.device_timestamp === 'string' && body.device_timestamp.trim()) {
+    const devMs = Date.parse(body.device_timestamp.trim());
+    const nowMs = Date.now();
+    if (!Number.isFinite(devMs) || devMs > nowMs + 5 * 60 * 1000 || nowMs - devMs > 72 * 3600 * 1000) {
+      await logSecurityEvent(c.env.DB, {
+        employeeId,
+        userId: user.userId,
+        eventType: 'OFFLINE_TIMESTAMP_ANOMALY',
+        severity: 'medium',
+        actionTaken: 'blocked',
+        deviceId,
+        deviceLabel,
+        ipAddress,
+        latitude: latNum,
+        longitude: lngNum,
+        details: { device_timestamp: body.device_timestamp },
+      });
+      return c.json(
+        {
+          error: 'Waktu perangkat untuk sinkronisasi offline tidak valid atau sudah kedaluwarsa.',
+          code: 'INVALID_OFFLINE_TIMESTAMP',
+        },
+        400
+      );
+    }
+  }
 
   // Geofence calculation
   let distanceMeters = 0;
@@ -265,6 +394,42 @@ attendanceRoutes.post('/clock', async (c) => {
     });
   } else {
     // Clock out
+    if (record?.clock_in_lat && record?.clock_in_lng && record?.clock_in_time && securityPolicy.anti_fake_gps_mode !== 'off') {
+      const teleport = detectTeleportSpeedKmh(
+        Number(record.clock_in_lat),
+        Number(record.clock_in_lng),
+        String(record.clock_in_time),
+        latNum,
+        lngNum,
+        clockTime
+      );
+      if (teleport && teleport.distanceMeters > 2000 && teleport.speedKmh > securityPolicy.max_travel_speed_kmh) {
+        secFlags.push('TELEPORT');
+        const blocked = securityPolicy.anti_fake_gps_mode === 'block';
+        await logSecurityEvent(c.env.DB, {
+          employeeId,
+          userId: user.userId,
+          eventType: 'TELEPORT',
+          severity: 'high',
+          actionTaken: blocked ? 'blocked' : 'flagged',
+          deviceId,
+          deviceLabel,
+          ipAddress,
+          latitude: latNum,
+          longitude: lngNum,
+          details: { distanceMeters: Math.round(teleport.distanceMeters), speedKmh: Math.round(teleport.speedKmh) },
+        });
+        if (blocked) {
+          return c.json(
+            {
+              error: 'Perpindahan lokasi terlalu cepat (anomali GPS terdeteksi).',
+              code: 'SUSPICIOUS_TELEPORT',
+            },
+            403
+          );
+        }
+      }
+    }
     const clockOutMinutes = timeToMinutes(clockTime);
     const shiftEndMinutes = timeToMinutes(shiftEnd);
     const earlyMinutes = Math.max(0, shiftEndMinutes - clockOutMinutes);

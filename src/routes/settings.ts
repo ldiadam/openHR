@@ -5,6 +5,7 @@ import { sendEmail } from '../services/smtp';
 import { getTestEmail } from '../services/email-templates';
 import { deleteFile, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
+import { getSecurityPolicy, normalizeAntiFakeMode } from '../services/security';
 import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
 
 export const settingsRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext }>();
@@ -644,6 +645,45 @@ settingsRoutes.delete('/departments/:id', requireRole(['owner_admin']), async (c
 
   await c.env.DB.prepare(`DELETE FROM departments WHERE id = ?`).bind(deptId).run();
   return c.json({ message: 'Departemen berhasil dihapus' });
+});
+
+// 3b. Anti-Fake GPS & Security Policy + Events
+settingsRoutes.get('/security', async (c) => {
+  const policy = await getSecurityPolicy(c.env.DB);
+  return c.json({ policy });
+});
+
+settingsRoutes.put('/security', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const mode = normalizeAntiFakeMode(body.anti_fake_gps_mode);
+  const blockRooted = body.block_rooted_devices ? 1 : 0;
+  const enforceBinding = body.enforce_device_binding ? 1 : 0;
+  const maxSpeed = Math.max(50, Number(body.max_travel_speed_kmh || 250));
+
+  await c.env.DB.prepare(
+    `UPDATE companies
+     SET anti_fake_gps_mode = ?, block_rooted_devices = ?, enforce_device_binding = ?, max_travel_speed_kmh = ?, updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(mode, blockRooted, enforceBinding, maxSpeed)
+    .run();
+
+  const policy = await getSecurityPolicy(c.env.DB);
+  return c.json({ policy, message: 'Kebijakan keamanan presensi diperbarui.' });
+});
+
+settingsRoutes.get('/security/events', requireRole(['owner_admin', 'manager']), async (c) => {
+  try {
+    const rows = await c.env.DB.prepare(
+      `SELECT se.*, e.full_name, e.nik
+       FROM security_events se
+       LEFT JOIN employees e ON se.employee_id = e.id
+       ORDER BY se.created_at DESC
+       LIMIT 50`
+    ).all<any>();
+    return c.json({ events: rows.results || [] });
+  } catch {
+    return c.json({ events: [] });
+  }
 });
 
 // Notifications outbox (delivery status)

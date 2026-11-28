@@ -63,8 +63,11 @@ fun TeamApprovalsSection(
     val token by sessionStore.tokenFlow.collectAsState()
 
     val role = user?.role ?: "employee"
-    val canManagePeople = role == "owner_admin" || role == "manager"
-    val canManageFinance = role == "owner_admin" || role == "finance"
+    val lvlCaps = user?.level?.capabilities
+    val canManagePeople = role == "owner_admin" || role == "manager" ||
+        lvlCaps?.can_approve_leave == true || lvlCaps?.can_approve_overtime == true
+    val canManageFinance = role == "owner_admin" || role == "finance" ||
+        lvlCaps?.can_approve_claims == true || lvlCaps?.can_approve_petty_cash == true || lvlCaps?.can_approve_kasbon == true
 
     val availableTabs = buildList {
         if (canManagePeople && modules.leave) add("leave")
@@ -147,41 +150,73 @@ fun TeamApprovalsSection(
         }
     }
 
-    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
-        Row(
-            modifier = Modifier
-                .fillMaxWidth()
-                .horizontalScroll(rememberScrollState()),
-            horizontalArrangement = Arrangement.spacedBy(6.dp)
+    Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(12.dp)) {
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(14.dp),
+            color = palette.subtleSurface,
+            border = BorderStroke(1.dp, palette.cardBorder)
         ) {
-            availableTabs.forEach { tab ->
-                val count = when (tab) {
-                    "leave" -> leaveItems.size
-                    "overtime" -> otItems.size
-                    "corrections" -> corrItems.size
-                    "claims" -> claimItems.size
-                    "kasbon" -> kasbonItems.size
-                    else -> pettyCashItems.size
-                }
-                val label = when (tab) {
-                    "leave" -> tr(lang, "Cuti", "Leave")
-                    "overtime" -> tr(lang, "Lembur", "Overtime")
-                    "corrections" -> tr(lang, "Koreksi", "Corrections")
-                    "claims" -> tr(lang, "Klaim", "Claims")
-                    "kasbon" -> "Kasbon"
-                    else -> "Petty Cash"
-                }
-                FilterChip(
-                    selected = activeTab == tab,
-                    onClick = { activeTab = tab },
-                    label = {
-                        Text(
-                            if (count > 0) "$label ($count)" else label,
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.SemiBold
-                        )
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .horizontalScroll(rememberScrollState())
+                    .padding(4.dp),
+                horizontalArrangement = Arrangement.spacedBy(4.dp)
+            ) {
+                availableTabs.forEach { tab ->
+                    val count = when (tab) {
+                        "leave" -> leaveItems.size
+                        "overtime" -> otItems.size
+                        "corrections" -> corrItems.size
+                        "claims" -> claimItems.size
+                        "kasbon" -> kasbonItems.size
+                        else -> pettyCashItems.size
                     }
-                )
+                    val label = when (tab) {
+                        "leave" -> tr(lang, "Cuti", "Leave")
+                        "overtime" -> tr(lang, "Lembur", "Overtime")
+                        "corrections" -> tr(lang, "Koreksi", "Corrections")
+                        "claims" -> tr(lang, "Klaim", "Claims")
+                        "kasbon" -> "Kasbon"
+                        else -> "Petty Cash"
+                    }
+                    val selected = activeTab == tab
+                    Surface(
+                        onClick = { activeTab = tab },
+                        shape = RoundedCornerShape(10.dp),
+                        color = if (selected) palette.card else Color.Transparent,
+                        shadowElevation = if (selected) 1.dp else 0.dp
+                    ) {
+                        Row(
+                            modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(5.dp)
+                        ) {
+                            Text(
+                                text = label,
+                                fontSize = 12.sp,
+                                fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
+                                color = if (selected) palette.textPrimary else palette.textSecondary
+                            )
+                            if (count > 0) {
+                                Box(
+                                    modifier = Modifier
+                                        .clip(RoundedCornerShape(50))
+                                        .background(if (selected) palette.accent else palette.cardBorder)
+                                        .padding(horizontal = 6.dp, vertical = 1.dp)
+                                ) {
+                                    Text(
+                                        text = count.toString(),
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = if (selected) Color.White else palette.textPrimary
+                                    )
+                                }
+                            }
+                        }
+                    }
+                }
             }
         }
 
@@ -606,7 +641,7 @@ fun TasksSection(
                     items(tasks, key = { it.id }, contentType = { "tms_task" }) { t ->
                         val isAssignee = t.assignee_id == user?.employeeId
                         val canApprove = t.status == "pending_approval" &&
-                            (t.assignor_id == user?.employeeId || user?.role == "owner_admin" || user?.role == "manager")
+                            (t.assignor_id == user?.employeeId || user?.role == "owner_admin" || user?.role == "manager" || user?.hasTaskApprovalBypass() == true)
                         val isEditable = isAssignee && t.status !in setOf("pending_approval", "approved", "rejected")
 
                         Surface(

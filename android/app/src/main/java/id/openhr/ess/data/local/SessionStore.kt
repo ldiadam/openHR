@@ -170,6 +170,14 @@ class SessionStore(context: Context) {
 
     fun getBaseUrl(): String = _baseUrlFlow.value
 
+    fun getOrCreateDeviceId(): String {
+        val existing = prefs.getString(KEY_DEVICE_ID, null)
+        if (!existing.isNullOrBlank()) return existing
+        val created = "dev-${java.util.UUID.randomUUID()}"
+        prefs.edit().putString(KEY_DEVICE_ID, created).apply()
+        return created
+    }
+
     fun saveSession(token: String, user: UserSession, refreshToken: String? = getRefreshToken()) {
         val editor = prefs.edit()
             .putString(KEY_TOKEN, token)
@@ -233,6 +241,7 @@ class SessionStore(context: Context) {
         private const val KEY_REFRESH_TOKEN = "refresh_token"
         private const val KEY_USER = "user"
         private const val KEY_BASE_URL = "base_url"
+        private const val KEY_DEVICE_ID = "device_id"
         private const val KEY_LANG = "lang"
         private const val KEY_OFFLINE_QUEUE = "offline_queue"
         private const val KEY_MODULES = "modules"

@@ -104,9 +104,12 @@ fun RequestsScreen(
     val baseUrl by sessionStore.baseUrlFlow.collectAsState()
     val token by sessionStore.tokenFlow.collectAsState()
 
-    val isReviewer = (user?.role ?: "employee") in setOf("owner_admin", "manager", "finance")
+    val isReviewer = (user?.role ?: "employee") in setOf("owner_admin", "manager", "finance") ||
+        user?.canApproveAny() == true
     var taskInboxCount by remember { mutableIntStateOf(0) }
     var teamPendingCount by remember { mutableIntStateOf(0) }
+    var announcements by remember { mutableStateOf<List<AnnouncementItem>>(emptyList()) }
+    var showAnnouncementsSheet by remember { mutableStateOf(false) }
 
     var section by remember { mutableStateOf(RequestSection.HUB) }
     var showFormSheet by remember { mutableStateOf(false) }
@@ -199,10 +202,11 @@ fun RequestsScreen(
                 repository.getKasbonRequests().onSuccess { kasbonList = it }
             }
             repository.getTasks("inbox").onSuccess { taskInboxCount = it.counts.inbox }
+            repository.getAnnouncements().onSuccess { announcements = it }
             if (isReviewer) {
                 var total = 0
                 val role = user?.role ?: "employee"
-                if (role == "owner_admin" || role == "manager") {
+                if (role == "owner_admin" || role == "manager" || user?.level?.capabilities?.can_approve_leave == true || user?.level?.capabilities?.can_approve_overtime == true) {
                     if (modules.leave) repository.getTeamLeaveRequests().onSuccess { total += it.count { r -> r.status == "pending" } }
                     if (modules.attendance) {
                         repository.getTeamOvertimeRequests().onSuccess { total += it.count { r -> r.status == "pending" } }
@@ -361,6 +365,33 @@ fun RequestsScreen(
                         style = MaterialTheme.typography.bodySmall,
                         color = palette.textSecondary
                     )
+                }
+                val unackedCount = announcements.count { !it.acknowledged }
+                Surface(
+                    onClick = { showAnnouncementsSheet = true },
+                    shape = RoundedCornerShape(12.dp),
+                    color = palette.card,
+                    border = BorderStroke(1.dp, palette.cardBorder),
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            imageVector = if (unackedCount > 0) Icons.Default.NotificationsActive else Icons.Default.Notifications,
+                            contentDescription = "Announcements",
+                            tint = if (unackedCount > 0) palette.accent else palette.textSecondary,
+                            modifier = Modifier.size(19.dp)
+                        )
+                        if (unackedCount > 0) {
+                            Box(
+                                modifier = Modifier
+                                    .align(Alignment.TopEnd)
+                                    .padding(7.dp)
+                                    .size(8.dp)
+                                    .clip(RoundedCornerShape(50))
+                                    .background(palette.danger)
+                            )
+                        }
+                    }
                 }
             }
 
@@ -1382,6 +1413,84 @@ fun RequestsScreen(
                 }
             }
         )
+    }
+
+    if (showAnnouncementsSheet) {
+        ModalBottomSheet(
+            onDismissRequest = { showAnnouncementsSheet = false },
+            containerColor = palette.card
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 18.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(
+                    tr(lang, "Pengumuman Perusahaan", "Company Announcements"),
+                    fontWeight = FontWeight.Bold,
+                    fontSize = 17.sp,
+                    color = palette.textPrimary
+                )
+                if (announcements.isEmpty()) {
+                    Text(
+                        tr(lang, "Belum ada pengumuman.", "No announcements yet."),
+                        fontSize = 13.sp,
+                        color = palette.textMuted,
+                        modifier = Modifier.padding(vertical = 12.dp)
+                    )
+                } else {
+                    announcements.take(8).forEach { item ->
+                        Surface(
+                            shape = RoundedCornerShape(14.dp),
+                            color = palette.subtleSurface,
+                            border = BorderStroke(1.dp, palette.cardBorder),
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(
+                                modifier = Modifier.padding(12.dp),
+                                verticalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(item.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.weight(1f))
+                                    if (item.acknowledged) {
+                                        Text(tr(lang, "✓ Dibaca", "✓ Read"), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = palette.success)
+                                    }
+                                }
+                                Text(item.body, fontSize = 12.sp, color = palette.textSecondary)
+                                if (!item.acknowledged) {
+                                    TextButton(
+                                        onClick = {
+                                            scope.launch {
+                                                repository.acknowledgeAnnouncement(item.id).onSuccess {
+                                                    announcements = announcements.map {
+                                                        if (it.id == item.id) it.copy(acknowledged = true) else it
+                                                    }
+                                                }
+                                            }
+                                        },
+                                        contentPadding = PaddingValues(0.dp)
+                                    ) {
+                                        Text(
+                                            if (item.require_ack) tr(lang, "Konfirmasi Dibaca", "Acknowledge")
+                                            else tr(lang, "Tandai Dibaca", "Mark Read"),
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.Bold,
+                                            color = palette.accent
+                                        )
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
     }
 }
 

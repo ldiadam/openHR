@@ -19,7 +19,8 @@ import kotlin.coroutines.resume
 data class GpsReading(
     val latitude: Double,
     val longitude: Double,
-    val accuracyMeters: Float
+    val accuracyMeters: Float,
+    val isMock: Boolean = false
 )
 
 object LocationHelper {
@@ -109,7 +110,8 @@ object LocationHelper {
         return GpsReading(
             latitude = latitude,
             longitude = longitude,
-            accuracyMeters = accuracy
+            accuracyMeters = accuracy,
+            isMock = SecurityGuard.isLocationMocked(this)
         )
     }
 }

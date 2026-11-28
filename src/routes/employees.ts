@@ -1200,3 +1200,14 @@ employeeRoutes.get('/:id/severance', requireRole(['owner_admin']), async (c) => 
     note: 'Estimasi berdasarkan PP 35/2021. Sesuaikan dengan alasan PHK dan perjanjian kerja.',
   });
 });
+
+// Unbind Employee Mobile Device (HR Reset)
+employeeRoutes.post('/:id/unbind-device', requireRole(['owner_admin']), async (c) => {
+  const empId = c.req.param('id');
+  await c.env.DB.prepare(
+    `UPDATE employees SET bound_device_id = NULL, bound_device_label = NULL, bound_device_at = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  )
+    .bind(empId)
+    .run();
+  return c.json({ message: 'Perangkat karyawan berhasil direset.' });
+});

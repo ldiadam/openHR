@@ -92,7 +92,16 @@ class EssRepository(
         val queue = sessionStore.offlineQueueFlow.value
         if (queue.isEmpty()) return SyncResult(0, 0)
 
-        val nonRetryable = setOf("ALREADY_CLOCKED_IN", "ALREADY_CLOCKED_OUT", "NOT_CLOCKED_IN")
+        val nonRetryable = setOf(
+            "ALREADY_CLOCKED_IN",
+            "ALREADY_CLOCKED_OUT",
+            "NOT_CLOCKED_IN",
+            "MOCK_LOCATION_BLOCKED",
+            "ROOTED_DEVICE_BLOCKED",
+            "DEVICE_MISMATCH",
+            "INVALID_OFFLINE_TIMESTAMP",
+            "SUSPICIOUS_TELEPORT"
+        )
         val remaining = mutableListOf<OfflineClockRecord>()
         val geofenceNeeded = mutableListOf<OfflineClockRecord>()
         var synced = 0
@@ -109,7 +118,8 @@ class EssRepository(
                 device_timestamp = item.device_timestamp,
                 local_date = item.local_date,
                 local_time = item.local_time,
-                is_offline_sync = 1
+                is_offline_sync = 1,
+                security = item.security
             )
 
             try {

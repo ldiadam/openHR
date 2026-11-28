@@ -186,32 +186,49 @@ fun AttendanceScreen(
             FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
         }
 
-        // Summary 3 Metric Tiles
-        Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-            SummaryStatTile(
-                label = tr(lang, "Hadir Tepat", "On Time"),
-                value = summary.present.toString(),
-                icon = Icons.Default.CheckCircle,
-                tint = palette.success,
-                surface = palette.successSurface,
-                modifier = Modifier.weight(1f)
-            )
-            SummaryStatTile(
-                label = tr(lang, "Terlambat", "Late"),
-                value = summary.late.toString(),
-                icon = Icons.Default.Schedule,
-                tint = palette.warning,
-                surface = palette.warningSurface,
-                modifier = Modifier.weight(1f)
-            )
-            SummaryStatTile(
-                label = tr(lang, "Total Telat", "Total Late"),
-                value = "${summary.totalLateMinutes}m",
-                icon = Icons.Default.Timer,
-                tint = palette.accent,
-                surface = palette.accentSurface,
-                modifier = Modifier.weight(1f)
-            )
+        // Unified 3-Column Attendance Summary Card
+        Surface(
+            modifier = Modifier.fillMaxWidth(),
+            shape = RoundedCornerShape(16.dp),
+            color = palette.card,
+            border = BorderStroke(1.dp, palette.cardBorder),
+            shadowElevation = 0.dp
+        ) {
+            Row(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(vertical = 12.dp, horizontal = 8.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                @Composable
+                fun StatCol(label: String, value: String, color: Color, modifier: Modifier) {
+                    Column(
+                        modifier = modifier,
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(2.dp)
+                    ) {
+                        Text(
+                            text = value,
+                            fontSize = 20.sp,
+                            fontWeight = FontWeight.ExtraBold,
+                            color = color,
+                            style = TextStyle(fontFeatureSettings = "tnum")
+                        )
+                        Text(
+                            text = label,
+                            fontSize = 10.sp,
+                            fontWeight = FontWeight.SemiBold,
+                            color = palette.textSecondary,
+                            maxLines = 1
+                        )
+                    }
+                }
+                StatCol(tr(lang, "Tepat Waktu", "On Time"), summary.present.toString(), palette.success, Modifier.weight(1f))
+                Box(modifier = Modifier.width(1.dp).height(28.dp).background(palette.cardBorder))
+                StatCol(tr(lang, "Terlambat", "Late"), summary.late.toString(), palette.warning, Modifier.weight(1f))
+                Box(modifier = Modifier.width(1.dp).height(28.dp).background(palette.cardBorder))
+                StatCol(tr(lang, "Total Telat", "Total Late"), "${summary.totalLateMinutes}m", palette.accent, Modifier.weight(1f))
+            }
         }
 
         // Action Bar: Request Correction + Shift Roster + Requests Shortcut
@@ -731,18 +748,26 @@ private fun AttendanceTimelineCard(
         } else null
     }
 
+    var expanded by remember { mutableStateOf(false) }
+    val hasExtra = workText != null ||
+        rec.is_offline_sync == 1 ||
+        !rec.clock_in_photo_key.isNullOrBlank() ||
+        !rec.clock_out_photo_key.isNullOrBlank() ||
+        (!rec.clock_in_time.isNullOrBlank() && rec.clock_out_time.isNullOrBlank() && rec.date < todayStr)
+
     Surface(
+        onClick = { if (hasExtra) expanded = !expanded },
         modifier = Modifier.fillMaxWidth(),
-        shape = RoundedCornerShape(18.dp),
+        shape = RoundedCornerShape(16.dp),
         color = palette.card,
         border = BorderStroke(1.dp, palette.cardBorder),
         shadowElevation = 0.dp
     ) {
         Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.spacedBy(10.dp)
+            modifier = Modifier.padding(12.dp),
+            verticalArrangement = Arrangement.spacedBy(8.dp)
         ) {
-            // Top Row: Date Badge + Status Pill + Work Duration
+            // Compact Summary Row: Date Badge + Weekday & In->Out times + StatusPill
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
@@ -750,24 +775,24 @@ private fun AttendanceTimelineCard(
             ) {
                 Column(
                     modifier = Modifier
-                        .size(width = 44.dp, height = 44.dp)
-                        .clip(RoundedCornerShape(12.dp))
+                        .size(width = 42.dp, height = 42.dp)
+                        .clip(RoundedCornerShape(11.dp))
                         .background(palette.subtleSurface)
-                        .border(1.dp, palette.cardBorder, RoundedCornerShape(12.dp)),
+                        .border(1.dp, palette.cardBorder, RoundedCornerShape(11.dp)),
                     horizontalAlignment = Alignment.CenterHorizontally,
                     verticalArrangement = Arrangement.Center
                 ) {
                     Text(
                         dayNumber,
                         fontWeight = FontWeight.Black,
-                        fontSize = 15.sp,
+                        fontSize = 14.sp,
                         color = palette.textPrimary,
                         style = TextStyle(fontFeatureSettings = "tnum")
                     )
                     Text(
                         monthShort,
                         fontWeight = FontWeight.Bold,
-                        fontSize = 9.sp,
+                        fontSize = 8.5.sp,
                         color = palette.accent,
                         letterSpacing = 0.5.sp
                     )
@@ -780,73 +805,38 @@ private fun AttendanceTimelineCard(
                         fontSize = 13.sp,
                         color = palette.textPrimary
                     )
-                    if (workText != null) {
-                        Text(
-                            "${tr(lang, "Durasi kerja", "Worked")}: $workText",
-                            fontSize = 11.sp,
-                            color = palette.textSecondary,
-                            style = TextStyle(fontFeatureSettings = "tnum")
-                        )
-                    } else {
-                        Text(rec.date.take(10), fontSize = 11.sp, color = palette.textMuted)
-                    }
+                    Text(
+                        "${rec.clock_in_time?.take(5) ?: "--:--"}  →  ${rec.clock_out_time?.take(5) ?: "--:--"}",
+                        fontFamily = FontFamily.Monospace,
+                        fontSize = 12.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textSecondary,
+                        style = TextStyle(fontFeatureSettings = "tnum")
+                    )
                 }
 
                 StatusPill(status = rec.status, lang = lang, lateMinutes = rec.late_minutes)
-            }
-
-            // Timeline Masuk -> Pulang Bar
-            Row(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .clip(RoundedCornerShape(12.dp))
-                    .background(palette.subtleSurface)
-                    .padding(horizontal = 12.dp, vertical = 10.dp),
-                verticalAlignment = Alignment.CenterVertically,
-                horizontalArrangement = Arrangement.SpaceBetween
-            ) {
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (rec.clock_in_time != null) palette.success else palette.textMuted)
-                    )
-                    Column {
-                        Text(tr(lang, "MASUK", "CLOCK IN"), fontSize = 9.sp, fontWeight = FontWeight.Bold, color = palette.textMuted)
-                        Text(
-                            rec.clock_in_time?.take(5) ?: "--:--",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = palette.textPrimary,
-                            style = TextStyle(fontFeatureSettings = "tnum")
+                Box(modifier = Modifier.size(20.dp), contentAlignment = Alignment.Center) {
+                    if (hasExtra) {
+                        Icon(
+                            imageVector = if (expanded) Icons.Default.ExpandLess else Icons.Default.ExpandMore,
+                            contentDescription = null,
+                            tint = palette.textMuted,
+                            modifier = Modifier.size(18.dp)
                         )
                     }
                 }
+            }
 
-                Icon(Icons.Default.ArrowForward, contentDescription = null, tint = palette.textMuted, modifier = Modifier.size(16.dp))
-
-                Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(tr(lang, "PULANG", "CLOCK OUT"), fontSize = 9.sp, fontWeight = FontWeight.Bold, color = palette.textMuted)
-                        Text(
-                            rec.clock_out_time?.take(5) ?: "--:--",
-                            fontFamily = FontFamily.Monospace,
-                            fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = palette.textPrimary,
-                            style = TextStyle(fontFeatureSettings = "tnum")
-                        )
-                    }
-                    Box(
-                        modifier = Modifier
-                            .size(8.dp)
-                            .clip(CircleShape)
-                            .background(if (rec.clock_out_time != null) palette.accent else palette.textMuted)
+            if (expanded) {
+                if (workText != null) {
+                    Text(
+                        "${tr(lang, "Durasi kerja", "Worked")}: $workText",
+                        fontSize = 11.sp,
+                        color = palette.textSecondary,
+                        style = TextStyle(fontFeatureSettings = "tnum")
                     )
                 }
-            }
 
             // Missing Clock Out Shortcut
             if (!rec.clock_in_time.isNullOrBlank() && rec.clock_out_time.isNullOrBlank() && rec.date < todayStr) {
@@ -910,6 +900,7 @@ private fun AttendanceTimelineCard(
                         )
                     }
                 }
+            }
             }
         }
     }

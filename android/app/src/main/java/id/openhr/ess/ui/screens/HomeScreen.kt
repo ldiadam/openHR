@@ -55,6 +55,7 @@ import id.openhr.ess.ui.theme.LocalEssPalette
 import id.openhr.ess.util.Formatters
 import id.openhr.ess.util.GpsReading
 import id.openhr.ess.util.LocationHelper
+import id.openhr.ess.util.SecurityGuard
 import id.openhr.ess.util.ShiftReminderScheduler
 import kotlinx.coroutines.delay
 import kotlinx.coroutines.launch
@@ -116,83 +117,47 @@ private fun MapBackgroundLayer(
                 .padding(24.dp),
             contentAlignment = Alignment.Center
         ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(24.dp),
-                color = palette.card,
-                border = BorderStroke(1.dp, palette.cardBorder),
-                shadowElevation = 3.dp
+            Column(
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
-                Column(
-                    modifier = Modifier.padding(22.dp),
-                    horizontalAlignment = Alignment.CenterHorizontally,
-                    verticalArrangement = Arrangement.spacedBy(10.dp)
-                ) {
-                    Box(
-                        modifier = Modifier
-                            .size(56.dp)
-                            .clip(CircleShape)
-                            .background(if (gpsBlocked) palette.dangerSurface else palette.accentSurface),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        if (detectingGps) {
-                            CircularProgressIndicator(modifier = Modifier.size(24.dp), strokeWidth = 2.5.dp)
-                        } else {
-                            Icon(
-                                imageVector = if (gpsBlocked) Icons.Default.LocationOff else Icons.Default.LocationOn,
-                                contentDescription = null,
-                                tint = if (gpsBlocked) palette.danger else palette.accent,
-                                modifier = Modifier.size(26.dp)
-                            )
-                        }
-                    }
-
+                if (detectingGps) {
+                    CircularProgressIndicator(
+                        modifier = Modifier.size(28.dp),
+                        strokeWidth = 2.5.dp,
+                        color = palette.accent
+                    )
+                    Text(
+                        text = tr(lang, "Mendeteksi lokasi...", "Detecting location..."),
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.Medium,
+                        color = palette.textSecondary
+                    )
+                } else {
+                    Icon(
+                        imageVector = if (gpsBlocked) Icons.Default.LocationOff else Icons.Default.LocationOn,
+                        contentDescription = null,
+                        tint = if (gpsBlocked) palette.danger else palette.accent,
+                        modifier = Modifier.size(30.dp)
+                    )
                     Text(
                         text = if (gpsBlocked) {
-                            tr(lang, "Lokasi Tidak Tersedia", "Location Unavailable")
+                            tr(lang, "Lokasi GPS belum aktif", "Location unavailable")
                         } else {
-                            tr(lang, "Mendeteksi Lokasi...", "Detecting Location...")
+                            tr(lang, "Aktifkan lokasi GPS untuk presensi", "Enable GPS location to clock in")
                         },
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 15.sp,
-                        color = palette.textPrimary
-                    )
-
-                    Text(
-                        text = if (!hasLocationPermission) {
-                            tr(
-                                lang,
-                                "Izinkan akses lokasi GPS untuk memuat peta & melakukan presensi.",
-                                "Allow GPS location access to load the map and clock in."
-                            )
-                        } else {
-                            tr(
-                                lang,
-                                "Pastikan GPS perangkat aktif lalu ketuk tombol di bawah untuk mencoba lagi.",
-                                "Make sure your device GPS is enabled and tap below to retry."
-                            )
-                        },
-                        fontSize = 12.sp,
-                        color = palette.textMuted,
+                        fontSize = 13.sp,
+                        fontWeight = FontWeight.SemiBold,
+                        color = palette.textPrimary,
                         textAlign = TextAlign.Center
                     )
-
-                    Button(
+                    FilledTonalButton(
                         onClick = onRequestLocation,
-                        enabled = !detectingGps,
-                        shape = RoundedCornerShape(14.dp),
-                        modifier = Modifier.fillMaxWidth().height(46.dp)
+                        shape = RoundedCornerShape(50)
                     ) {
                         Icon(Icons.Default.Refresh, contentDescription = null, modifier = Modifier.size(16.dp))
                         Spacer(modifier = Modifier.width(6.dp))
-                        Text(
-                            text = if (detectingGps) {
-                                tr(lang, "Mendeteksi...", "Detecting...")
-                            } else {
-                                tr(lang, "Deteksi Lokasi GPS", "Detect GPS Location")
-                            },
-                            fontWeight = FontWeight.Bold
-                        )
+                        Text(tr(lang, "Deteksi Lokasi", "Detect Location"), fontSize = 12.sp, fontWeight = FontWeight.Bold)
                     }
                 }
             }
@@ -247,6 +212,22 @@ fun HomeScreen(
     val token by sessionStore.tokenFlow.collectAsState()
     var announcements by remember { mutableStateOf<List<AnnouncementItem>>(repository.cachedAnnouncements ?: emptyList()) }
     var showAnnouncementsSheet by remember { mutableStateOf(false) }
+    var securityPolicy by remember { mutableStateOf(SecurityPolicyDto()) }
+    val deviceId = remember { sessionStore.getOrCreateDeviceId() }
+    val securityReport = remember(gps, securityPolicy) {
+        SecurityGuard.evaluate(context, deviceId, gps)
+    }
+    val securityBlockReason = remember(securityReport, securityPolicy, lang) {
+        when {
+            securityPolicy.anti_fake_gps_mode == "block" && securityReport.isMockLocation ->
+                tr(lang, "Fake GPS / Mock Location terdeteksi. Matikan lokasi palsu untuk presensi.", "Mock Location detected. Disable Fake GPS to clock in.")
+            securityPolicy.anti_fake_gps_mode == "block" && securityReport.spoofApps.isNotEmpty() ->
+                tr(lang, "Aplikasi Fake GPS terdeteksi di perangkat ini.", "Fake GPS app detected on this device.")
+            securityPolicy.block_rooted_devices && securityReport.isRooted ->
+                tr(lang, "Perangkat terdeteksi root dan diblokir oleh kebijakan perusahaan.", "Rooted device is blocked by company security policy.")
+            else -> null
+        }
+    }
 
     LaunchedEffect(isVisible) {
         if (!isVisible) return@LaunchedEffect
@@ -267,6 +248,11 @@ fun HomeScreen(
         }
         scope.launch {
             repository.getAnnouncements().onSuccess { announcements = it }
+        }
+        scope.launch {
+            repository.getPublicCompany().onSuccess { comp ->
+                comp?.securityPolicy?.let { securityPolicy = it }
+            }
         }
         scope.launch {
             var matched: TodayAttendanceRecord? = null
@@ -429,7 +415,7 @@ fun HomeScreen(
             return
         }
 
-        if (geofenceReason.isNullOrBlank() && distanceToOffice != null && distanceToOffice > officeRadius) {
+        if (user?.hasGeofenceBypass() != true && geofenceReason.isNullOrBlank() && distanceToOffice != null && distanceToOffice > officeRadius) {
             geofenceReasonInput = ""
             geofencePrompt = PendingGeofencePrompt(action, photoBase64, distanceToOffice)
             return
@@ -438,6 +424,19 @@ fun HomeScreen(
         val localDate = Formatters.localDateString()
         val localTime = Formatters.localTimeString()
         val deviceTs = "${localDate}T$localTime"
+
+        val secPayload = ClientSecurityPayload(
+            is_mock_location = securityReport.isMockLocation,
+            spoof_apps = securityReport.spoofApps,
+            is_rooted = securityReport.isRooted,
+            device_id = securityReport.deviceId,
+            device_label = securityReport.deviceLabel
+        )
+
+        if (securityBlockReason != null) {
+            feedback = securityBlockReason to true
+            return
+        }
 
         fun queueOfflinePunch() {
             sessionStore.enqueueOfflineClock(
@@ -450,7 +449,8 @@ fun HomeScreen(
                     geofence_reason = geofenceReason,
                     device_timestamp = deviceTs,
                     local_date = localDate,
-                    local_time = localTime
+                    local_time = localTime,
+                    security = secPayload
                 )
             )
             feedback = tr(
@@ -477,7 +477,8 @@ fun HomeScreen(
                     geofence_reason = geofenceReason,
                     device_timestamp = deviceTs,
                     local_date = localDate,
-                    local_time = localTime
+                    local_time = localTime,
+                    security = secPayload
                 )
             ).onSuccess { res ->
                 val lateNote = if (res.lateMinutes > 0) {
@@ -616,7 +617,7 @@ fun HomeScreen(
 
                     Column(horizontalAlignment = Alignment.End) {
                         Text(
-                            text = currentTime.format(DateTimeFormatter.ofPattern("HH:mm:ss")),
+                            text = currentTime.format(DateTimeFormatter.ofPattern("HH:mm")),
                             style = TextStyle(
                                 fontWeight = FontWeight.ExtraBold,
                                 fontSize = 15.sp,
@@ -630,29 +631,6 @@ fun HomeScreen(
                             fontSize = 10.sp,
                             color = palette.textMuted
                         )
-                    }
-
-                    val unackedCount = announcements.count { !it.acknowledged }
-                    IconButton(
-                        onClick = { showAnnouncementsSheet = true },
-                        modifier = Modifier.size(34.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.TopEnd) {
-                            Icon(
-                                imageVector = if (unackedCount > 0) Icons.Default.NotificationsActive else Icons.Default.Notifications,
-                                contentDescription = "Announcements",
-                                tint = if (unackedCount > 0) palette.accent else palette.textSecondary,
-                                modifier = Modifier.size(19.dp)
-                            )
-                            if (unackedCount > 0) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(palette.danger)
-                                )
-                            }
-                        }
                     }
 
                     IconButton(
@@ -670,100 +648,19 @@ fun HomeScreen(
                             }
                         },
                         enabled = !detectingGps,
-                        modifier = Modifier.size(34.dp)
+                        modifier = Modifier.size(32.dp)
                     ) {
                         if (detectingGps) {
-                            CircularProgressIndicator(modifier = Modifier.size(16.dp), strokeWidth = 2.dp)
+                            CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
                         } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = palette.textSecondary, modifier = Modifier.size(18.dp))
+                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = palette.textSecondary, modifier = Modifier.size(17.dp))
                         }
                     }
                 }
             }
 
-            if (gps != null) {
-                Row(
-                    modifier = Modifier.fillMaxWidth(),
-                    horizontalArrangement = Arrangement.SpaceBetween,
-                    verticalAlignment = Alignment.CenterVertically
-                ) {
-                    if (branch != null) {
-                        val dotColor = if (withinOffice) palette.success else palette.warning
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = palette.card.copy(alpha = 0.95f),
-                            border = BorderStroke(1.dp, palette.cardBorder),
-                            shadowElevation = 2.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(dotColor)
-                                )
-                                Text(
-                                    text = "${branch?.name ?: tr(lang, "Kantor", "Office")} · " +
-                                        if (distanceToOffice != null) {
-                                            if (withinOffice) {
-                                                tr(lang, "Dalam radius (${distanceToOffice.roundToInt()}m)", "In radius (${distanceToOffice.roundToInt()}m)")
-                                            } else {
-                                                tr(lang, "Luar radius (${distanceToOffice.roundToInt()}m)", "Outside (${distanceToOffice.roundToInt()}m)")
-                                            }
-                                        } else {
-                                            "${officeRadius}m"
-                                        },
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.textPrimary
-                                )
-                            }
-                        }
-                    } else {
-                        Surface(
-                            shape = RoundedCornerShape(50),
-                            color = palette.card.copy(alpha = 0.95f),
-                            border = BorderStroke(1.dp, palette.cardBorder),
-                            shadowElevation = 2.dp
-                        ) {
-                            Row(
-                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp),
-                                verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(8.dp)
-                                        .clip(CircleShape)
-                                        .background(palette.success)
-                                )
-                                Text(
-                                    text = tr(
-                                        lang,
-                                        "GPS Terkunci (±${gps!!.accuracyMeters.roundToInt()}m)",
-                                        "GPS Locked (±${gps!!.accuracyMeters.roundToInt()}m)"
-                                    ),
-                                    fontSize = 11.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.textPrimary
-                                )
-                            }
-                        }
-                    }
-
-                    SmallFloatingActionButton(
-                        onClick = { recenterTrigger++ },
-                        containerColor = palette.card.copy(alpha = 0.95f),
-                        contentColor = palette.accent,
-                        shape = CircleShape
-                    ) {
-                        Icon(Icons.Default.MyLocation, contentDescription = "Recenter", modifier = Modifier.size(18.dp))
-                    }
-                }
+            securityBlockReason?.let { reason ->
+                FeedbackBanner(message = reason, isError = true, onDismiss = {})
             }
 
             feedback?.let { (msg, isErr) ->
@@ -802,7 +699,7 @@ fun HomeScreen(
                 if (gps != null && !dayComplete) {
                     Box(
                         modifier = Modifier
-                            .size(172.dp)
+                            .size(144.dp)
                             .scale(pulseScale)
                             .clip(CircleShape)
                             .background(
@@ -813,12 +710,12 @@ fun HomeScreen(
 
                 Box(
                     modifier = Modifier
-                        .size(160.dp)
-                        .shadow(14.dp, CircleShape)
+                        .size(134.dp)
+                        .shadow(12.dp, CircleShape)
                         .clip(CircleShape)
                         .background(palette.card.copy(alpha = 0.94f))
                         .border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
-                        .padding(7.dp),
+                        .padding(6.dp),
                     contentAlignment = Alignment.Center
                 ) {
                     Button(
@@ -835,7 +732,7 @@ fun HomeScreen(
                                 executeClock(clockAction)
                             }
                         },
-                        enabled = !submitting && !dayComplete,
+                        enabled = !submitting && !dayComplete && securityBlockReason == null,
                         shape = CircleShape,
                         colors = ButtonDefaults.buttonColors(
                             containerColor = Color.Transparent,

@@ -148,6 +148,20 @@ object PayslipCalculator {
 
 object PayslipPdfExporter {
     fun exportAndOpen(context: Context, payslip: PayslipDetail, lang: String = "id"): File {
+        val file = generatePdfFile(context, payslip, lang)
+        fun tr(id: String, en: String) = if (lang == "id") id else en
+        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
+        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
+            setDataAndType(uri, "application/pdf")
+            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
+        }
+        val chooser = Intent.createChooser(viewIntent, tr("Buka Slip Gaji PDF", "Open Payslip PDF"))
+        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+        context.startActivity(chooser)
+        return file
+    }
+
+    fun generatePdfFile(context: Context, payslip: PayslipDetail, lang: String = "id"): File {
         fun tr(id: String, en: String) = if (lang == "id") id else en
         val breakdown = PayslipCalculator.compute(payslip, lang)
 
@@ -402,16 +416,6 @@ object PayslipPdfExporter {
             doc.writeTo(out)
         }
         doc.close()
-
-        val uri = FileProvider.getUriForFile(context, "${context.packageName}.fileprovider", file)
-        val viewIntent = Intent(Intent.ACTION_VIEW).apply {
-            setDataAndType(uri, "application/pdf")
-            addFlags(Intent.FLAG_GRANT_READ_URI_PERMISSION)
-        }
-        val chooser = Intent.createChooser(viewIntent, tr("Buka Slip Gaji PDF", "Open Payslip PDF"))
-        chooser.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-        context.startActivity(chooser)
-
         return file
     }
 }

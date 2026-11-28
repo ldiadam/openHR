@@ -47,6 +47,18 @@ export const HRSettings: React.FC = () => {
     require_selfie: false,
     require_location: true,
   });
+  const [securityPolicy, setSecurityPolicy] = useState<{
+    anti_fake_gps_mode: 'off' | 'warn_and_log' | 'block';
+    block_rooted_devices: boolean;
+    enforce_device_binding: boolean;
+    max_travel_speed_kmh: number;
+  }>({
+    anti_fake_gps_mode: 'block',
+    block_rooted_devices: false,
+    enforce_device_binding: false,
+    max_travel_speed_kmh: 250,
+  });
+  const [securityEvents, setSecurityEvents] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
   const [company, setCompany] = useState<any>(null);
   const [auditLogs, setAuditLogs] = useState<any[]>([]);
@@ -84,7 +96,7 @@ export const HRSettings: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [pRes, bRes, cRes, aRes, attRes, dRes, mRes] = await Promise.all([
+      const [pRes, bRes, cRes, aRes, attRes, dRes, mRes, secRes, secEvRes] = await Promise.all([
         apiFetch('/settings/payroll'),
         apiFetch('/settings/branches'),
         apiFetch('/settings/company'),
@@ -92,12 +104,16 @@ export const HRSettings: React.FC = () => {
         apiFetch('/settings/attendance').catch(() => ({ require_selfie: false, require_location: true })),
         apiFetch('/settings/departments').catch(() => ({ departments: [] })),
         apiFetch('/settings/modules').catch(() => ({ modules: DEFAULT_MODULES_CONFIG })),
+        apiFetch('/settings/security').catch(() => ({ policy: null })),
+        apiFetch('/settings/security/events').catch(() => ({ events: [] })),
       ]);
       setPayrollSettings(pRes.settings || {});
       setBranches(bRes.branches || []);
       setCompany(cRes.company || {});
       setAuditLogs(aRes.logs || []);
       setAttendancePolicy(attRes);
+      if (secRes?.policy) setSecurityPolicy(secRes.policy);
+      setSecurityEvents(secEvRes?.events || []);
       setDepartments(dRes.departments || []);
       setModulesConfig(parseModulesConfig(mRes.modules));
       setDocusealConfigured(Boolean(mRes.integrations?.docusealConfigured));
@@ -201,10 +217,16 @@ export const HRSettings: React.FC = () => {
     e.preventDefault();
     setMsg(null);
     try {
-      const res = await apiFetch('/settings/attendance', {
-        method: 'PUT',
-        body: JSON.stringify(attendancePolicy),
-      });
+      const [res] = await Promise.all([
+        apiFetch('/settings/attendance', {
+          method: 'PUT',
+          body: JSON.stringify(attendancePolicy),
+        }),
+        apiFetch('/settings/security', {
+          method: 'PUT',
+          body: JSON.stringify(securityPolicy),
+        }),
+      ]);
       setMsg({ type: 'success', text: res.message });
       loadData();
     } catch (err: any) {
@@ -1436,6 +1458,97 @@ export const HRSettings: React.FC = () => {
                 </div>
               </div>
             </div>
+
+            <div className="p-4 rounded-2xl border border-amber-200 bg-amber-50/40 space-y-3">
+              <div className="flex items-center justify-between">
+                <div>
+                  <h4 className="font-bold text-sm text-slate-900">
+                    {tr('Anti-Fake GPS & Keamanan Perangkat', 'Anti-Fake GPS & Device Security')}
+                  </h4>
+                  <p className="text-xs text-slate-500">
+                    {tr(
+                      'Deteksi mock location, aplikasi Fake GPS, perangkat root, anomali kecepatan GPS (teleport), dan pengikatan perangkat.',
+                      'Detect mock locations, Fake GPS apps, rooted devices, GPS speed jumps (teleport), and device binding.'
+                    )}
+                  </p>
+                </div>
+              </div>
+
+              <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Mode Anti-Fake GPS', 'Anti-Fake GPS Mode')}
+                  </label>
+                  <select
+                    value={securityPolicy.anti_fake_gps_mode}
+                    onChange={(e) =>
+                      setSecurityPolicy({ ...securityPolicy, anti_fake_gps_mode: e.target.value as any })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold"
+                  >
+                    <option value="block">{tr('Blokir & Catat (Rekomendasi)', 'Block & Log (Recommended)')}</option>
+                    <option value="warn_and_log">{tr('Izinkan tapi Catat Peringatan', 'Allow & Flag Alert')}</option>
+                    <option value="off">{tr('Nonaktif', 'Off')}</option>
+                  </select>
+                </div>
+
+                <div>
+                  <label className="block text-xs font-semibold text-slate-700 mb-1">
+                    {tr('Batas Kecepatan Perpindahan GPS (km/jam)', 'Max GPS Travel Speed (km/h)')}
+                  </label>
+                  <input
+                    type="number"
+                    min={50}
+                    value={securityPolicy.max_travel_speed_kmh}
+                    onChange={(e) =>
+                      setSecurityPolicy({ ...securityPolicy, max_travel_speed_kmh: Number(e.target.value) || 250 })
+                    }
+                    className="w-full px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold"
+                  />
+                </div>
+              </div>
+
+              <div className="flex flex-wrap gap-4 pt-1">
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={securityPolicy.block_rooted_devices}
+                    onChange={(e) => setSecurityPolicy({ ...securityPolicy, block_rooted_devices: e.target.checked })}
+                  />
+                  <span>{tr('Blokir perangkat Root / Modifikasi', 'Block Rooted Devices')}</span>
+                </label>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={securityPolicy.enforce_device_binding}
+                    onChange={(e) => setSecurityPolicy({ ...securityPolicy, enforce_device_binding: e.target.checked })}
+                  />
+                  <span>{tr('Ikat 1 Perangkat per Karyawan (Anti-Titip Absen)', 'Enforce 1 Device per Employee')}</span>
+                </label>
+              </div>
+            </div>
+
+            {securityEvents.length > 0 && (
+              <div className="p-4 rounded-2xl border border-red-200 bg-red-50/40 space-y-2">
+                <div className="text-xs font-bold text-red-800 uppercase tracking-wider">
+                  {tr('Log Peringatan Keamanan Terbaru', 'Recent Security Alerts')} ({securityEvents.length})
+                </div>
+                <div className="space-y-1.5 max-h-48 overflow-y-auto">
+                  {securityEvents.slice(0, 10).map((ev) => (
+                    <div key={ev.id} className="flex items-center justify-between text-xs bg-white px-3 py-2 rounded-xl border border-red-100">
+                      <div>
+                        <span className="font-bold text-slate-900">{ev.full_name || ev.employee_id || '-'}</span>
+                        <span className="ml-2 px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-bold text-[10px]">
+                          {ev.event_type}
+                        </span>
+                        {ev.device_label && <span className="ml-2 text-slate-500">{ev.device_label}</span>}
+                      </div>
+                      <span className="text-[11px] text-slate-400">{String(ev.created_at || '').slice(0, 16)}</span>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
 
             <div className="flex justify-end pt-4 border-t border-slate-100">
               <button

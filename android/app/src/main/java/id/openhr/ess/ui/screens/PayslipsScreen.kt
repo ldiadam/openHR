@@ -1,6 +1,10 @@
 package id.openhr.ess.ui.screens
 
+import android.graphics.Bitmap
+import android.graphics.pdf.PdfRenderer
+import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.BorderStroke
+import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
@@ -21,7 +25,11 @@ import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.asImageBitmap
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -89,7 +97,7 @@ fun PayslipsScreen(
     }
 
     fun maskedMoney(amount: Double): String {
-        return if (hideSalary) "Rp •••••••" else Formatters.formatRupiah(amount)
+        return if (hideSalary) "Rp \u2022\u2022\u2022\u2022\u2022\u2022\u2022" else Formatters.formatRupiah(amount)
     }
 
     fun openDetail(id: String, exportPdfImmediately: Boolean = false) {
@@ -126,7 +134,7 @@ fun PayslipsScreen(
         ) {
             Column(modifier = Modifier.weight(1f)) {
                 Text(tr(lang, "Slip Gaji", "Payslips"), style = MaterialTheme.typography.titleLarge, color = palette.textPrimary)
-                Text("${tr(lang, "Periode Tahun", "Year")} · $selectedYear", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
+                Text("${tr(lang, "Periode Tahun", "Year")} Â· $selectedYear", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
             }
 
             Row(
@@ -270,7 +278,7 @@ fun PayslipsScreen(
                                 Column(modifier = Modifier.weight(1f)) {
                                     Text(item.period_title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = palette.textPrimary)
                                     Text(
-                                        "${Formatters.formatDisplayDate(item.period_start, lang)} – ${Formatters.formatDisplayDate(item.period_end, lang)}",
+                                        "${Formatters.formatDisplayDate(item.period_start, lang)} - ${Formatters.formatDisplayDate(item.period_end, lang)}",
                                         fontSize = 11.sp,
                                         color = palette.textSecondary
                                     )
@@ -363,14 +371,14 @@ private fun HeroLatestPayslipCard(
                 )
                 Spacer(modifier = Modifier.height(2.dp))
                 Text(
-                    text = if (hideSalary) "Rp •••••••••" else Formatters.formatRupiah(item.take_home_pay),
+                    text = if (hideSalary) "Rp \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else Formatters.formatRupiah(item.take_home_pay),
                     color = Color(0xFF34D399),
                     fontWeight = FontWeight.Black,
                     fontSize = 26.sp,
                     style = TextStyle(fontFeatureSettings = "tnum")
                 )
                 Text(
-                    text = "${Formatters.formatDisplayDate(item.period_start, lang)} – ${Formatters.formatDisplayDate(item.period_end, lang)}",
+                    text = "${Formatters.formatDisplayDate(item.period_start, lang)} - ${Formatters.formatDisplayDate(item.period_end, lang)}",
                     color = Color.White.copy(alpha = 0.65f),
                     fontSize = 11.sp
                 )
@@ -422,8 +430,35 @@ private fun PayslipDetailDialog(
     onDownloadPdf: () -> Unit
 ) {
     val palette = LocalEssPalette.current
-    val breakdown = remember(payslip, lang) { PayslipCalculator.compute(payslip, lang) }
-    val paymentDateStr = Formatters.formatDisplayDate(payslip.payment_date ?: payslip.period_end, lang)
+    val context = LocalContext.current
+    var pdfBitmaps by remember(payslip.id, lang) { mutableStateOf<List<Bitmap>>(emptyList()) }
+    var rendering by remember(payslip.id, lang) { mutableStateOf(true) }
+
+    LaunchedEffect(payslip.id, lang) {
+        rendering = true
+        pdfBitmaps = withContext(Dispatchers.IO) {
+            runCatching {
+                val file = PayslipPdfExporter.generatePdfFile(context, payslip, lang)
+                val pages = mutableListOf<Bitmap>()
+                ParcelFileDescriptor.open(file, ParcelFileDescriptor.MODE_READ_ONLY).use { pfd ->
+                    PdfRenderer(pfd).use { renderer ->
+                        for (i in 0 until renderer.pageCount) {
+                            renderer.openPage(i).use { page ->
+                                val width = (page.width * 2).coerceAtLeast(1080)
+                                val height = (width * page.height.toFloat() / page.width.toFloat()).toInt()
+                                val bmp = Bitmap.createBitmap(width, height, Bitmap.Config.ARGB_8888)
+                                bmp.eraseColor(android.graphics.Color.WHITE)
+                                page.render(bmp, null, null, PdfRenderer.Page.RENDER_MODE_FOR_DISPLAY)
+                                pages.add(bmp)
+                            }
+                        }
+                    }
+                }
+                pages
+            }.getOrDefault(emptyList())
+        }
+        rendering = false
+    }
 
     Dialog(
         onDismissRequest = onDismiss,
@@ -432,8 +467,8 @@ private fun PayslipDetailDialog(
         Surface(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(12.dp),
-            shape = RoundedCornerShape(24.dp),
+                .padding(10.dp),
+            shape = RoundedCornerShape(22.dp),
             color = palette.card
         ) {
             Column(modifier = Modifier.fillMaxSize()) {
@@ -446,7 +481,7 @@ private fun PayslipDetailDialog(
                     horizontalArrangement = Arrangement.SpaceBetween
                 ) {
                     Column(modifier = Modifier.weight(1f)) {
-                        Text(tr(lang, "Slip Gaji", "Payslip"), fontWeight = FontWeight.Bold, fontSize = 16.sp, color = palette.textPrimary)
+                        Text(tr(lang, "Pratinjau Slip Gaji (PDF)", "Payslip PDF Preview"), fontWeight = FontWeight.Bold, fontSize = 15.sp, color = palette.textPrimary)
                         Text(payslip.run_title ?: "-", fontSize = 11.sp, color = palette.textSecondary)
                     }
                     Row(horizontalArrangement = Arrangement.spacedBy(4.dp), verticalAlignment = Alignment.CenterVertically) {
@@ -458,7 +493,7 @@ private fun PayslipDetailDialog(
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
                             Spacer(modifier = Modifier.width(4.dp))
-                            Text(tr(lang, "Unduh PDF", "Download PDF"), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                            Text(tr(lang, "Buka / Unduh", "Open / Save"), fontSize = 11.sp, fontWeight = FontWeight.Bold)
                         }
                         IconButton(onClick = onDismiss) {
                             Icon(Icons.Default.Close, contentDescription = "Close", tint = palette.textPrimary)
@@ -466,319 +501,46 @@ private fun PayslipDetailDialog(
                     }
                 }
 
-                Column(
+                Box(
                     modifier = Modifier
                         .weight(1f)
-                        .verticalScroll(rememberScrollState())
-                        .padding(16.dp),
-                    verticalArrangement = Arrangement.spacedBy(14.dp)
+                        .fillMaxWidth()
+                        .background(palette.subtleSurface),
+                    contentAlignment = Alignment.Center
                 ) {
-                    // Letterhead (matches Web)
-                    Row(
-                        modifier = Modifier.fillMaxWidth(),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.Top
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                tr(lang, "SLIP GAJI KARYAWAN", "EMPLOYEE PAYSLIP"),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                letterSpacing = 1.sp,
-                                color = palette.textMuted
-                            )
-                            Text(payslip.company_name ?: "openHR", fontWeight = FontWeight.Bold, fontSize = 16.sp, color = palette.textPrimary)
-                            if (!payslip.company_address.isNullOrBlank()) {
-                                Text(payslip.company_address, fontSize = 11.sp, color = palette.textSecondary)
-                            }
-                            if (!payslip.company_npwp.isNullOrBlank()) {
-                                Text("NPWP: ${payslip.company_npwp}", fontSize = 10.sp, color = palette.textSecondary)
-                            }
-                        }
-                        Surface(
-                            shape = RoundedCornerShape(6.dp),
-                            color = palette.heroStart
-                        ) {
-                            Text(
-                                tr(lang, "RAHASIA", "CONFIDENTIAL"),
-                                fontSize = 9.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = Color.White,
-                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 4.dp)
-                            )
-                        }
-                    }
-
-                    Column(verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                    if (rendering) {
+                        CircularProgressIndicator(color = palette.accent)
+                    } else if (pdfBitmaps.isEmpty()) {
                         Text(
-                            "${tr(lang, "Periode", "Period")}: ${Formatters.formatDisplayDate(payslip.period_start, lang)} – ${Formatters.formatDisplayDate(payslip.period_end, lang)}",
-                            fontSize = 11.sp,
-                            color = palette.textSecondary,
-                            fontWeight = FontWeight.Medium
-                        )
-                        Text(
-                            "${tr(lang, "Tanggal Bayar", "Payment Date")}: $paymentDateStr",
-                            fontSize = 11.sp,
+                            tr(lang, "Gagal merender pratinjau PDF", "Unable to render PDF preview"),
+                            fontSize = 13.sp,
                             color = palette.textSecondary
                         )
-                    }
-
-                    // Proportional Earnings vs Deductions Stacked Bar
-                    val grossDisplay = breakdown.grossEarningsDisplay
-                    val totalFlow = (grossDisplay + payslip.total_deductions).coerceAtLeast(1.0)
-                    val earnWeight = (grossDisplay / totalFlow).toFloat().coerceIn(0.05f, 0.95f)
-                    val dedWeight = (1f - earnWeight).coerceAtLeast(0.05f)
-                    val dedPct = ((payslip.total_deductions / grossDisplay.coerceAtLeast(1.0)) * 100.0).roundToInt()
-
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(palette.subtleSurface)
-                            .border(1.dp, palette.cardBorder, RoundedCornerShape(14.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(8.dp)
-                    ) {
-                        Row(
-                            modifier = Modifier.fillMaxWidth(),
-                            horizontalArrangement = Arrangement.SpaceBetween
-                        ) {
-                            Text(
-                                "${tr(lang, "Bruto", "Gross")}: ${Formatters.formatRupiah(grossDisplay)}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.success,
-                                style = TextStyle(fontFeatureSettings = "tnum")
-                            )
-                            Text(
-                                "${tr(lang, "Potongan", "Deductions")} ($dedPct%): ${Formatters.formatRupiah(payslip.total_deductions)}",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.danger,
-                                style = TextStyle(fontFeatureSettings = "tnum")
-                            )
-                        }
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .height(8.dp)
-                                .clip(RoundedCornerShape(50)),
-                            horizontalArrangement = Arrangement.spacedBy(2.dp)
-                        ) {
-                            Box(
-                                modifier = Modifier
-                                    .weight(earnWeight)
-                                    .fillMaxHeight()
-                                    .background(palette.success)
-                            )
-                            if (payslip.total_deductions > 0) {
-                                Box(
-                                    modifier = Modifier
-                                        .weight(dedWeight)
-                                        .fillMaxHeight()
-                                        .background(palette.danger)
-                                )
-                            }
-                        }
-                    }
-
-                    // Employee Details Box (matches Web 9 fields)
-                    Column(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(14.dp))
-                            .background(palette.subtleSurface)
-                            .border(1.dp, palette.cardBorder, RoundedCornerShape(14.dp))
-                            .padding(12.dp),
-                        verticalArrangement = Arrangement.spacedBy(5.dp)
-                    ) {
-                        PayslipLine(tr(lang, "Nama Karyawan", "Employee Name"), payslip.employee_name ?: "-")
-                        PayslipLine(tr(lang, "NIK / ID", "Employee ID"), payslip.employee_nik ?: "-")
-                        PayslipLine(tr(lang, "Jabatan", "Job Title"), payslip.job_title ?: "-")
-                        PayslipLine(tr(lang, "Departemen", "Department"), payslip.department_name ?: "-")
-                        PayslipLine(tr(lang, "Status PTKP", "Tax Status"), payslip.ptkp_status ?: "-")
-                        PayslipLine(
-                            tr(lang, "Rekening Bank", "Bank Account"),
-                            when {
-                                !payslip.bank_account_number.isNullOrBlank() ->
-                                    "${payslip.bank_name ?: "-"} · ${payslip.bank_account_number}"
-                                !payslip.bank_name.isNullOrBlank() ->
-                                    "${payslip.bank_name} · ${tr(lang, "belum diisi", "not set")}"
-                                else -> "-"
-                            }
-                        )
-                        PayslipLine(
-                            tr(lang, "Hari Kerja", "Working Days"),
-                            "${PayslipCalculator.formatCount(payslip.days_worked)} / ${PayslipCalculator.formatCount(payslip.expected_working_days)} ${tr(lang, "hari", "days")}"
-                        )
-                        PayslipLine(
-                            tr(lang, "Lembur Disetujui", "Approved Overtime"),
-                            "${PayslipCalculator.formatCount(payslip.overtime_hours)} ${tr(lang, "jam", "hrs")}"
-                        )
-                        PayslipLine(tr(lang, "Metode Pajak", "Tax Method"), payslip.pph21_method ?: "-")
-                    }
-
-                    // Earnings
-                    Text(tr(lang, "PENGHASILAN", "EARNINGS"), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = palette.success)
-                    breakdown.earnings.forEach { row ->
-                        MoneyRow(row.label, row.amount, subLabel = row.subLabel)
-                    }
-                    HorizontalDivider(color = palette.cardBorder)
-                    MoneyRow(tr(lang, "Total Penghasilan Bruto", "Gross Earnings"), breakdown.grossEarningsDisplay, bold = true)
-
-                    // Deductions
-                    Text(tr(lang, "POTONGAN", "DEDUCTIONS"), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = palette.danger)
-                    if (breakdown.deductions.isEmpty()) {
-                        Text(
-                            text = if (payslip.total_deductions > 0) {
-                                tr(lang, "Rincian potongan tidak tersedia untuk periode ini", "Deduction breakdown unavailable for this period")
-                            } else {
-                                tr(lang, "Tidak ada potongan pada periode ini", "No deductions in this period")
-                            },
-                            fontSize = 11.sp,
-                            color = palette.textMuted
-                        )
                     } else {
-                        breakdown.deductions.forEach { row ->
-                            MoneyRow(row.label, row.amount, subLabel = row.subLabel)
-                        }
-                    }
-                    HorizontalDivider(color = palette.cardBorder)
-                    MoneyRow(tr(lang, "Total Potongan", "Total Deductions"), payslip.total_deductions, bold = true)
-
-                    // Non-earning Reimbursement Callout (matches Web — separate from Gross Earnings!)
-                    if (payslip.reimbursement_amount > 0) {
-                        Row(
-                            modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(palette.subtleSurface)
-                                .border(1.dp, palette.cardBorder, RoundedCornerShape(12.dp))
-                                .padding(horizontal = 12.dp, vertical = 10.dp),
-                            horizontalArrangement = Arrangement.SpaceBetween,
-                            verticalAlignment = Alignment.CenterVertically
-                        ) {
-                            Column(modifier = Modifier.weight(1f)) {
-                                Text(
-                                    tr(lang, "Reimbursement (Penggantian Biaya)", "Reimbursement (Expense Claim)"),
-                                    fontSize = 12.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.textPrimary
-                                )
-                                Text(
-                                    tr(lang, "Bukan penghasilan · Tidak kena pajak", "Non-earning · Non-taxable"),
-                                    fontSize = 10.sp,
-                                    color = palette.textSecondary
-                                )
-                            }
-                            Text(
-                                text = "+${Formatters.formatRupiah(payslip.reimbursement_amount)}",
-                                fontSize = 12.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.success,
-                                style = TextStyle(fontFeatureSettings = "tnum")
-                            )
-                        }
-                    }
-
-                    // Net Take Home Pay Box (matches Web)
-                    Row(
-                        modifier = Modifier
-                            .fillMaxWidth()
-                            .clip(RoundedCornerShape(16.dp))
-                            .background(Brush.linearGradient(listOf(palette.heroStart, palette.heroEnd)))
-                            .padding(16.dp),
-                        horizontalArrangement = Arrangement.SpaceBetween,
-                        verticalAlignment = Alignment.CenterVertically
-                    ) {
-                        Column(modifier = Modifier.weight(1f), verticalArrangement = Arrangement.spacedBy(2.dp)) {
-                            Text(
-                                tr(lang, "GAJI BERSIH DITERIMA", "NET TAKE-HOME PAY"),
-                                color = Color(0xFFCBD5E1),
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 10.sp,
-                                letterSpacing = 0.8.sp
-                            )
-                            Text(
-                                text = if (!payslip.bank_account_number.isNullOrBlank()) {
-                                    "${tr(lang, "Ditransfer ke", "Transferred to")} ${payslip.bank_name ?: "-"} · ${payslip.bank_account_number}"
-                                } else {
-                                    tr(lang, "Nomor rekening belum diisi", "Bank account number not set")
-                                },
-                                color = Color(0xFF94A3B8),
-                                fontSize = 10.sp
-                            )
-                        }
-                        Text(
-                            Formatters.formatRupiah(payslip.take_home_pay),
-                            color = Color(0xFF34D399),
-                            fontWeight = FontWeight.Black,
-                            fontSize = 18.sp,
-                            style = TextStyle(fontFeatureSettings = "tnum")
-                        )
-                    }
-
-                    // Employer BPJS Contributions (matches Web — shows rows + Total Beban Perusahaan)
-                    if (breakdown.employerContributions.isNotEmpty()) {
                         Column(
                             modifier = Modifier
-                                .fillMaxWidth()
-                                .clip(RoundedCornerShape(12.dp))
-                                .background(palette.subtleSurface)
-                                .border(1.dp, palette.cardBorder, RoundedCornerShape(12.dp))
+                                .fillMaxSize()
+                                .verticalScroll(rememberScrollState())
                                 .padding(12.dp),
-                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                            verticalArrangement = Arrangement.spacedBy(12.dp)
                         ) {
-                            Text(
-                                tr(lang, "KONTRIBUSI PERUSAHAAN (BUKAN POTONGAN GAJI)", "EMPLOYER CONTRIBUTIONS (NOT DEDUCTED FROM PAY)"),
-                                fontSize = 10.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.textSecondary
-                            )
-                            breakdown.employerContributions.forEach { row ->
-                                MoneyRow(row.label, row.amount)
-                            }
-                            HorizontalDivider(color = palette.cardBorder)
-                            MoneyRow(tr(lang, "Total Beban Perusahaan", "Total Employer Cost"), payslip.total_employer_cost, bold = true)
-                        }
-                    }
-
-                    // Signatures (matches Web)
-                    Row(
-                        modifier = Modifier.fillMaxWidth().padding(top = 6.dp),
-                        horizontalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        Column(modifier = Modifier.weight(1f)) {
-                            Text(tr(lang, "Diterima oleh", "Received by"), fontSize = 10.sp, color = palette.textMuted)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(payslip.employee_name ?: "-", fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-                        }
-                        Column(modifier = Modifier.weight(1f), horizontalAlignment = Alignment.End) {
-                            Text(tr(lang, "Disahkan oleh", "Authorized by"), fontSize = 10.sp, color = palette.textMuted)
-                            Spacer(modifier = Modifier.height(4.dp))
-                            Text(
-                                payslip.approver_name ?: payslip.company_name ?: "HR / Finance",
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.SemiBold,
-                                color = palette.textPrimary
-                            )
-                            val authSub = payslip.approver_title ?: if (payslip.authorized_by_company) tr(lang, "Perusahaan", "Company") else null
-                            if (!authSub.isNullOrBlank()) {
-                                Text(authSub, fontSize = 9.sp, color = palette.textMuted)
+                            pdfBitmaps.forEach { bmp ->
+                                Surface(
+                                    shape = RoundedCornerShape(12.dp),
+                                    shadowElevation = 3.dp,
+                                    color = Color.White,
+                                    modifier = Modifier.fillMaxWidth()
+                                ) {
+                                    Image(
+                                        bitmap = bmp.asImageBitmap(),
+                                        contentDescription = "Payslip PDF Page",
+                                        contentScale = ContentScale.FillWidth,
+                                        modifier = Modifier.fillMaxWidth()
+                                    )
+                                }
                             }
                         }
                     }
-
-                    HorizontalDivider(color = palette.cardBorder)
-                    Text(
-                        text = tr(
-                            lang,
-                            "Dokumen ini bersifat rahasia dan dihasilkan otomatis oleh sistem penggajian. Tidak memerlukan tanda tangan basah.",
-                            "This document is confidential and generated automatically by the payroll system. No wet signature is required."
-                        ),
-                        fontSize = 9.5.sp,
-                        color = palette.textMuted
-                    )
                 }
             }
         }
