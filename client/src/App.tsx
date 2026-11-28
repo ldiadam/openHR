@@ -101,6 +101,7 @@ export const App: React.FC = () => {
           {/* Public: QR code verification & read-only view for Petty Cash PDF reports */}
           <Route path="/verify/petty-cash/:id" element={<PublicPettyCashVerify />} />
           <Route path="/verify/id-card/:id" element={<PublicIdVerify />} />
+          <Route path="/card/:id" element={<PublicIdVerify />} />
           {/* Public: External Careers & Job Application Portal */}
           <Route path="/careers" element={<PublicCareersPage />} />
 

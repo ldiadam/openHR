@@ -721,6 +721,12 @@ export const EmployeeProfile: React.FC = () => {
         isOpen={showIdCard}
         onClose={() => setShowIdCard(false)}
         employee={profile}
+        canEdit={true}
+        onLinksUpdated={(cardBio, cardLinks) =>
+          setProfile((prev: any) =>
+            prev ? { ...prev, card_bio: cardBio, card_links: cardLinks } : prev
+          )
+        }
       />
     </div>
   );

@@ -13,6 +13,43 @@ import { getWelcomeInviteEmail } from '../services/email-templates';
 import { decodeBase64Image, deleteFile, getFile, normalizeStoredImage, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
 import { signBadgeToken } from '../utils/id-card-token';
+
+export interface EmployeeCardLink {
+  type: string;
+  label: string;
+  value: string;
+}
+
+const ALLOWED_CARD_LINK_TYPES = new Set([
+  'whatsapp',
+  'email',
+  'phone',
+  'linkedin',
+  'instagram',
+  'website',
+  'custom',
+]);
+
+function parseCardLinks(raw: unknown): EmployeeCardLink[] {
+  if (!raw) return [];
+  try {
+    const parsed = typeof raw === 'string' ? JSON.parse(raw) : raw;
+    if (!Array.isArray(parsed)) return [];
+    return parsed
+      .slice(0, 12)
+      .map((item: any) => {
+        const type = ALLOWED_CARD_LINK_TYPES.has(String(item?.type || '').toLowerCase())
+          ? String(item.type).toLowerCase()
+          : 'custom';
+        const label = String(item?.label || '').trim().slice(0, 40);
+        const value = String(item?.value || '').trim().slice(0, 300);
+        return { type, label: label || type, value };
+      })
+      .filter((l) => Boolean(l.value));
+  } catch {
+    return [];
+  }
+}
 import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
 import { getOrgHierarchyConfig, wouldCreateManagerCycle } from '../services/org-hierarchy';
 
@@ -145,11 +182,14 @@ employeeRoutes.get('/:id', async (c) => {
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
   const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
+  const cardLinks = parseCardLinks(emp.card_links_json);
   return c.json({
     employee: {
       ...sanitized,
       photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
       badge_token: badgeToken,
+      card_bio: emp.card_bio || null,
+      card_links: cardLinks,
     },
   });
 });
@@ -241,6 +281,7 @@ employeeRoutes.get('/:id/profile', async (c) => {
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
   const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
+  const cardLinks = parseCardLinks(emp.card_links_json);
   const showMoney = user.role === 'owner_admin' || user.role === 'finance' || emp.id === user.employeeId;
 
   return c.json({
@@ -248,6 +289,8 @@ employeeRoutes.get('/:id/profile', async (c) => {
       ...sanitized,
       photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
       badge_token: badgeToken,
+      card_bio: emp.card_bio || null,
+      card_links: cardLinks,
     },
     leaveBalances: balancesRes.results || [],
     payrollHistory: showMoney
@@ -1315,4 +1358,29 @@ employeeRoutes.delete('/:id/photo', async (c) => {
   }
 
   return c.json({ message: 'Foto profil berhasil dihapus.' });
+});
+
+// Update Employee Digital Card Linktree Links & Bio (Admin or Self)
+employeeRoutes.put('/:id/card-links', async (c) => {
+  const user = c.get('user');
+  const empId = c.req.param('id');
+  if (user.role !== 'owner_admin' && user.employeeId !== empId) {
+    return c.json({ error: 'Forbidden: Anda hanya dapat mengubah tautan kartu Anda sendiri' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const cardBio = typeof body.card_bio === 'string' ? body.card_bio.trim().slice(0, 200) : null;
+  const cardLinks = parseCardLinks(body.card_links);
+
+  await c.env.DB.prepare(
+    `UPDATE employees SET card_bio = ?, card_links_json = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  )
+    .bind(cardBio || null, JSON.stringify(cardLinks), empId)
+    .run();
+
+  return c.json({
+    message: 'Tautan kartu karyawan berhasil diperbarui.',
+    card_bio: cardBio || null,
+    card_links: cardLinks,
+  });
 });

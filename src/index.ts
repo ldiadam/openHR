@@ -150,6 +150,7 @@ app.get('/api/public/id-card/:id', async (c) => {
   const [emp, comp] = await Promise.all([
     c.env.DB.prepare(
       `SELECT e.id, e.nik, e.full_name, e.job_title, e.employment_status, e.lifecycle_status, e.join_date, e.photo_key,
+              e.card_bio, e.card_links_json, e.company_email,
               d.name as department_name, b.name as branch_name,
               l.code as level_code, l.name as level_name, l.color as level_color
        FROM employees e
@@ -169,6 +170,13 @@ app.get('/api/public/id-card/:id', async (c) => {
 
   const isActive = ['active', 'probation', 'on_leave'].includes(String(emp.lifecycle_status || '').toLowerCase());
   const encodedToken = encodeURIComponent(token);
+  let cardLinks: any[] = [];
+  try {
+    const parsed = emp.card_links_json ? JSON.parse(emp.card_links_json) : [];
+    if (Array.isArray(parsed)) cardLinks = parsed;
+  } catch {
+    cardLinks = [];
+  }
 
   return c.json({
     verified: true,
@@ -186,6 +194,9 @@ app.get('/api/public/id-card/:id', async (c) => {
       level_code: emp.level_code,
       level_name: emp.level_name,
       level_color: emp.level_color,
+      card_bio: emp.card_bio || null,
+      card_links: cardLinks,
+      company_email: emp.company_email || null,
       photo_url: emp.photo_key ? `/api/public/id-card/${encodeURIComponent(emp.id)}/photo?token=${encodedToken}` : null,
     },
     company: comp || null,

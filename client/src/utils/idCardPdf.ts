@@ -2,6 +2,12 @@ import { jsPDF } from 'jspdf';
 import QRCode from 'qrcode';
 import { normalizeHexColor } from './themePalette';
 
+export interface EmployeeCardLink {
+  type: string;
+  label: string;
+  value: string;
+}
+
 export interface IdCardEmployee {
   id: string;
   nik?: string | null;
@@ -14,8 +20,12 @@ export interface IdCardEmployee {
   join_date?: string | null;
   level_code?: string | null;
   level_name?: string | null;
+  company_email?: string | null;
+  phone?: string | null;
   photo_url?: string | null;
   badge_token?: string | null;
+  card_bio?: string | null;
+  card_links?: EmployeeCardLink[];
 }
 
 export interface IdCardCompany {
@@ -67,7 +77,7 @@ async function urlToPngDataUrl(url?: string | null): Promise<{ dataUrl: string; 
 export function buildVerifyBadgeUrl(emp: IdCardEmployee): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
   const qs = emp.badge_token ? `?token=${encodeURIComponent(emp.badge_token)}` : '';
-  return `${origin}/verify/id-card/${encodeURIComponent(emp.id)}${qs}`;
+  return `${origin}/card/${encodeURIComponent(emp.id)}${qs}`;
 }
 
 export async function downloadEmployeeIdCardPdf(
@@ -176,10 +186,7 @@ export async function downloadEmployeeIdCardPdf(
   doc.text((emp.department_name || emp.branch_name || '-').slice(0, 28), W / 2, cursorY + 6.6, { align: 'center' });
 
   // QR Code at bottom
-  doc.addImage(qrDataUrl, 'PNG', W / 2 - 7.5, 65, 15, 15);
-  doc.setFontSize(5);
-  doc.setTextColor(148, 163, 184);
-  doc.text('SCAN TO VERIFY EMPLOYEE', W / 2, 82.2, { align: 'center' });
+  doc.addImage(qrDataUrl, 'PNG', W / 2 - 8, 65, 16, 16);
 
   // Bottom bar
   doc.setFillColor(pr, pg, pb);

@@ -582,6 +582,26 @@ data class EmployeeResponse(
 )
 
 @Serializable
+data class CardLinkItem(
+    val type: String = "custom",
+    val label: String = "",
+    val value: String = ""
+)
+
+@Serializable
+data class UpdateCardLinksRequest(
+    val card_bio: String? = null,
+    val card_links: List<CardLinkItem> = emptyList()
+)
+
+@Serializable
+data class UpdateCardLinksResponse(
+    val message: String = "",
+    val card_bio: String? = null,
+    val card_links: List<CardLinkItem> = emptyList()
+)
+
+@Serializable
 data class EmployeeProfile(
     val id: String,
     val nik: String? = null,
@@ -616,7 +636,9 @@ data class EmployeeProfile(
     val photo_url: String? = null,
     val department_name: String? = null,
     val branch_name: String? = null,
-    val badge_token: String? = null
+    val badge_token: String? = null,
+    val card_bio: String? = null,
+    val card_links: List<CardLinkItem> = emptyList()
 )
 
 @Serializable

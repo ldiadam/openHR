@@ -228,6 +228,16 @@ class EssRepository(
         }
     }
 
+    suspend fun updateCardLinks(
+        employeeId: String,
+        cardBio: String?,
+        cardLinks: List<CardLinkItem>
+    ): Result<UpdateCardLinksResponse> = safeCall {
+        api.updateCardLinks(employeeId, UpdateCardLinksRequest(cardBio, cardLinks)).also { res ->
+            cachedProfile = cachedProfile?.copy(card_bio = res.card_bio, card_links = res.card_links)
+        }
+    }
+
     // Announcements
     var cachedAnnouncements: List<AnnouncementItem>? = null
         private set

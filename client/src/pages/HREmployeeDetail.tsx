@@ -703,6 +703,12 @@ export const HREmployeeDetail: React.FC = () => {
         isOpen={showIdCard}
         onClose={() => setShowIdCard(false)}
         employee={emp}
+        canEdit={isOwnerAdmin}
+        onLinksUpdated={(cardBio, cardLinks) =>
+          setData((prev: any) =>
+            prev ? { ...prev, employee: { ...prev.employee, card_bio: cardBio, card_links: cardLinks } } : prev
+          )
+        }
       />
     </div>
   );

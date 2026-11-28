@@ -834,6 +834,11 @@ fun ProfileScreen(
             baseUrl = baseUrl,
             token = token,
             lang = lang,
+            repository = repository,
+            onLinksUpdated = { bio, links ->
+                profile = profile?.copy(card_bio = bio, card_links = links)
+                feedback = tr(lang, "Tautan kartu ID disimpan", "ID card links saved") to false
+            },
             onDismiss = { showIdCard = false }
         )
     }

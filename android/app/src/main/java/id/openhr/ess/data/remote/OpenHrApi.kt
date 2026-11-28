@@ -101,6 +101,12 @@ interface OpenHrApi {
         @Path("id") employeeId: String
     ): SimpleMessageResponse
 
+    @PUT("api/employees/{id}/card-links")
+    suspend fun updateCardLinks(
+        @Path("id") employeeId: String,
+        @Body request: UpdateCardLinksRequest
+    ): UpdateCardLinksResponse
+
     // Announcements & Policy Acks
     @GET("api/announcements")
     suspend fun getAnnouncements(): AnnouncementsResponse
