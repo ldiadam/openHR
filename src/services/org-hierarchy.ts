@@ -152,6 +152,33 @@ export function buildOrgChartTree(
     }
   }
 
+  // Break any remaining cycles (e.g., A -> B -> A via department_head fallback) so every employee appears in the chart
+  const visited = new Set<string>();
+  const markReachable = (node: OrgEmployeeNode) => {
+    if (visited.has(node.id)) return;
+    visited.add(node.id);
+    for (const child of node.children) markReachable(child);
+  };
+  for (const root of roots) markReachable(root);
+
+  if (visited.size < nodeMap.size) {
+    const remaining = Array.from(nodeMap.values())
+      .filter((n) => !visited.has(n.id))
+      .sort((a, b) => (b.level_rank ?? 0) - (a.level_rank ?? 0));
+    for (const node of remaining) {
+      if (visited.has(node.id)) continue;
+      // Detach from its cyclic parent and promote as a root
+      const parentId = node.effective_manager_id;
+      if (parentId && nodeMap.has(parentId)) {
+        const parent = nodeMap.get(parentId)!;
+        parent.children = parent.children.filter((c) => c.id !== node.id);
+      }
+      node.effective_manager_id = null;
+      roots.push(node);
+      markReachable(node);
+    }
+  }
+
   const sortNodes = (list: OrgEmployeeNode[]) => {
     list.sort((a, b) => {
       const rankDiff = (b.level_rank ?? 0) - (a.level_rank ?? 0);

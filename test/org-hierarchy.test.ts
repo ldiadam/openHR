@@ -83,3 +83,19 @@ test('wouldCreateManagerCycle detects self-links and indirect loops', () => {
   assert.equal(wouldCreateManagerCycle('emp-dir', 'emp-staff', parentMap), true);
   assert.equal(wouldCreateManagerCycle('emp-staff', 'emp-dir', parentMap), false);
 });
+
+test('buildOrgChartTree breaks cycles instead of returning empty tree', () => {
+  const cyclicEmployees = [
+    { ...sampleEmployees[0], manager_id: 'emp-mgr-ops' },
+    { ...sampleEmployees[1], manager_id: 'emp-dir' },
+  ];
+  const tree = buildOrgChartTree(
+    cyclicEmployees,
+    { hierarchy_mode: 'multi_tier', primary_manager_id: null },
+    new Map()
+  );
+  assert.equal(tree.length, 1);
+  assert.equal(tree[0].id, 'emp-dir');
+  assert.equal(tree[0].children.length, 1);
+  assert.equal(tree[0].children[0].id, 'emp-mgr-ops');
+});
