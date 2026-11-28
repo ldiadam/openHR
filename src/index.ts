@@ -137,39 +137,44 @@ app.get('/api/public/company-logo', async (c) => {
   }
 });
 
-// Public Employee ID Card Verification & Photo (HMAC-signed)
-app.get('/api/public/id-card/:id', async (c) => {
-  const id = c.req.param('id');
+// Public Employee ID Card Linktree Profile & Photo (UUID slug or HMAC-signed ID)
+app.get('/api/public/id-card/:slug', async (c) => {
+  const slug = c.req.param('slug');
   const token = c.req.query('token') || '';
 
-  const valid = await verifyBadgeToken(c.env.JWT_SECRET, id, token);
-  if (!valid) {
-    return c.json({ error: 'Invalid or tampered employee ID badge.' }, 403);
-  }
+  const selectCols = `
+    SELECT e.id, e.nik, e.full_name, e.job_title, e.employment_status, e.lifecycle_status, e.join_date, e.photo_key,
+           e.card_uuid, e.card_bio, e.card_links_json, e.company_email,
+           d.name as department_name, b.name as branch_name,
+           l.code as level_code, l.name as level_name, l.color as level_color
+    FROM employees e
+    LEFT JOIN departments d ON e.department_id = d.id
+    LEFT JOIN branches b ON e.branch_id = b.id
+    LEFT JOIN employee_levels l ON e.level_id = l.id
+  `;
 
-  const [emp, comp] = await Promise.all([
-    c.env.DB.prepare(
-      `SELECT e.id, e.nik, e.full_name, e.job_title, e.employment_status, e.lifecycle_status, e.join_date, e.photo_key,
-              e.card_bio, e.card_links_json, e.company_email,
-              d.name as department_name, b.name as branch_name,
-              l.code as level_code, l.name as level_name, l.color as level_color
-       FROM employees e
-       LEFT JOIN departments d ON e.department_id = d.id
-       LEFT JOIN branches b ON e.branch_id = b.id
-       LEFT JOIN employee_levels l ON e.level_id = l.id
-       WHERE e.id = ?`
-    )
-      .bind(id)
-      .first<any>(),
-    c.env.DB.prepare(`SELECT name, legal_name, logo_url, primary_color, address, phone, email FROM companies LIMIT 1`).first<any>(),
-  ]);
+  let emp = await c.env.DB.prepare(`${selectCols} WHERE e.card_uuid = ?`).bind(slug).first<any>();
+  let matchedByUuid = Boolean(emp);
 
   if (!emp) {
-    return c.json({ error: 'Employee badge not found.' }, 404);
+    const valid = await verifyBadgeToken(c.env.JWT_SECRET, slug, token);
+    if (!valid) {
+      return c.json({ error: 'Profile link not found or invalid.' }, 403);
+    }
+    emp = await c.env.DB.prepare(`${selectCols} WHERE e.id = ?`).bind(slug).first<any>();
   }
 
+  if (!emp) {
+    return c.json({ error: 'Employee card not found.' }, 404);
+  }
+
+  const comp = await c.env.DB.prepare(
+    `SELECT name, legal_name, logo_url, primary_color, address, phone, email FROM companies LIMIT 1`
+  ).first<any>();
+
   const isActive = ['active', 'probation', 'on_leave'].includes(String(emp.lifecycle_status || '').toLowerCase());
-  const encodedToken = encodeURIComponent(token);
+  const photoSlug = matchedByUuid ? emp.card_uuid : emp.id;
+  const photoQuery = matchedByUuid ? '' : `?token=${encodeURIComponent(token)}`;
   let cardLinks: any[] = [];
   try {
     const parsed = emp.card_links_json ? JSON.parse(emp.card_links_json) : [];
@@ -182,7 +187,7 @@ app.get('/api/public/id-card/:id', async (c) => {
     verified: true,
     active: isActive,
     employee: {
-      id: emp.id,
+      id: matchedByUuid ? emp.card_uuid : emp.id,
       nik: emp.nik,
       full_name: emp.full_name,
       job_title: emp.job_title,
@@ -197,19 +202,28 @@ app.get('/api/public/id-card/:id', async (c) => {
       card_bio: emp.card_bio || null,
       card_links: cardLinks,
       company_email: emp.company_email || null,
-      photo_url: emp.photo_key ? `/api/public/id-card/${encodeURIComponent(emp.id)}/photo?token=${encodedToken}` : null,
+      photo_url: emp.photo_key ? `/api/public/id-card/${encodeURIComponent(photoSlug)}/photo${photoQuery}` : null,
     },
     company: comp || null,
   });
 });
 
-app.get('/api/public/id-card/:id/photo', async (c) => {
-  const id = c.req.param('id');
+app.get('/api/public/id-card/:slug/photo', async (c) => {
+  const slug = c.req.param('slug');
   const token = c.req.query('token') || '';
-  const valid = await verifyBadgeToken(c.env.JWT_SECRET, id, token);
-  if (!valid) return c.json({ error: 'Invalid badge token' }, 403);
 
-  const row = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`).bind(id).first<{ photo_key?: string | null }>();
+  let row = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE card_uuid = ?`)
+    .bind(slug)
+    .first<{ photo_key?: string | null }>();
+
+  if (!row) {
+    const valid = await verifyBadgeToken(c.env.JWT_SECRET, slug, token);
+    if (!valid) return c.json({ error: 'Invalid badge token' }, 403);
+    row = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`)
+      .bind(slug)
+      .first<{ photo_key?: string | null }>();
+  }
+
   if (!row?.photo_key) return c.json({ error: 'Photo not found' }, 404);
 
   const stored = await getFile(c.env, row.photo_key);

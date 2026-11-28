@@ -23,6 +23,7 @@ export interface IdCardEmployee {
   company_email?: string | null;
   phone?: string | null;
   photo_url?: string | null;
+  card_uuid?: string | null;
   badge_token?: string | null;
   card_bio?: string | null;
   card_links?: EmployeeCardLink[];
@@ -76,6 +77,9 @@ async function urlToPngDataUrl(url?: string | null): Promise<{ dataUrl: string; 
 
 export function buildVerifyBadgeUrl(emp: IdCardEmployee): string {
   const origin = typeof window !== 'undefined' ? window.location.origin : '';
+  if (emp.card_uuid) {
+    return `${origin}/card/${encodeURIComponent(emp.card_uuid)}`;
+  }
   const qs = emp.badge_token ? `?token=${encodeURIComponent(emp.badge_token)}` : '';
   return `${origin}/card/${encodeURIComponent(emp.id)}${qs}`;
 }

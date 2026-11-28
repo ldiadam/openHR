@@ -77,7 +77,7 @@ export const EmployeeIdCardModal: React.FC<Props> = ({
     QRCode.toDataURL(buildVerifyBadgeUrl(employee), { width: 240, margin: 1 })
       .then(setQrDataUrl)
       .catch(() => setQrDataUrl(''));
-  }, [isOpen, employee?.id, employee?.badge_token]);
+  }, [isOpen, employee?.id, employee?.card_uuid, employee?.badge_token]);
 
   if (!isOpen || !employee) return null;
 
@@ -334,7 +334,7 @@ export const EmployeeIdCardModal: React.FC<Props> = ({
                       </div>
 
                       {/* Employee Avatar */}
-                      <div className="-mt-10 relative flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl border-4 border-white bg-slate-100 shadow-lg">
+                      <div className="-mt-10 relative z-10 flex h-24 w-24 items-center justify-center overflow-hidden rounded-2xl border-4 border-white bg-slate-100 shadow-lg">
                         {photoFetchUrl ? (
                           <img src={photoFetchUrl} alt={employee.full_name || ''} className="h-full w-full object-cover" />
                         ) : (

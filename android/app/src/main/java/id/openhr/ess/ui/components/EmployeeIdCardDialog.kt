@@ -101,10 +101,15 @@ fun EmployeeIdCardDialog(
         label = "idCardFlip"
     )
 
-    val cardUrl = remember(baseUrl, profile.id, profile.badge_token) {
+    val cardUrl = remember(baseUrl, profile.id, profile.card_uuid, profile.badge_token) {
         val cleanBase = baseUrl.trimEnd('/')
-        val qs = profile.badge_token?.let { "?token=${URLEncoder.encode(it, "UTF-8")}" }.orEmpty()
-        "$cleanBase/card/${URLEncoder.encode(profile.id, "UTF-8")}$qs"
+        val uuid = profile.card_uuid?.takeIf { it.isNotBlank() }
+        if (uuid != null) {
+            "$cleanBase/card/${URLEncoder.encode(uuid, "UTF-8")}"
+        } else {
+            val qs = profile.badge_token?.let { "?token=${URLEncoder.encode(it, "UTF-8")}" }.orEmpty()
+            "$cleanBase/card/${URLEncoder.encode(profile.id, "UTF-8")}$qs"
+        }
     }
     val qrBitmap = remember(cardUrl) { generateQrBitmap(cardUrl) }
     val isActive = (profile.lifecycle_status ?: "active").lowercase() in listOf("active", "probation", "on_leave")

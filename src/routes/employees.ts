@@ -181,12 +181,21 @@ employeeRoutes.get('/:id', async (c) => {
   }
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
+  let cardUuid = emp.card_uuid as string | null | undefined;
+  if (!cardUuid) {
+    cardUuid = crypto.randomUUID();
+    await c.env.DB.prepare(`UPDATE employees SET card_uuid = ? WHERE id = ? AND card_uuid IS NULL`)
+      .bind(cardUuid, emp.id)
+      .run()
+      .catch(() => {});
+  }
   const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
   const cardLinks = parseCardLinks(emp.card_links_json);
   return c.json({
     employee: {
       ...sanitized,
       photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
+      card_uuid: cardUuid,
       badge_token: badgeToken,
       card_bio: emp.card_bio || null,
       card_links: cardLinks,
@@ -280,6 +289,14 @@ employeeRoutes.get('/:id/profile', async (c) => {
   ]);
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
+  let cardUuid = emp.card_uuid as string | null | undefined;
+  if (!cardUuid) {
+    cardUuid = crypto.randomUUID();
+    await c.env.DB.prepare(`UPDATE employees SET card_uuid = ? WHERE id = ? AND card_uuid IS NULL`)
+      .bind(cardUuid, emp.id)
+      .run()
+      .catch(() => {});
+  }
   const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
   const cardLinks = parseCardLinks(emp.card_links_json);
   const showMoney = user.role === 'owner_admin' || user.role === 'finance' || emp.id === user.employeeId;
@@ -288,6 +305,7 @@ employeeRoutes.get('/:id/profile', async (c) => {
     employee: {
       ...sanitized,
       photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
+      card_uuid: cardUuid,
       badge_token: badgeToken,
       card_bio: emp.card_bio || null,
       card_links: cardLinks,

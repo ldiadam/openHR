@@ -62,14 +62,16 @@ export const PublicIdVerify: React.FC = () => {
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
   const [data, setData] = useState<any>(null);
+  const [copied, setCopied] = useState(false);
 
   useEffect(() => {
-    if (!id || !token) {
+    if (!id) {
       setError(tr('Tautan profil tidak valid.', 'Invalid profile link.'));
       setLoading(false);
       return;
     }
-    fetch(`/api/public/id-card/${encodeURIComponent(id)}?token=${encodeURIComponent(token)}`)
+    const qs = token ? `?token=${encodeURIComponent(token)}` : '';
+    fetch(`/api/public/id-card/${encodeURIComponent(id)}${qs}`)
       .then(async (res) => {
         const json = (await res.json().catch(() => ({}))) as any;
         if (!res.ok) throw new Error(json.error || 'Failed to load profile');
@@ -149,8 +151,8 @@ export const PublicIdVerify: React.FC = () => {
     <div className="min-h-screen bg-slate-100 flex flex-col items-center py-8 px-4">
       <div className="w-full max-w-md rounded-[30px] bg-white shadow-[0_20px_50px_rgba(15,23,42,0.12)] border border-slate-200/80 overflow-hidden">
         {/* Branded Hero */}
-        <div style={{ background: palette.gradient }} className="px-6 pt-6 pb-14 text-white text-center relative">
-          <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3 py-1 backdrop-blur-xs">
+        <div style={{ background: palette.gradient }} className="relative z-0 px-6 pt-7 pb-16 text-white text-center">
+          <div className="inline-flex items-center gap-2 rounded-full bg-white/15 px-3.5 py-1.5 backdrop-blur-xs">
             {comp?.logo_url && (
               <img
                 src={comp.logo_url}
@@ -163,8 +165,8 @@ export const PublicIdVerify: React.FC = () => {
         </div>
 
         {/* Avatar */}
-        <div className="-mt-12 flex flex-col items-center px-6 text-center">
-          <div className="h-24 w-24 overflow-hidden rounded-3xl border-4 border-white bg-slate-100 shadow-lg flex items-center justify-center">
+        <div className="-mt-12 relative z-10 flex flex-col items-center px-6 text-center">
+          <div className="h-24 w-24 overflow-hidden rounded-3xl border-4 border-white bg-white shadow-xl flex items-center justify-center">
             {emp.photo_url ? (
               <img src={emp.photo_url} alt={emp.full_name} className="h-full w-full object-cover" />
             ) : (
@@ -248,12 +250,14 @@ export const PublicIdVerify: React.FC = () => {
                   navigator.share({ title: emp.full_name, url: window.location.href }).catch(() => {});
                 } else {
                   navigator.clipboard?.writeText(window.location.href);
+                  setCopied(true);
+                  setTimeout(() => setCopied(false), 1800);
                 }
               }}
               className="inline-flex items-center justify-center gap-1.5 rounded-2xl border border-slate-200 bg-slate-50 px-4 py-3 text-xs font-bold text-slate-700 hover:bg-slate-100 cursor-pointer"
             >
               <Share2 size={14} />
-              <span>{tr('Bagikan', 'Share')}</span>
+              <span>{copied ? tr('Disalin!', 'Copied!') : tr('Bagikan', 'Share')}</span>
             </button>
           </div>
         </div>
