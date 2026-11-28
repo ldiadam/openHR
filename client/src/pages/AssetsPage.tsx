@@ -390,8 +390,8 @@ export const AssetsPage: React.FC = () => {
       {/* Asset Detail & History Modal */}
       {detail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="max-h-[85vh] w-full max-w-xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl space-y-4">
-            <div className="flex items-start justify-between border-b border-slate-100 pb-3">
+          <div className="flex max-h-[85vh] w-full max-w-xl flex-col overflow-hidden rounded-3xl bg-white shadow-xl">
+            <div className="flex shrink-0 items-start justify-between border-b border-slate-100 px-5 py-4">
               <div>
                 <span className="font-mono text-xs font-bold text-slate-500">{detail.asset.asset_tag}</span>
                 <h2 className="text-base font-black text-slate-900">{detail.asset.name}</h2>
@@ -402,7 +402,7 @@ export const AssetsPage: React.FC = () => {
               <button type="button" onClick={() => setDetail(null)}><X size={18} className="text-slate-400" /></button>
             </div>
 
-            <div className="space-y-2 text-xs">
+            <div className="min-h-0 flex-1 space-y-2 overflow-y-auto overscroll-contain p-5 text-xs">
               <div className="font-bold text-slate-800">{tr('Riwayat Penyerahan & Pengembalian', 'Assignment & Return History')}</div>
               {detail.history.length === 0 ? (
                 <p className="text-slate-400">{tr('Belum ada riwayat penyerahan.', 'No assignment history yet.')}</p>

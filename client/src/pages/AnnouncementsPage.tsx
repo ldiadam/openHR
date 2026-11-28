@@ -414,8 +414,8 @@ export const AnnouncementsPage: React.FC = () => {
       {/* Who Read / Who Hasn't Modal */}
       {ackDetail && (
         <div className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4">
-          <div className="max-h-[85vh] w-full max-w-2xl overflow-y-auto rounded-3xl bg-white p-5 shadow-xl space-y-4">
-            <div className="flex items-center justify-between border-b border-slate-100 pb-3">
+          <div className="flex max-h-[85vh] w-full max-w-2xl flex-col overflow-hidden rounded-3xl bg-white shadow-xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-5 py-4">
               <div>
                 <h2 className="text-base font-black text-slate-900">{ackDetail.announcement.title}</h2>
                 <p className="text-xs text-slate-500">
@@ -424,6 +424,7 @@ export const AnnouncementsPage: React.FC = () => {
               </div>
               <button type="button" onClick={() => setAckDetail(null)}><X size={18} className="text-slate-400" /></button>
             </div>
+            <div className="min-h-0 flex-1 overflow-y-auto overscroll-contain p-5">
             <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 text-xs">
               <div className="rounded-2xl border border-emerald-200 bg-emerald-50/40 p-3 space-y-1.5">
                 <div className="font-bold text-emerald-800">{tr('Sudah Membaca', 'Acknowledged')} ({ackDetail.acked.length})</div>
@@ -440,6 +441,7 @@ export const AnnouncementsPage: React.FC = () => {
                   <div key={e.id} className="text-[11px] text-slate-700">{e.full_name} ({e.department_name || '-'})</div>
                 ))}
               </div>
+            </div>
             </div>
           </div>
         </div>

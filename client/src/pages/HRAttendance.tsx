@@ -494,8 +494,8 @@ export const HRAttendance: React.FC = () => {
             if (event.target === event.currentTarget) setDetailRecord(null);
           }}
         >
-          <div className="max-h-[90vh] w-full max-w-lg space-y-4 overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-start justify-between gap-3">
+          <div className="flex max-h-[90vh] w-full max-w-lg flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-start justify-between gap-3 border-b border-slate-100 px-6 py-4">
               <div>
                 <h3 className="text-base font-bold text-slate-900">{detailRecord.full_name}</h3>
                 <p className="text-[11px] text-slate-500">
@@ -510,6 +510,8 @@ export const HRAttendance: React.FC = () => {
                 <X size={18} />
               </button>
             </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-6 py-4">
 
             <div className="grid grid-cols-2 gap-2 text-xs">
               <div className="rounded-xl bg-slate-50 p-3">
@@ -706,7 +708,9 @@ export const HRAttendance: React.FC = () => {
               </div>
             </div>
 
-            <div className="flex justify-end pt-1">
+            </div>
+
+            <div className="flex shrink-0 justify-end border-t border-slate-100 bg-white px-6 py-3.5">
               <button
                 type="button"
                 onClick={() => setDetailRecord(null)}

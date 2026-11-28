@@ -2211,8 +2211,8 @@ export const HRPayroll: React.FC = () => {
             if (event.target === event.currentTarget) setResolveException(null);
           }}
         >
-          <div className="max-h-[90vh] w-full max-w-md space-y-4 overflow-y-auto rounded-3xl bg-white p-6 shadow-2xl">
-            <div className="flex items-center gap-3">
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-center gap-3 border-b border-slate-100 px-6 py-4">
               <div className="flex h-10 w-10 items-center justify-center rounded-2xl bg-amber-100 text-amber-700">
                 <AlertTriangle size={18} />
               </div>
@@ -2225,6 +2225,8 @@ export const HRPayroll: React.FC = () => {
                 </p>
               </div>
             </div>
+
+            <div className="min-h-0 flex-1 space-y-4 overflow-y-auto overscroll-contain px-6 py-4">
 
             <div className="rounded-xl bg-slate-50 p-3 text-xs">
               <div className="font-bold text-slate-900">{resolveException.full_name}</div>
@@ -2292,6 +2294,7 @@ export const HRPayroll: React.FC = () => {
                 </button>
               </div>
             </form>
+            </div>
           </div>
         </div>
       )}
