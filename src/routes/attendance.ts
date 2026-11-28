@@ -193,8 +193,8 @@ attendanceRoutes.post('/clock', async (c) => {
     }
   }
 
-  if (securityPolicy.enforce_device_binding && deviceId) {
-    if (emp.bound_device_id && emp.bound_device_id !== deviceId) {
+  if (deviceId) {
+    if (securityPolicy.enforce_device_binding && emp.bound_device_id && emp.bound_device_id !== deviceId) {
       await logSecurityEvent(c.env.DB, {
         employeeId,
         userId: user.userId,
