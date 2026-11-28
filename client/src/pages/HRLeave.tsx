@@ -1,19 +1,21 @@
 import React, { useState, useEffect } from 'react';
-import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit, Trash2 } from 'lucide-react';
+import { Calendar, Plus, CheckCircle2, XCircle, AlertCircle, Edit, Trash2, X } from 'lucide-react';
 import { apiFetch } from '../api';
 import { TableSkeleton } from '../components/Skeleton';
 import { useLanguage } from '../context/LanguageContext';
 import { useAuth } from '../context/AuthContext';
 import { LeaveApprovals } from './LeaveApprovals';
+import { getLeaveTypeLabel } from '../utils/leaveTypeLabel';
 
 export const HRLeave: React.FC = () => {
-  const { t, tr, formatDate } = useLanguage();
+  const { t, tr, lang, formatDate } = useLanguage();
   const { user } = useAuth();
   const isOwnerAdmin = user?.role === 'owner_admin';
-  const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays'>('requests');
+  const [activeTab, setActiveTab] = useState<'requests' | 'balances' | 'holidays' | 'types'>('requests');
   const [requests, setRequests] = useState<any[]>([]);
   const [balances, setBalances] = useState<any[]>([]);
   const [holidays, setHolidays] = useState<any[]>([]);
+  const [leaveTypes, setLeaveTypes] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
 
   // Modals
@@ -28,19 +30,34 @@ export const HRLeave: React.FC = () => {
   const [holidayType, setHolidayType] = useState('national');
   const [holidayDeduct, setHolidayDeduct] = useState(false);
 
+  const [showTypeModal, setShowTypeModal] = useState(false);
+  const [editingTypeId, setEditingTypeId] = useState<string | null>(null);
+  const [ltCode, setLtCode] = useState('');
+  const [ltNameId, setLtNameId] = useState('');
+  const [ltNameEn, setLtNameEn] = useState('');
+  const [ltDesc, setLtDesc] = useState('');
+  const [ltDefaultDays, setLtDefaultDays] = useState('0');
+  const [ltSortOrder, setLtSortOrder] = useState('100');
+  const [ltIsPaid, setLtIsPaid] = useState(true);
+  const [ltReqAttachment, setLtReqAttachment] = useState(false);
+  const [ltIsActive, setLtIsActive] = useState(true);
+  const [savingType, setSavingType] = useState(false);
+
   const [msg, setMsg] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   const loadData = async () => {
     setLoading(true);
     try {
-      const [reqRes, holRes, balRes] = await Promise.all([
+      const [reqRes, holRes, balRes, ltRes] = await Promise.all([
         apiFetch('/leave/requests'),
         apiFetch('/leave/holidays?year=2026'),
         apiFetch('/reports/leave-balances'),
+        apiFetch('/leave/types?includeInactive=1'),
       ]);
       setRequests(reqRes.requests || []);
       setHolidays(holRes.holidays || []);
       setBalances(balRes.balances || []);
+      setLeaveTypes(ltRes.leaveTypes || []);
     } catch (err: any) {
       console.warn('Leave err:', err.message);
     } finally {
@@ -128,6 +145,89 @@ export const HRLeave: React.FC = () => {
     }
   };
 
+  const openCreateTypeModal = () => {
+    setEditingTypeId(null);
+    setLtCode('');
+    setLtNameId('');
+    setLtNameEn('');
+    setLtDesc('');
+    setLtDefaultDays('0');
+    setLtSortOrder('100');
+    setLtIsPaid(true);
+    setLtReqAttachment(false);
+    setLtIsActive(true);
+    setShowTypeModal(true);
+  };
+
+  const openEditTypeModal = (lt: any) => {
+    setEditingTypeId(lt.id);
+    setLtCode(lt.code || '');
+    setLtNameId(lt.name_id || lt.name || '');
+    setLtNameEn(lt.name_en || lt.name || '');
+    setLtDesc(lt.description || '');
+    setLtDefaultDays(String(lt.default_days ?? 0));
+    setLtSortOrder(String(lt.sort_order ?? 100));
+    setLtIsPaid(Boolean(lt.is_paid));
+    setLtReqAttachment(Boolean(lt.requires_attachment));
+    setLtIsActive(lt.is_active === undefined || lt.is_active === null ? true : Boolean(lt.is_active));
+    setShowTypeModal(true);
+  };
+
+  const handleSaveLeaveType = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setSavingType(true);
+    try {
+      const payload = {
+        code: ltCode,
+        name_id: ltNameId,
+        name_en: ltNameEn,
+        description: ltDesc,
+        default_days: Number(ltDefaultDays) || 0,
+        sort_order: Number(ltSortOrder) || 100,
+        is_paid: ltIsPaid,
+        requires_attachment: ltReqAttachment,
+        is_active: ltIsActive,
+      };
+      const res = editingTypeId
+        ? await apiFetch(`/leave/types/${editingTypeId}`, { method: 'PUT', body: JSON.stringify(payload) })
+        : await apiFetch('/leave/types', { method: 'POST', body: JSON.stringify(payload) });
+      setMsg({ type: 'success', text: res.message });
+      setShowTypeModal(false);
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    } finally {
+      setSavingType(false);
+    }
+  };
+
+  const handleToggleTypeActive = async (lt: any) => {
+    const nextActive = !(lt.is_active === undefined || lt.is_active === null ? true : Boolean(lt.is_active));
+    try {
+      const res = await apiFetch(`/leave/types/${lt.id}`, {
+        method: 'PUT',
+        body: JSON.stringify({ is_active: nextActive }),
+      });
+      setMsg({ type: 'success', text: res.message });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
+  const handleDeleteLeaveType = async (lt: any) => {
+    if (!window.confirm(tr(`Hapus jenis cuti "${getLeaveTypeLabel(lt, lang)}"?`, `Delete leave type "${getLeaveTypeLabel(lt, lang)}"?`))) {
+      return;
+    }
+    try {
+      const res = await apiFetch(`/leave/types/${lt.id}`, { method: 'DELETE' });
+      setMsg({ type: 'success', text: res.message });
+      loadData();
+    } catch (err: any) {
+      setMsg({ type: 'error', text: err.message });
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
@@ -145,6 +245,16 @@ export const HRLeave: React.FC = () => {
           >
             <Plus size={16} />
             <span>{tr('Tambah Hari Libur', 'Add Holiday')}</span>
+          </button>
+        )}
+
+        {activeTab === 'types' && isOwnerAdmin && (
+          <button
+            onClick={openCreateTypeModal}
+            className="flex items-center gap-1.5 px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded-xl text-xs font-bold shadow-md transition cursor-pointer"
+          >
+            <Plus size={16} />
+            <span>{tr('Tambah Jenis Cuti', 'Add Leave Type')}</span>
           </button>
         )}
       </div>
@@ -192,6 +302,17 @@ export const HRLeave: React.FC = () => {
         >
           {t.leave.holidaysCalendar}
         </button>
+        <button
+          onClick={() => setActiveTab('types')}
+          className={`pb-3 transition border-b-2 -mb-px cursor-pointer flex items-center gap-1.5 ${
+            activeTab === 'types' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          <span>{tr('Jenis Cuti', 'Leave Types')}</span>
+          <span className="rounded-full bg-slate-100 px-1.5 py-0.5 text-[10px] font-bold text-slate-600">
+            {leaveTypes.length}
+          </span>
+        </button>
       </div>
 
       {/* TAB 1: REQUESTS (Unified 3-Stage + Quick Review + Delete) */}
@@ -221,7 +342,7 @@ export const HRLeave: React.FC = () => {
                   <tr key={i}>
                     <td className="py-3 px-4 font-bold text-slate-900">{b.full_name} ({b.nik})</td>
                     <td className="py-3 px-4">{b.department_name}</td>
-                    <td className="py-3 px-4">{b.leave_type_name}</td>
+                    <td className="py-3 px-4">{getLeaveTypeLabel(b, lang)}</td>
                     <td className="py-3 px-4 font-medium">{b.total_entitled} {tr('Hari', 'Days')}</td>
                     <td className="py-3 px-4 font-medium text-rose-600">{b.used_days} {tr('Hari', 'Days')}</td>
                     <td className="py-3 px-4 font-black text-emerald-600 text-sm">{b.remaining_days} {tr('Hari', 'Days')}</td>
@@ -300,6 +421,243 @@ export const HRLeave: React.FC = () => {
               </tbody>
               )}
             </table>
+          </div>
+        </div>
+      )}
+
+      {/* TAB 4: LEAVE TYPES CRUD */}
+      {activeTab === 'types' && (
+        <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+          <div className="overflow-x-auto">
+            <table className="w-full text-left text-xs text-slate-600">
+              <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                <tr>
+                  <th className="py-3 px-4 font-bold">{tr('Kode', 'Code')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Nama (ID / EN)', 'Name (ID / EN)')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Jatah Default', 'Default Days')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Gaji', 'Pay')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Lampiran', 'Attachment')}</th>
+                  <th className="py-3 px-4 font-bold">{tr('Status', 'Status')}</th>
+                  {isOwnerAdmin && <th className="py-3 px-4 font-bold text-right">{tr('Aksi', 'Actions')}</th>}
+                </tr>
+              </thead>
+              {loading ? (
+                <TableSkeleton rows={8} columns={isOwnerAdmin ? 7 : 6} />
+              ) : (
+                <tbody className="divide-y divide-slate-100">
+                  {leaveTypes.map((lt) => {
+                    const active = lt.is_active === undefined || lt.is_active === null ? true : Boolean(lt.is_active);
+                    return (
+                      <tr key={lt.id} className={!active ? 'opacity-55 bg-slate-50/50' : ''}>
+                        <td className="py-3 px-4 font-mono text-[11px] font-bold text-slate-700">{lt.code}</td>
+                        <td className="py-3 px-4">
+                          <div className="font-bold text-slate-900">{getLeaveTypeLabel(lt, lang)}</div>
+                          <div className="text-[11px] text-slate-400">
+                            ID: {lt.name_id || lt.name} · EN: {lt.name_en || lt.name}
+                          </div>
+                          {lt.description && (
+                            <div className="mt-0.5 text-[10px] text-slate-500">{lt.description}</div>
+                          )}
+                        </td>
+                        <td className="py-3 px-4 font-semibold text-slate-800">
+                          {lt.default_days} {tr('Hari', 'Days')}
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            lt.is_paid ? 'bg-emerald-50 text-emerald-700' : 'bg-slate-100 text-slate-600'
+                          }`}>
+                            {lt.is_paid ? tr('Dibayar', 'Paid') : tr('Tanpa Gaji', 'Unpaid')}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          <span className={`inline-flex rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                            lt.requires_attachment ? 'bg-amber-50 text-amber-700' : 'bg-slate-100 text-slate-500'
+                          }`}>
+                            {lt.requires_attachment ? tr('Wajib', 'Required') : tr('Opsional', 'Optional')}
+                          </span>
+                        </td>
+                        <td className="py-3 px-4">
+                          {isOwnerAdmin ? (
+                            <button
+                              type="button"
+                              onClick={() => handleToggleTypeActive(lt)}
+                              className={`rounded-full px-2.5 py-0.5 text-[10px] font-bold transition ${
+                                active ? 'bg-blue-50 text-blue-700 hover:bg-blue-100' : 'bg-slate-200 text-slate-600 hover:bg-slate-300'
+                              }`}
+                            >
+                              {active ? tr('Aktif', 'Active') : tr('Nonaktif', 'Inactive')}
+                            </button>
+                          ) : (
+                            <span className={`rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                              active ? 'bg-blue-50 text-blue-700' : 'bg-slate-200 text-slate-600'
+                            }`}>
+                              {active ? tr('Aktif', 'Active') : tr('Nonaktif', 'Inactive')}
+                            </span>
+                          )}
+                        </td>
+                        {isOwnerAdmin && (
+                          <td className="py-3 px-4 text-right">
+                            <div className="inline-flex items-center gap-2">
+                              <button
+                                type="button"
+                                onClick={() => openEditTypeModal(lt)}
+                                className="inline-flex items-center gap-1 text-blue-600 hover:text-blue-800 text-xs font-bold"
+                              >
+                                <Edit size={13} />
+                                <span>{tr('Ubah', 'Edit')}</span>
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleDeleteLeaveType(lt)}
+                                className="inline-flex items-center gap-1 text-rose-600 hover:text-rose-800 text-xs font-bold"
+                              >
+                                <Trash2 size={13} />
+                                <span>{tr('Hapus', 'Delete')}</span>
+                              </button>
+                            </div>
+                          </td>
+                        )}
+                      </tr>
+                    );
+                  })}
+                  {!leaveTypes.length && (
+                    <tr>
+                      <td colSpan={isOwnerAdmin ? 7 : 6} className="py-10 text-center text-xs text-slate-400">
+                        {tr('Belum ada data jenis cuti.', 'No leave types configured yet.')}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              )}
+            </table>
+          </div>
+        </div>
+      )}
+
+      {/* ADD / EDIT LEAVE TYPE MODAL */}
+      {showTypeModal && (
+        <div
+          className="fixed inset-0 z-50 bg-black/60 flex items-center justify-center p-4"
+          onClick={(event) => {
+            if (event.target === event.currentTarget) setShowTypeModal(false);
+          }}
+        >
+          <div className="flex max-h-[90vh] w-full max-w-md flex-col overflow-hidden rounded-3xl bg-white shadow-2xl">
+            <div className="flex shrink-0 items-center justify-between border-b border-slate-100 px-6 py-4">
+              <h3 className="font-bold text-base text-slate-900">
+                {editingTypeId ? tr('Ubah Jenis Cuti', 'Edit Leave Type') : tr('Tambah Jenis Cuti', 'Add Leave Type')}
+              </h3>
+              <button
+                type="button"
+                onClick={() => setShowTypeModal(false)}
+                className="rounded-lg p-1 text-slate-400 hover:bg-slate-100 hover:text-slate-700"
+              >
+                <X size={18} />
+              </button>
+            </div>
+            <form onSubmit={handleSaveLeaveType} className="min-h-0 flex-1 space-y-3 overflow-y-auto overscroll-contain px-6 py-4 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">{tr('Kode Unik *', 'Unique Code *')}</label>
+                  <input
+                    type="text"
+                    required
+                    value={ltCode}
+                    onChange={(e) => setLtCode(e.target.value)}
+                    placeholder="e.g. paternity"
+                    className="w-full p-2.5 border border-slate-300 rounded-xl font-mono"
+                  />
+                </div>
+                <div>
+                  <label className="block text-slate-700 font-semibold mb-1">{tr('Urutan Tampil', 'Sort Order')}</label>
+                  <input
+                    type="number"
+                    value={ltSortOrder}
+                    onChange={(e) => setLtSortOrder(e.target.value)}
+                    className="w-full p-2.5 border border-slate-300 rounded-xl"
+                  />
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">{tr('Nama (Bahasa Indonesia) *', 'Name (Indonesian) *')}</label>
+                <input
+                  type="text"
+                  required
+                  value={ltNameId}
+                  onChange={(e) => setLtNameId(e.target.value)}
+                  placeholder="Cuti Istri Melahirkan"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">{tr('Nama (Bahasa Inggris) *', 'Name (English) *')}</label>
+                <input
+                  type="text"
+                  required
+                  value={ltNameEn}
+                  onChange={(e) => setLtNameEn(e.target.value)}
+                  placeholder="Paternity Leave"
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">{tr('Jatah Default (Hari/Tahun)', 'Default Days / Year')}</label>
+                <input
+                  type="number"
+                  min="0"
+                  required
+                  value={ltDefaultDays}
+                  onChange={(e) => setLtDefaultDays(e.target.value)}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                />
+              </div>
+
+              <div>
+                <label className="block text-slate-700 font-semibold mb-1">{tr('Keterangan / Kebijakan', 'Description / Policy')}</label>
+                <textarea
+                  rows={2}
+                  value={ltDesc}
+                  onChange={(e) => setLtDesc(e.target.value)}
+                  placeholder={tr('Catatan syarat atau durasi...', 'Eligibility or duration notes...')}
+                  className="w-full p-2.5 border border-slate-300 rounded-xl"
+                />
+              </div>
+
+              <div className="space-y-2 pt-1">
+                <label className="flex items-center gap-2 text-slate-700 font-medium">
+                  <input type="checkbox" checked={ltIsPaid} onChange={(e) => setLtIsPaid(e.target.checked)} className="rounded text-blue-600" />
+                  <span>{tr('Cuti dibayar (Paid leave)', 'Paid leave')}</span>
+                </label>
+                <label className="flex items-center gap-2 text-slate-700 font-medium">
+                  <input type="checkbox" checked={ltReqAttachment} onChange={(e) => setLtReqAttachment(e.target.checked)} className="rounded text-blue-600" />
+                  <span>{tr('Wajib lampiran dokumen pendukung', 'Requires supporting attachment')}</span>
+                </label>
+                <label className="flex items-center gap-2 text-slate-700 font-medium">
+                  <input type="checkbox" checked={ltIsActive} onChange={(e) => setLtIsActive(e.target.checked)} className="rounded text-blue-600" />
+                  <span>{tr('Aktif (tampil di formulir pengajuan)', 'Active (visible in request forms)')}</span>
+                </label>
+              </div>
+
+              <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
+                <button
+                  type="button"
+                  onClick={() => setShowTypeModal(false)}
+                  className="px-4 py-2 text-slate-600 font-semibold rounded-xl hover:bg-slate-100 text-xs"
+                >
+                  {tr('Batal', 'Cancel')}
+                </button>
+                <button
+                  type="submit"
+                  disabled={savingType}
+                  className="px-5 py-2 bg-blue-600 text-white font-bold rounded-xl shadow-md text-xs hover:bg-blue-700 disabled:opacity-60"
+                >
+                  {savingType ? tr('Menyimpan...', 'Saving...') : tr('Simpan', 'Save')}
+                </button>
+              </div>
+            </form>
           </div>
         </div>
       )}

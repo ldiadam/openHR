@@ -732,7 +732,7 @@ fun RequestsScreen(
                                             } else {
                                                 items(filtered, key = { it.id }, contentType = { "req_leave" }) { item ->
                                                     HistoryItemCard(
-                                                        title = item.leave_type_name ?: "Cuti",
+                                                        title = if (lang == "en") (item.leave_type_name_en ?: item.leave_type_name ?: "Leave") else (item.leave_type_name_id ?: item.leave_type_name ?: "Cuti"),
                                                         subtitle = "${Formatters.formatDisplayDate(item.start_date, lang)} – ${Formatters.formatDisplayDate(item.end_date, lang)} (${item.total_days} ${tr(lang, "hari", "days")})",
                                                         status = item.status,
                                                         reason = item.reason,
@@ -916,7 +916,7 @@ fun RequestsScreen(
                                     DropdownMenuItem(
                                         text = {
                                             val tag = if (lt.is_paid) tr(lang, "Dibayar", "Paid") else tr(lang, "Tanpa Gaji", "Unpaid")
-                                            Text("${lt.name} ($tag)")
+                                            Text("${lt.localizedName(lang)} ($tag)")
                                         },
                                         onClick = {
                                             leaveTypeId = lt.id

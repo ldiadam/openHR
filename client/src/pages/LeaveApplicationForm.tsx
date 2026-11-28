@@ -3,6 +3,7 @@ import { Check, ChevronRight, AlertTriangle, CheckCircle2, Send, Info } from 'lu
 import { apiFetch } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { getLeaveTypeLabel } from '../utils/leaveTypeLabel';
 import { SignaturePad } from '../components/SignaturePad';
 import { MobileDatePicker } from '../components/pickers/MobileDatePicker';
 import { MobileSelect } from '../components/pickers/MobileSelect';
@@ -26,7 +27,7 @@ interface FormConfig {
   };
   letterheadGaps: Record<string, boolean>;
   departments: Array<{ id: string; name: string; code: string | null }>;
-  leaveTypes: Array<{ id: string; code: string; name: string; is_paid: number }>;
+  leaveTypes: Array<{ id: string; code: string; name: string; name_id?: string | null; name_en?: string | null; is_paid: number }>;
   formTitle: string;
   viewer?: {
     role?: string;
@@ -78,7 +79,7 @@ const formatDDMMYY = (iso: string) => {
 
 export const LeaveApplicationForm: React.FC = () => {
   const { user } = useAuth();
-  const { tr } = useLanguage();
+  const { tr, lang } = useLanguage();
 
   const [config, setConfig] = useState<FormConfig | null>(null);
   const [loading, setLoading] = useState(true);
@@ -384,7 +385,7 @@ export const LeaveApplicationForm: React.FC = () => {
                 placeholder={tr('Pilih jenis cuti', 'Choose leave type')}
                 options={(config?.leaveTypes || []).map((type) => ({
                   value: type.id,
-                  label: type.name,
+                  label: getLeaveTypeLabel(type, lang),
                 }))}
               />
             </div>
@@ -472,7 +473,7 @@ export const LeaveApplicationForm: React.FC = () => {
                 [tr('Pemohon', 'Applicant'), applicantName || '—'],
                 [tr('Departemen', 'Department'), config?.departments.find((d) => d.id === departmentId)?.name || '—'],
                 [tr('Tanggal', 'Date'), formatDDMMYY(submissionDate)],
-                [tr('Jenis cuti', 'Leave type'), selectedType?.name || '—'],
+                [tr('Jenis cuti', 'Leave type'), selectedType ? getLeaveTypeLabel(selectedType, lang) : '—'],
                 [tr('Dari', 'From'), formatDDMMYY(startDate)],
                 [tr('Sampai', 'To'), formatDDMMYY(endDate)],
                 [tr('Hari kerja', 'Working days'), String(totalDays)],

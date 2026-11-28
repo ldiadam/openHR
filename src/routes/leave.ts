@@ -28,10 +28,113 @@ export const leaveRoutes = new Hono<{ Bindings: Bindings; Variables: AuthContext
 
 leaveRoutes.use('*', authMiddleware);
 
-// 1. Leave Types
+// 1. Leave Types (Bilingual + Full CRUD)
 leaveRoutes.get('/types', async (c) => {
-  const rows = await c.env.DB.prepare(`SELECT * FROM leave_types ORDER BY name ASC`).all<any>();
+  const includeInactive = c.req.query('includeInactive') === '1' || c.req.query('includeInactive') === 'true';
+  const sql = includeInactive
+    ? `SELECT * FROM leave_types ORDER BY COALESCE(sort_order, 100) ASC, name ASC`
+    : `SELECT * FROM leave_types WHERE COALESCE(is_active, 1) = 1 ORDER BY COALESCE(sort_order, 100) ASC, name ASC`;
+  const rows = await c.env.DB.prepare(sql).all<any>();
   return c.json({ leaveTypes: rows.results || [] });
+});
+
+leaveRoutes.post('/types', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const rawCode = String(body.code || '').trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '');
+  const nameId = String(body.name_id || body.name || '').trim();
+  const nameEn = String(body.name_en || body.name || nameId).trim();
+  const name = nameId || nameEn;
+  const description = body.description ? String(body.description).trim() : null;
+  const defaultDays = Math.max(0, Number(body.default_days ?? 0) || 0);
+  const requiresAttachment = body.requires_attachment ? 1 : 0;
+  const isPaid = body.is_paid === false || body.is_paid === 0 ? 0 : 1;
+  const isActive = body.is_active === false || body.is_active === 0 ? 0 : 1;
+  const sortOrder = Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : 100;
+
+  if (!rawCode || !name) {
+    return c.json({ error: 'Kode dan nama jenis cuti wajib diisi / Leave type code and name are required' }, 400);
+  }
+
+  const existing = await c.env.DB.prepare(`SELECT id FROM leave_types WHERE LOWER(code) = ?`).bind(rawCode).first<any>();
+  if (existing) {
+    return c.json({ error: `Kode jenis cuti "${rawCode}" sudah digunakan / Code "${rawCode}" already exists` }, 409);
+  }
+
+  const id = `lt-${rawCode}-${Date.now().toString(36)}`;
+  await c.env.DB.prepare(
+    `INSERT INTO leave_types (id, tenant_id, code, name, name_id, name_en, description, default_days, requires_attachment, is_paid, is_active, sort_order)
+     VALUES (?, 'default', ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)`
+  )
+    .bind(id, rawCode, name, nameId || name, nameEn || name, description, defaultDays, requiresAttachment, isPaid, isActive, sortOrder)
+    .run();
+
+  const created = await c.env.DB.prepare(`SELECT * FROM leave_types WHERE id = ?`).bind(id).first<any>();
+  return c.json({ message: 'Jenis cuti berhasil ditambahkan / Leave type created', leaveType: created }, 201);
+});
+
+leaveRoutes.put('/types/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare(`SELECT * FROM leave_types WHERE id = ?`).bind(id).first<any>();
+  if (!existing) {
+    return c.json({ error: 'Jenis cuti tidak ditemukan / Leave type not found' }, 404);
+  }
+
+  const body = await c.req.json();
+  const rawCode = body.code !== undefined
+    ? String(body.code).trim().toLowerCase().replace(/[^a-z0-9_]+/g, '_').replace(/^_+|_+$/g, '')
+    : existing.code;
+  const nameId = body.name_id !== undefined ? String(body.name_id).trim() : (existing.name_id || existing.name);
+  const nameEn = body.name_en !== undefined ? String(body.name_en).trim() : (existing.name_en || existing.name);
+  const name = nameId || nameEn || existing.name;
+  const description = body.description !== undefined ? (String(body.description).trim() || null) : existing.description;
+  const defaultDays = body.default_days !== undefined ? Math.max(0, Number(body.default_days) || 0) : existing.default_days;
+  const requiresAttachment = body.requires_attachment !== undefined ? (body.requires_attachment ? 1 : 0) : existing.requires_attachment;
+  const isPaid = body.is_paid !== undefined ? (body.is_paid ? 1 : 0) : existing.is_paid;
+  const isActive = body.is_active !== undefined ? (body.is_active ? 1 : 0) : (existing.is_active ?? 1);
+  const sortOrder = body.sort_order !== undefined && Number.isFinite(Number(body.sort_order)) ? Number(body.sort_order) : (existing.sort_order ?? 100);
+
+  if (!rawCode || !name) {
+    return c.json({ error: 'Kode dan nama jenis cuti wajib diisi / Leave type code and name are required' }, 400);
+  }
+
+  if (rawCode !== existing.code) {
+    const dup = await c.env.DB.prepare(`SELECT id FROM leave_types WHERE LOWER(code) = ? AND id != ?`).bind(rawCode, id).first<any>();
+    if (dup) {
+      return c.json({ error: `Kode "${rawCode}" sudah digunakan / Code "${rawCode}" already exists` }, 409);
+    }
+  }
+
+  await c.env.DB.prepare(
+    `UPDATE leave_types
+     SET code = ?, name = ?, name_id = ?, name_en = ?, description = ?,
+         default_days = ?, requires_attachment = ?, is_paid = ?, is_active = ?, sort_order = ?
+     WHERE id = ?`
+  )
+    .bind(rawCode, name, nameId || name, nameEn || name, description, defaultDays, requiresAttachment, isPaid, isActive, sortOrder, id)
+    .run();
+
+  const updated = await c.env.DB.prepare(`SELECT * FROM leave_types WHERE id = ?`).bind(id).first<any>();
+  return c.json({ message: 'Jenis cuti berhasil diperbarui / Leave type updated', leaveType: updated });
+});
+
+leaveRoutes.delete('/types/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  const existing = await c.env.DB.prepare(`SELECT * FROM leave_types WHERE id = ?`).bind(id).first<any>();
+  if (!existing) {
+    return c.json({ error: 'Jenis cuti tidak ditemukan / Leave type not found' }, 404);
+  }
+
+  const reqCount = await c.env.DB.prepare(`SELECT COUNT(*) as cnt FROM leave_requests WHERE leave_type_id = ?`).bind(id).first<any>();
+  if ((reqCount?.cnt || 0) > 0) {
+    return c.json(
+      { error: 'Jenis cuti sudah dipakai di riwayat pengajuan. Nonaktifkan saja alih-alih menghapus. / Leave type is referenced by existing requests; deactivate it instead.' },
+      409
+    );
+  }
+
+  await c.env.DB.prepare(`DELETE FROM leave_balances WHERE leave_type_id = ?`).bind(id).run();
+  await c.env.DB.prepare(`DELETE FROM leave_types WHERE id = ?`).bind(id).run();
+  return c.json({ message: 'Jenis cuti berhasil dihapus / Leave type deleted' });
 });
 
 // 2. Holiday Calendar (Indonesian National + Company)
@@ -85,11 +188,11 @@ leaveRoutes.get('/balances', async (c) => {
   }
 
   const rows = await c.env.DB.prepare(
-    `SELECT lb.*, lt.name as leave_type_name, lt.code as leave_type_code, lt.is_paid
+    `SELECT lb.*, lt.name as leave_type_name, lt.name_id as leave_type_name_id, lt.name_en as leave_type_name_en, lt.code as leave_type_code, lt.is_paid
      FROM leave_balances lb
      JOIN leave_types lt ON lb.leave_type_id = lt.id
      WHERE lb.employee_id = ?
-     ORDER BY lt.name ASC`
+     ORDER BY COALESCE(lt.sort_order, 100) ASC, lt.name ASC`
   )
     .bind(targetEmpId)
     .all<any>();
@@ -270,7 +373,8 @@ leaveRoutes.get('/requests', async (c) => {
   const user = c.get('user');
 
   let query = `
-    SELECT lr.*, e.nik, e.full_name, e.job_title, d.name as department_name, lt.name as leave_type_name, lt.code as leave_type_code
+    SELECT lr.*, e.nik, e.full_name, e.job_title, d.name as department_name,
+           lt.name as leave_type_name, lt.name_id as leave_type_name_id, lt.name_en as leave_type_name_en, lt.code as leave_type_code
     FROM leave_requests lr
     JOIN employees e ON lr.employee_id = e.id
     JOIN leave_types lt ON lr.leave_type_id = lt.id
@@ -425,7 +529,7 @@ leaveRoutes.get('/form/config', async (c) => {
   const [letterhead, departments, leaveTypes, employee, leaveTpl] = await Promise.all([
     loadLetterhead(c.env),
     c.env.DB.prepare(`SELECT id, name, code FROM departments ORDER BY name ASC`).all<any>(),
-    c.env.DB.prepare(`SELECT id, code, name, is_paid FROM leave_types ORDER BY name ASC`).all<any>(),
+    c.env.DB.prepare(`SELECT id, code, name, name_id, name_en, description, default_days, requires_attachment, is_paid FROM leave_types WHERE COALESCE(is_active, 1) = 1 ORDER BY COALESCE(sort_order, 100) ASC, name ASC`).all<any>(),
     user.employeeId
       ? c.env.DB.prepare(`SELECT id, full_name, department_id FROM employees WHERE id = ?`)
           .bind(user.employeeId)

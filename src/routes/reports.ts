@@ -232,7 +232,7 @@ reportRoutes.get('/leave-balances', async (c) => {
 
   const rows = await c.env.DB.prepare(
     `SELECT e.id as employee_id, e.nik, e.full_name, d.name as department_name, 
-            lt.id as leave_type_id, lt.name as leave_type_name,
+            lt.id as leave_type_id, lt.name as leave_type_name, lt.name_id as leave_type_name_id, lt.name_en as leave_type_name_en, lt.code as leave_type_code,
             lb.id as balance_id, lb.year, lb.total_entitled, lb.used_days, lb.remaining_days, lb.adjusted_days
      FROM leave_balances lb
      JOIN employees e ON lb.employee_id = e.id

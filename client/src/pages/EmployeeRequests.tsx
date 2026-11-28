@@ -19,6 +19,7 @@ import {
 import { apiFetch, getLocalDateString, getLocalMonthString, downloadFile, getToken } from '../api';
 import { apiFetchCached } from '../utils/offlineCache';
 import { useLanguage } from '../context/LanguageContext';
+import { getLeaveTypeLabel } from '../utils/leaveTypeLabel';
 import { useCompany } from '../context/CompanyContext';
 import { useAuth } from '../context/AuthContext';
 import { CameraModal } from '../components/CameraModal';
@@ -513,7 +514,7 @@ export const EmployeeRequests: React.FC = () => {
                 title={t.leave.leaveType}
                 options={leaveTypes.map((lt) => ({
                   value: lt.id,
-                  label: `${lt.name} (${lt.is_paid ? tr('Dibayar', 'Paid') : tr('Tanpa Gaji', 'Unpaid')})`,
+                  label: `${getLeaveTypeLabel(lt, lang)} (${lt.is_paid ? tr('Dibayar', 'Paid') : tr('Tanpa Gaji', 'Unpaid')})`,
                 }))}
               />
             </div>

@@ -310,10 +310,17 @@ data class LeaveTypeItem(
     val id: String,
     val code: String? = null,
     val name: String,
+    val name_id: String? = null,
+    val name_en: String? = null,
+    val description: String? = null,
     val default_days: Double = 0.0,
     @Serializable(with = FlexibleBooleanSerializer::class) val requires_attachment: Boolean = false,
     @Serializable(with = FlexibleBooleanSerializer::class) val is_paid: Boolean = true
-)
+) {
+    fun localizedName(lang: String): String =
+        if (lang == "en") (name_en ?: name).ifBlank { name_id ?: code ?: name }
+        else (name_id ?: name).ifBlank { name_en ?: code ?: name }
+}
 
 @Serializable
 data class LeaveBalancesResponse(
@@ -326,6 +333,8 @@ data class LeaveBalanceItem(
     val employee_id: String? = null,
     val leave_type_id: String,
     val leave_type_name: String? = null,
+    val leave_type_name_id: String? = null,
+    val leave_type_name_en: String? = null,
     val leave_type_code: String? = null,
     @Serializable(with = FlexibleBooleanSerializer::class) val is_paid: Boolean = true,
     val year: Int = 2026,
@@ -349,6 +358,8 @@ data class LeaveRequestItem(
     val department_name: String? = null,
     val leave_type_id: String? = null,
     val leave_type_name: String? = null,
+    val leave_type_name_id: String? = null,
+    val leave_type_name_en: String? = null,
     val leave_type_code: String? = null,
     val start_date: String,
     val end_date: String,
