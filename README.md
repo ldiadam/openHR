@@ -1,5 +1,14 @@
 # openHR - Sistem HR, Penggajian & Operasional UKM Indonesia
 
+![openHR — HR, Payroll & ESS Platform](docs/images/hero-banner.jpg)
+
+<p align="center">
+  <img src="https://img.shields.io/badge/Cloudflare-Workers%20%2B%20D1%20%2B%20R2-F38020?style=for-the-badge&logo=cloudflare&logoColor=white" alt="Cloudflare Stack" />
+  <img src="https://img.shields.io/badge/Backend-Hono%20%2B%20TypeScript-E36002?style=for-the-badge&logo=hono&logoColor=white" alt="Hono TypeScript" />
+  <img src="https://img.shields.io/badge/Web-React%2019%20%2B%20Tailwind-61DAFB?style=for-the-badge&logo=react&logoColor=black" alt="React 19" />
+  <img src="https://img.shields.io/badge/Android-Kotlin%20%2B%20Compose-7F52FF?style=for-the-badge&logo=kotlin&logoColor=white" alt="Android Kotlin Compose" />
+</p>
+
 Sistem HR, Penggajian (*Payroll*), dan Employee Self-Service (ESS) yang modular, ringan, dan *mobile-first* untuk Usaha Kecil dan Menengah (UKM/SME) di Indonesia (10–200 karyawan), lengkap dengan aplikasi web admin/karyawan serta aplikasi Android native (`android/`).
 
 Dibangun di atas **Cloudflare Free Tier** menggunakan:
@@ -8,6 +17,8 @@ Dibangun di atas **Cloudflare Free Tier** menggunakan:
 - **Cloudflare R2** untuk penyimpanan berkas aman (KTP, NPWP, kontrak kerja, foto presensi, bukti klaim/petty cash, template Excel kustom, dan dokumen bertanda tangan).
 - **Cloudflare Workers Static Assets** untuk antarmuka web (**React 19 + Vite + Tailwind CSS + Lucide Icons + jsPDF + SheetJS/`xlsx-js-style`**).
 - **Aplikasi Android Native (`android/`)** berbasis **Kotlin + Jetpack Compose + Material 3**, terhubung ke backend lewat login kredensial atau **QR Connect** dan *refresh-token session*.
+
+![Arsitektur openHR di Cloudflare Free Tier](docs/images/architecture-overview.jpg)
 
 ---
 
@@ -53,6 +64,8 @@ Tersedia di **Pengaturan → Template Formulir** (`owner_admin`):
 ---
 
 ## Aplikasi Android ESS (`android/`)
+
+![Tampilan Aplikasi Android ESS openHR](docs/images/android-ess-showcase.jpg)
 
 Aplikasi Android native untuk karyawan, manajer, dan finance:
 - **Autentikasi & Keamanan**: Login email/password, **QR Connect** (scan QR dari portal web), **Refresh Token Session** (`/api/auth/refresh`), dan **Biometric Lock** (`BiometricPrompt`).
