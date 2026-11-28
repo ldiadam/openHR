@@ -36,6 +36,8 @@ import id.openhr.ess.data.local.SessionStore
 import id.openhr.ess.data.model.*
 import id.openhr.ess.data.remote.ApiClient
 import id.openhr.ess.data.repository.EssRepository
+import id.openhr.ess.ui.components.AppDatePickerDialog
+import id.openhr.ess.ui.components.AppTimePickerDialog
 import id.openhr.ess.ui.components.ListSkeletonCards
 import id.openhr.ess.ui.components.StatusPill
 import id.openhr.ess.ui.components.pressScale
@@ -43,7 +45,9 @@ import id.openhr.ess.ui.components.tr
 import id.openhr.ess.ui.theme.LocalEssPalette
 import id.openhr.ess.util.Formatters
 import kotlinx.coroutines.launch
+import java.time.LocalDateTime
 import java.time.YearMonth
+import java.time.format.DateTimeFormatter
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -559,6 +563,8 @@ private fun ApprovalCard(
 fun TasksSection(
     repository: EssRepository,
     sessionStore: SessionStore,
+    showNewSheet: Boolean = false,
+    onDismissSheet: () -> Unit = {},
     onFeedback: (String, Boolean) -> Unit
 ) {
     val scope = rememberCoroutineScope()
@@ -567,18 +573,47 @@ fun TasksSection(
     val user by sessionStore.userFlow.collectAsState()
 
     var tab by remember { mutableStateOf("inbox") }
+    var priorityFilter by remember { mutableStateOf("") }
+    var searchQuery by remember { mutableStateOf("") }
     var tasks by remember { mutableStateOf<List<TaskItem>>(emptyList()) }
     var counts by remember { mutableStateOf(TaskCounts()) }
+    var employees by remember { mutableStateOf<List<TaskEmployeeOption>>(emptyList()) }
     var loading by remember { mutableStateOf(true) }
     var refreshing by remember { mutableStateOf(false) }
 
-    var actionDialog by remember { mutableStateOf<Pair<TaskItem, String>?>(null) } // task to "action" | "close" | "approve"
+    var actionDialog by remember { mutableStateOf<Pair<TaskItem, String>?>(null) } // "action" | "close" | "return"
     var noteInput by remember { mutableStateOf("") }
+
+    var detailTask by remember { mutableStateOf<TaskDetailResponse?>(null) }
+    var detailLoading by remember { mutableStateOf(false) }
+
+    // Handover / Reschedule sheets
+    var handoverTaskTarget by remember { mutableStateOf<TaskItem?>(null) }
+    var handoverEmployeeId by remember { mutableStateOf("") }
+    var handoverEmployeeMenu by remember { mutableStateOf(false) }
+    var handoverReason by remember { mutableStateOf("") }
+
+    var rescheduleTaskTarget by remember { mutableStateOf<TaskItem?>(null) }
+    var rescheduleDate by remember { mutableStateOf(Formatters.localDateString()) }
+    var rescheduleTime by remember { mutableStateOf("18:00") }
+    var rescheduleReason by remember { mutableStateOf("") }
+    var activeDateTarget by remember { mutableStateOf<String?>(null) } // "create" | "reschedule"
+    var activeTimeTarget by remember { mutableStateOf<String?>(null) } // "create" | "reschedule"
+
+    // Create Task sheet state
+    var newTitle by remember { mutableStateOf("") }
+    var newDesc by remember { mutableStateOf("") }
+    var newPriority by remember { mutableStateOf("medium") }
+    var newAssigneeId by remember { mutableStateOf(user?.employeeId ?: "") }
+    var newAssigneeMenu by remember { mutableStateOf(false) }
+    var newDueDate by remember { mutableStateOf(Formatters.localDateString()) }
+    var newDueTime by remember { mutableStateOf("18:00") }
+    var creatingTask by remember { mutableStateOf(false) }
 
     fun loadTasks(isPull: Boolean = false) {
         if (isPull) refreshing = true else loading = true
         scope.launch {
-            repository.getTasks(tab)
+            repository.getTasks(tab = tab, priority = priorityFilter, search = searchQuery)
                 .onSuccess { res ->
                     tasks = res.tasks
                     counts = res.counts
@@ -589,14 +624,59 @@ fun TasksSection(
         }
     }
 
-    LaunchedEffect(tab) { loadTasks() }
+    fun openTaskDetail(task: TaskItem) {
+        detailLoading = true
+        detailTask = TaskDetailResponse(task = task)
+        scope.launch {
+            repository.getTaskDetail(task.id)
+                .onSuccess { detailTask = it }
+                .onFailure { err -> onFeedback(err.message ?: "Error", true) }
+            detailLoading = false
+        }
+    }
+
+    LaunchedEffect(Unit) {
+        repository.getTaskMeta().onSuccess { meta ->
+            employees = meta.employees
+            if (newAssigneeId.isBlank() && meta.employees.isNotEmpty()) {
+                newAssigneeId = meta.employees.first().id
+            }
+        }
+    }
+
+    LaunchedEffect(tab, priorityFilter, searchQuery) { loadTasks() }
+
+    val nowIsoPrefix = remember {
+        LocalDateTime.now().format(DateTimeFormatter.ofPattern("yyyy-MM-dd HH:mm"))
+    }
 
     Column(modifier = Modifier.fillMaxSize(), verticalArrangement = Arrangement.spacedBy(10.dp)) {
+        // Search Bar
+        OutlinedTextField(
+            value = searchQuery,
+            onValueChange = { searchQuery = it },
+            placeholder = { Text(tr(lang, "Cari tugas, nomor TMS...", "Search tasks, TMS no..."), fontSize = 12.sp) },
+            leadingIcon = { Icon(Icons.Default.Search, contentDescription = null, modifier = Modifier.size(18.dp)) },
+            trailingIcon = {
+                if (searchQuery.isNotEmpty()) {
+                    IconButton(onClick = { searchQuery = "" }) {
+                        Icon(Icons.Default.Close, contentDescription = "Clear", modifier = Modifier.size(16.dp))
+                    }
+                }
+            },
+            singleLine = true,
+            shape = RoundedCornerShape(14.dp),
+            modifier = Modifier.fillMaxWidth(),
+            textStyle = TextStyle(fontSize = 13.sp)
+        )
+
+        // Tabs
         val tabs = listOf(
             Triple("inbox", tr(lang, "Tugas Saya", "Inbox"), counts.inbox),
             Triple("assigned", tr(lang, "Diberikan", "Assigned"), counts.assigned),
             Triple("approvals", tr(lang, "Approval", "Approvals"), counts.approvals),
-            Triple("results", tr(lang, "Selesai", "Done"), counts.results)
+            Triple("results", tr(lang, "Selesai", "Done"), counts.results),
+            Triple("all", tr(lang, "Semua", "All"), counts.total)
         )
         Row(
             modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
@@ -607,6 +687,42 @@ fun TasksSection(
                     selected = tab == key,
                     onClick = { tab = key },
                     label = { Text(if (c > 0) "$label ($c)" else label, fontSize = 11.sp) }
+                )
+            }
+        }
+
+        // Priority Filter & Overdue Pill
+        Row(
+            modifier = Modifier.fillMaxWidth().horizontalScroll(rememberScrollState()),
+            horizontalArrangement = Arrangement.spacedBy(6.dp),
+            verticalAlignment = Alignment.CenterVertically
+        ) {
+            if (counts.overdue > 0) {
+                Surface(
+                    shape = RoundedCornerShape(50),
+                    color = palette.dangerSurface,
+                    border = BorderStroke(1.dp, palette.danger.copy(alpha = 0.3f))
+                ) {
+                    Text(
+                        text = "${counts.overdue} ${tr(lang, "terlambat", "overdue")}",
+                        fontSize = 10.sp,
+                        fontWeight = FontWeight.Bold,
+                        color = palette.danger,
+                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 5.dp)
+                    )
+                }
+            }
+            listOf(
+                "" to tr(lang, "Semua Prioritas", "All Priority"),
+                "urgent" to "Urgent",
+                "high" to "High",
+                "medium" to "Medium",
+                "low" to "Low"
+            ).forEach { (key, label) ->
+                FilterChip(
+                    selected = priorityFilter == key,
+                    onClick = { priorityFilter = key },
+                    label = { Text(label, fontSize = 10.sp) }
                 )
             }
         }
@@ -625,12 +741,18 @@ fun TasksSection(
                     color = palette.card,
                     border = BorderStroke(1.dp, palette.cardBorder)
                 ) {
-                    Text(
-                        tr(lang, "Belum ada tugas pada tab ini.", "No tasks in this tab."),
-                        color = palette.textSecondary,
-                        fontSize = 12.sp,
-                        modifier = Modifier.padding(24.dp)
-                    )
+                    Column(
+                        modifier = Modifier.padding(24.dp),
+                        horizontalAlignment = Alignment.CenterHorizontally,
+                        verticalArrangement = Arrangement.spacedBy(6.dp)
+                    ) {
+                        Icon(Icons.Default.TaskAlt, contentDescription = null, tint = palette.textMuted, modifier = Modifier.size(28.dp))
+                        Text(
+                            tr(lang, "Belum ada tugas pada filter ini.", "No tasks match this filter."),
+                            color = palette.textSecondary,
+                            fontSize = 12.sp
+                        )
+                    }
                 }
             } else {
                 LazyColumn(
@@ -643,12 +765,23 @@ fun TasksSection(
                         val canApprove = t.status == "pending_approval" &&
                             (t.assignor_id == user?.employeeId || user?.role == "owner_admin" || user?.role == "manager" || user?.hasTaskApprovalBypass() == true)
                         val isEditable = isAssignee && t.status !in setOf("pending_approval", "approved", "rejected")
+                        val isOverdue = t.due_at.isNotBlank() &&
+                            t.due_at.replace("T", " ").take(16) < nowIsoPrefix &&
+                            t.status !in setOf("approved", "rejected")
+
+                        val (prioColor, prioBg) = when (t.priority.lowercase()) {
+                            "urgent" -> palette.danger to palette.dangerSurface
+                            "high" -> palette.warning to palette.warningSurface
+                            "medium" -> palette.accent to palette.accentSurface
+                            else -> palette.textSecondary to palette.subtleSurface
+                        }
 
                         Surface(
-                            modifier = Modifier.fillMaxWidth(),
+                            onClick = { openTaskDetail(t) },
+                            modifier = Modifier.fillMaxWidth().pressScale(),
                             shape = RoundedCornerShape(18.dp),
                             color = palette.card,
-                            border = BorderStroke(1.dp, palette.cardBorder)
+                            border = BorderStroke(1.dp, if (isOverdue) palette.danger.copy(alpha = 0.45f) else palette.cardBorder)
                         ) {
                             Column(modifier = Modifier.padding(14.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
                                 Row(
@@ -656,18 +789,51 @@ fun TasksSection(
                                     horizontalArrangement = Arrangement.SpaceBetween,
                                     verticalAlignment = Alignment.CenterVertically
                                 ) {
-                                    Text(t.reference_no, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = palette.accent)
+                                    Row(
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Text(t.reference_no, fontSize = 10.sp, fontWeight = FontWeight.Bold, color = palette.accent)
+                                        Surface(shape = RoundedCornerShape(6.dp), color = prioBg) {
+                                            Text(
+                                                t.priority.uppercase(),
+                                                fontSize = 9.sp,
+                                                fontWeight = FontWeight.ExtraBold,
+                                                color = prioColor,
+                                                modifier = Modifier.padding(horizontal = 6.dp, vertical = 2.dp)
+                                            )
+                                        }
+                                    }
                                     StatusPill(status = t.status, lang = lang)
                                 }
+
                                 Text(t.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.textPrimary)
+
                                 if (!t.description.isNullOrBlank()) {
-                                    Text(t.description, fontSize = 12.sp, color = palette.textSecondary, maxLines = 3, overflow = TextOverflow.Ellipsis)
+                                    Text(t.description, fontSize = 12.sp, color = palette.textSecondary, maxLines = 2, overflow = TextOverflow.Ellipsis)
                                 }
-                                Text(
-                                    "${tr(lang, "Tenggat", "Due")}: ${t.due_at} · ${t.priority.uppercase()}",
-                                    fontSize = 11.sp,
-                                    color = palette.textMuted
-                                )
+
+                                Row(
+                                    modifier = Modifier.fillMaxWidth(),
+                                    horizontalArrangement = Arrangement.SpaceBetween,
+                                    verticalAlignment = Alignment.CenterVertically
+                                ) {
+                                    Text(
+                                        text = "${t.assignor_name ?: "-"} → ${t.assignee_name ?: "-"}",
+                                        fontSize = 11.sp,
+                                        color = palette.textSecondary,
+                                        maxLines = 1,
+                                        overflow = TextOverflow.Ellipsis,
+                                        modifier = Modifier.weight(1f)
+                                    )
+                                    Spacer(modifier = Modifier.width(8.dp))
+                                    Text(
+                                        text = t.due_at.replace("T", " ").take(16),
+                                        fontSize = 11.sp,
+                                        fontWeight = if (isOverdue) FontWeight.Bold else FontWeight.Medium,
+                                        color = if (isOverdue) palette.danger else palette.textMuted
+                                    )
+                                }
 
                                 if (isEditable) {
                                     Row(horizontalArrangement = Arrangement.spacedBy(8.dp)) {
@@ -677,7 +843,7 @@ fun TasksSection(
                                             modifier = Modifier.weight(1f).height(36.dp),
                                             contentPadding = PaddingValues(0.dp)
                                         ) {
-                                            Text(tr(lang, "Update", "Progress"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                                            Text(tr(lang, "Progres", "Progress"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
                                         }
                                         Button(
                                             onClick = { noteInput = ""; actionDialog = t to "close" },
@@ -722,6 +888,409 @@ fun TasksSection(
                 }
             }
         }
+    }
+
+    // Task Detail & Activity Timeline Sheet
+    detailTask?.let { d ->
+        val t = d.task
+        val isAssignee = t.assignee_id == user?.employeeId
+        val canApprove = t.status == "pending_approval" &&
+            (t.assignor_id == user?.employeeId || user?.role == "owner_admin" || user?.role == "manager" || user?.hasTaskApprovalBypass() == true)
+        val isEditable = isAssignee && t.status !in setOf("pending_approval", "approved", "rejected")
+
+        ModalBottomSheet(
+            onDismissRequest = { detailTask = null },
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = palette.card,
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Text(t.reference_no, fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.accent)
+                    StatusPill(status = t.status, lang = lang)
+                }
+                Text(t.title, fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = palette.textPrimary)
+                if (!t.description.isNullOrBlank()) {
+                    Text(t.description, fontSize = 13.sp, color = palette.textSecondary)
+                }
+                Surface(
+                    shape = RoundedCornerShape(14.dp),
+                    color = palette.subtleSurface,
+                    modifier = Modifier.fillMaxWidth()
+                ) {
+                    Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(6.dp)) {
+                        Text("${tr(lang, "Pemberi", "Assignor")}: ${t.assignor_name ?: "-"}", fontSize = 12.sp, color = palette.textPrimary)
+                        Text("${tr(lang, "Penerima", "Assignee")}: ${t.assignee_name ?: "-"}", fontSize = 12.sp, color = palette.textPrimary)
+                        Text("${tr(lang, "Prioritas", "Priority")}: ${t.priority.uppercase()} · ${tr(lang, "Tenggat", "Due")}: ${t.due_at.replace("T", " ").take(16)}", fontSize = 12.sp, color = palette.textSecondary)
+                    }
+                }
+
+                if (isEditable) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = {
+                                detailTask = null
+                                handoverEmployeeId = employees.firstOrNull { it.id != user?.employeeId }?.id ?: ""
+                                handoverReason = ""
+                                handoverTaskTarget = t
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Serah Terima", "Handover"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        OutlinedButton(
+                            onClick = {
+                                detailTask = null
+                                rescheduleDate = t.due_at.take(10).ifBlank { Formatters.localDateString() }
+                                rescheduleTime = t.due_at.drop(11).take(5).ifBlank { "18:00" }
+                                rescheduleReason = ""
+                                rescheduleTaskTarget = t
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Jadwal Ulang", "Reschedule"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                    }
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { detailTask = null; noteInput = ""; actionDialog = t to "action" },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Catat Progres", "Log Progress"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = { detailTask = null; noteInput = ""; actionDialog = t to "close" },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = Color.White),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Selesaikan", "Complete"), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                } else if (canApprove) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(
+                            onClick = { detailTask = null; noteInput = ""; actionDialog = t to "return" },
+                            shape = RoundedCornerShape(12.dp),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Kembalikan", "Return"), fontSize = 11.sp, fontWeight = FontWeight.SemiBold)
+                        }
+                        Button(
+                            onClick = {
+                                detailTask = null
+                                scope.launch {
+                                    repository.approveTask(t.id, "approve")
+                                        .onSuccess { onFeedback(tr(lang, "Tugas disetujui", "Task approved"), false); loadTasks() }
+                                        .onFailure { onFeedback(it.message ?: "Error", true) }
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.success, contentColor = Color.White),
+                            modifier = Modifier.weight(1f)
+                        ) {
+                            Text(tr(lang, "Setujui", "Approve"), fontSize = 11.sp, fontWeight = FontWeight.Bold)
+                        }
+                    }
+                }
+
+                Text(tr(lang, "RIWAYAT AKTIVITAS", "ACTIVITY TIMELINE"), fontSize = 11.sp, fontWeight = FontWeight.Bold, color = palette.textMuted)
+                if (detailLoading) {
+                    CircularProgressIndicator(modifier = Modifier.size(20.dp), strokeWidth = 2.dp)
+                } else if (d.activities.isEmpty()) {
+                    Text(tr(lang, "Belum ada aktivitas.", "No activity yet."), fontSize = 12.sp, color = palette.textMuted)
+                } else {
+                    d.activities.forEach { act ->
+                        Surface(
+                            shape = RoundedCornerShape(12.dp),
+                            color = palette.subtleSurface,
+                            modifier = Modifier.fillMaxWidth()
+                        ) {
+                            Column(modifier = Modifier.padding(10.dp), verticalArrangement = Arrangement.spacedBy(2.dp)) {
+                                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
+                                    Text(act.actor_name ?: "-", fontSize = 11.sp, fontWeight = FontWeight.Bold, color = palette.textPrimary)
+                                    Text(act.created_at.replace("T", " ").take(16), fontSize = 10.sp, color = palette.textMuted)
+                                }
+                                Text(act.action_type.replace("_", " ").uppercase(), fontSize = 10.sp, fontWeight = FontWeight.SemiBold, color = palette.accent)
+                                if (!act.note.isNullOrBlank()) {
+                                    Text(act.note, fontSize = 12.sp, color = palette.textSecondary)
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    // Create Task Sheet
+    if (showNewSheet) {
+        ModalBottomSheet(
+            onDismissRequest = onDismissSheet,
+            sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true),
+            containerColor = palette.card,
+            shape = RoundedCornerShape(topStart = 28.dp, topEnd = 28.dp)
+        ) {
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .navigationBarsPadding()
+                    .imePadding()
+                    .verticalScroll(rememberScrollState())
+                    .padding(horizontal = 20.dp)
+                    .padding(bottom = 24.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
+                Text(tr(lang, "Buat Tugas Baru", "Create New Task"), fontSize = 18.sp, fontWeight = FontWeight.ExtraBold, color = palette.textPrimary)
+                OutlinedTextField(
+                    value = newTitle,
+                    onValueChange = { newTitle = it },
+                    label = { Text(tr(lang, "Judul Tugas *", "Task Title *")) },
+                    singleLine = true,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                OutlinedTextField(
+                    value = newDesc,
+                    onValueChange = { newDesc = it },
+                    label = { Text(tr(lang, "Deskripsi", "Description")) },
+                    minLines = 2,
+                    modifier = Modifier.fillMaxWidth()
+                )
+                Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(6.dp)) {
+                    listOf("low", "medium", "high", "urgent").forEach { p ->
+                        FilterChip(
+                            selected = newPriority == p,
+                            onClick = { newPriority = p },
+                            label = { Text(p.uppercase(), fontSize = 10.sp) }
+                        )
+                    }
+                }
+                if (employees.isNotEmpty()) {
+                    val selectedEmp = employees.firstOrNull { it.id == newAssigneeId }
+                    ExposedDropdownMenuBox(
+                        expanded = newAssigneeMenu,
+                        onExpandedChange = { newAssigneeMenu = !newAssigneeMenu }
+                    ) {
+                        OutlinedTextField(
+                            value = selectedEmp?.full_name ?: "",
+                            onValueChange = {},
+                            readOnly = true,
+                            label = { Text(tr(lang, "Ditugaskan ke *", "Assign to *")) },
+                            trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = newAssigneeMenu) },
+                            modifier = Modifier.fillMaxWidth().menuAnchor()
+                        )
+                        ExposedDropdownMenu(
+                            expanded = newAssigneeMenu,
+                            onDismissRequest = { newAssigneeMenu = false }
+                        ) {
+                            employees.forEach { emp ->
+                                DropdownMenuItem(
+                                    text = { Text("${emp.full_name}${emp.department_name?.let { " · $it" } ?: ""}", fontSize = 12.sp) },
+                                    onClick = {
+                                        newAssigneeId = emp.id
+                                        newAssigneeMenu = false
+                                    }
+                                )
+                            }
+                        }
+                    }
+                }
+                Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                    OutlinedButton(
+                        onClick = { activeDateTarget = "create" },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("${tr(lang, "Tanggal", "Date")}: $newDueDate", fontSize = 11.sp)
+                    }
+                    OutlinedButton(
+                        onClick = { activeTimeTarget = "create" },
+                        shape = RoundedCornerShape(12.dp),
+                        modifier = Modifier.weight(1f)
+                    ) {
+                        Text("${tr(lang, "Jam", "Time")}: $newDueTime", fontSize = 11.sp)
+                    }
+                }
+                Button(
+                    enabled = newTitle.isNotBlank() && newAssigneeId.isNotBlank() && !creatingTask,
+                    onClick = {
+                        creatingTask = true
+                        scope.launch {
+                            repository.createTask(
+                                CreateTaskBody(
+                                    title = newTitle.trim(),
+                                    description = newDesc.trim().ifBlank { null },
+                                    priority = newPriority,
+                                    assignee_id = newAssigneeId,
+                                    due_at = "$newDueDate $newDueTime"
+                                )
+                            ).onSuccess {
+                                onFeedback(tr(lang, "Tugas dibuat", "Task created"), false)
+                                newTitle = ""
+                                newDesc = ""
+                                onDismissSheet()
+                                loadTasks()
+                            }.onFailure { err ->
+                                onFeedback(err.message ?: "Error", true)
+                            }
+                            creatingTask = false
+                        }
+                    },
+                    shape = RoundedCornerShape(14.dp),
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = Color.White),
+                    modifier = Modifier.fillMaxWidth().height(48.dp)
+                ) {
+                    Text(if (creatingTask) tr(lang, "Menyimpan...", "Creating...") else tr(lang, "Simpan Tugas", "Create Task"), fontWeight = FontWeight.Bold)
+                }
+            }
+        }
+    }
+
+    // Handover Dialog
+    handoverTaskTarget?.let { task ->
+        AlertDialog(
+            onDismissRequest = { handoverTaskTarget = null },
+            containerColor = palette.card,
+            title = { Text(tr(lang, "Serah Terima Tugas", "Handover Task"), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    if (employees.isNotEmpty()) {
+                        val selected = employees.firstOrNull { it.id == handoverEmployeeId }
+                        ExposedDropdownMenuBox(
+                            expanded = handoverEmployeeMenu,
+                            onExpandedChange = { handoverEmployeeMenu = !handoverEmployeeMenu }
+                        ) {
+                            OutlinedTextField(
+                                value = selected?.full_name ?: "",
+                                onValueChange = {},
+                                readOnly = true,
+                                label = { Text(tr(lang, "Serahkan ke *", "Handover to *")) },
+                                trailingIcon = { ExposedDropdownMenuDefaults.TrailingIcon(expanded = handoverEmployeeMenu) },
+                                modifier = Modifier.fillMaxWidth().menuAnchor()
+                            )
+                            ExposedDropdownMenu(
+                                expanded = handoverEmployeeMenu,
+                                onDismissRequest = { handoverEmployeeMenu = false }
+                            ) {
+                                employees.forEach { emp ->
+                                    DropdownMenuItem(
+                                        text = { Text(emp.full_name, fontSize = 12.sp) },
+                                        onClick = { handoverEmployeeId = emp.id; handoverEmployeeMenu = false }
+                                    )
+                                }
+                            }
+                        }
+                    }
+                    OutlinedTextField(
+                        value = handoverReason,
+                        onValueChange = { handoverReason = it },
+                        label = { Text(tr(lang, "Alasan serah terima *", "Reason *")) },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = handoverEmployeeId.isNotBlank() && handoverReason.isNotBlank(),
+                    onClick = {
+                        val toId = handoverEmployeeId
+                        val r = handoverReason.trim()
+                        handoverTaskTarget = null
+                        scope.launch {
+                            repository.handoverTask(task.id, toId, r)
+                                .onSuccess { onFeedback(tr(lang, "Tugas diserahkan", "Task handed over"), false); loadTasks() }
+                                .onFailure { onFeedback(it.message ?: "Error", true) }
+                        }
+                    }
+                ) { Text(tr(lang, "Kirim", "Submit"), fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { handoverTaskTarget = null }) { Text(tr(lang, "Batal", "Cancel")) } }
+        )
+    }
+
+    // Reschedule Dialog
+    rescheduleTaskTarget?.let { task ->
+        AlertDialog(
+            onDismissRequest = { rescheduleTaskTarget = null },
+            containerColor = palette.card,
+            title = { Text(tr(lang, "Jadwal Ulang Tugas", "Reschedule Task"), fontWeight = FontWeight.Bold) },
+            text = {
+                Column(verticalArrangement = Arrangement.spacedBy(10.dp)) {
+                    Row(horizontalArrangement = Arrangement.spacedBy(8.dp), modifier = Modifier.fillMaxWidth()) {
+                        OutlinedButton(onClick = { activeDateTarget = "reschedule" }, modifier = Modifier.weight(1f)) {
+                            Text(rescheduleDate, fontSize = 11.sp)
+                        }
+                        OutlinedButton(onClick = { activeTimeTarget = "reschedule" }, modifier = Modifier.weight(1f)) {
+                            Text(rescheduleTime, fontSize = 11.sp)
+                        }
+                    }
+                    OutlinedTextField(
+                        value = rescheduleReason,
+                        onValueChange = { rescheduleReason = it },
+                        label = { Text(tr(lang, "Alasan jadwal ulang *", "Reason *")) },
+                        minLines = 2,
+                        modifier = Modifier.fillMaxWidth()
+                    )
+                }
+            },
+            confirmButton = {
+                Button(
+                    enabled = rescheduleReason.isNotBlank(),
+                    onClick = {
+                        val due = "$rescheduleDate $rescheduleTime"
+                        val r = rescheduleReason.trim()
+                        rescheduleTaskTarget = null
+                        scope.launch {
+                            repository.rescheduleTask(task.id, due, r)
+                                .onSuccess { onFeedback(tr(lang, "Jadwal diperbarui", "Rescheduled"), false); loadTasks() }
+                                .onFailure { onFeedback(it.message ?: "Error", true) }
+                        }
+                    }
+                ) { Text(tr(lang, "Simpan", "Save"), fontWeight = FontWeight.Bold) }
+            },
+            dismissButton = { TextButton(onClick = { rescheduleTaskTarget = null }) { Text(tr(lang, "Batal", "Cancel")) } }
+        )
+    }
+
+    activeDateTarget?.let { target ->
+        AppDatePickerDialog(
+            initialDate = if (target == "create") newDueDate else rescheduleDate,
+            lang = lang,
+            onDismiss = { activeDateTarget = null },
+            onConfirm = { picked ->
+                if (target == "create") newDueDate = picked else rescheduleDate = picked
+                activeDateTarget = null
+            }
+        )
+    }
+
+    activeTimeTarget?.let { target ->
+        AppTimePickerDialog(
+            initialTime = if (target == "create") newDueTime else rescheduleTime,
+            title = tr(lang, "Pilih Jam", "Select Time"),
+            lang = lang,
+            onDismiss = { activeTimeTarget = null },
+            onConfirm = { picked ->
+                if (target == "create") newDueTime = picked else rescheduleTime = picked
+                activeTimeTarget = null
+            }
+        )
     }
 
     actionDialog?.let { (task, mode) ->

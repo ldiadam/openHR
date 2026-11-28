@@ -7,12 +7,20 @@ import {
   parseModulesConfig,
   ToggleableModuleId,
 } from '../../../shared/modules';
+import {
+  applyThemePalette,
+  DEFAULT_PRIMARY_COLOR,
+  generateThemePalette,
+  normalizeHexColor,
+  ThemePalette,
+} from '../utils/themePalette';
 
 export interface CompanyInfo {
   id?: string;
   name?: string;
   legal_name?: string;
   logo_url?: string;
+  primary_color?: string;
   npwp?: string;
   bpjs_kesehatan_code?: string;
   bpjs_tk_code?: string;
@@ -35,6 +43,8 @@ interface CompanyContextType {
   logoUrl: string | null;
   isCustomCompany: boolean;
   initials: string;
+  primaryColor: string;
+  palette: ThemePalette;
   modules: ModulesConfig;
   isModuleEnabled: (id: ToggleableModuleId) => boolean;
   leaveWorkflow: LeaveWorkflowMode;
@@ -139,6 +149,13 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
     }
   }, [logoUrl]);
 
+  const primaryColor = normalizeHexColor(company?.primary_color || DEFAULT_PRIMARY_COLOR);
+  const palette = generateThemePalette(primaryColor);
+
+  useEffect(() => {
+    applyThemePalette(primaryColor);
+  }, [primaryColor]);
+
   const updateCompanyLocal = (newInfo: Partial<CompanyInfo>) => {
     setCompany((prev) => ({ ...(prev || {}), ...newInfo }));
   };
@@ -161,6 +178,8 @@ export const CompanyProvider: React.FC<{ children: React.ReactNode }> = ({ child
         logoUrl,
         isCustomCompany,
         initials,
+        primaryColor,
+        palette,
         modules,
         isModuleEnabled,
         leaveWorkflow,

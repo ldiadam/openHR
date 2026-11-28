@@ -22,8 +22,10 @@ import { recruitmentRoutes } from './routes/recruitment';
 import { careersRoutes } from './routes/careers';
 import { webhookRoutes } from './routes/webhooks';
 import { employeeLevelRoutes } from './routes/employee-levels';
-import { getFile } from './services/storage';
+import { clientVisitRoutes } from './routes/client-visits';
+import { getFile, normalizeStoredImage } from './services/storage';
 import { verifyPettyCashToken } from './services/petty-cash-workflow';
+import { verifyBadgeToken } from './utils/id-card-token';
 import { requireModule } from './middleware/modules';
 import { hasPurelymailConfig, parseModulesConfig } from '../shared/modules';
 
@@ -55,7 +57,7 @@ app.get('/api/public/company', async (c) => {
     let comp: any = null;
     try {
       comp = await c.env.DB.prepare(
-        `SELECT name, legal_name, logo_url, address, phone, email, custom_domain, purelymail_domain, purelymail_api_token, purelymail_smtp_pass, modules_json, anti_fake_gps_mode, block_rooted_devices, enforce_device_binding FROM companies LIMIT 1`
+        `SELECT name, legal_name, logo_url, primary_color, address, phone, email, custom_domain, purelymail_domain, purelymail_api_token, purelymail_smtp_pass, modules_json, anti_fake_gps_mode, block_rooted_devices, enforce_device_binding FROM companies LIMIT 1`
       ).first<any>();
     } catch {
       comp = await c.env.DB.prepare(
@@ -79,6 +81,23 @@ app.get('/api/public/company', async (c) => {
     return c.json({ company: comp ? { ...comp, modules, securityPolicy } : null });
   } catch (err: any) {
     return c.json({ company: null });
+  }
+});
+
+// Public Mobile App Version Check (for Android ESS in-app update prompt)
+app.get('/api/public/app-version', async (c) => {
+  try {
+    const row = await c.env.DB.prepare(
+      `SELECT android_latest_version_code, android_latest_version_name, android_apk_url, android_release_notes FROM companies LIMIT 1`
+    ).first<any>();
+    return c.json({
+      version_code: Number(row?.android_latest_version_code || 1),
+      version_name: row?.android_latest_version_name || '1.0.0',
+      apk_url: row?.android_apk_url || null,
+      release_notes: row?.android_release_notes || null,
+    });
+  } catch {
+    return c.json({ version_code: 1, version_name: '1.0.0', apk_url: null, release_notes: null });
   }
 });
 
@@ -116,6 +135,81 @@ app.get('/api/public/company-logo', async (c) => {
   } catch {
     return c.json({ error: 'Logo not found' }, 404);
   }
+});
+
+// Public Employee ID Card Verification & Photo (HMAC-signed)
+app.get('/api/public/id-card/:id', async (c) => {
+  const id = c.req.param('id');
+  const token = c.req.query('token') || '';
+
+  const valid = await verifyBadgeToken(c.env.JWT_SECRET, id, token);
+  if (!valid) {
+    return c.json({ error: 'Invalid or tampered employee ID badge.' }, 403);
+  }
+
+  const [emp, comp] = await Promise.all([
+    c.env.DB.prepare(
+      `SELECT e.id, e.nik, e.full_name, e.job_title, e.employment_status, e.lifecycle_status, e.join_date, e.photo_key,
+              d.name as department_name, b.name as branch_name,
+              l.code as level_code, l.name as level_name, l.color as level_color
+       FROM employees e
+       LEFT JOIN departments d ON e.department_id = d.id
+       LEFT JOIN branches b ON e.branch_id = b.id
+       LEFT JOIN employee_levels l ON e.level_id = l.id
+       WHERE e.id = ?`
+    )
+      .bind(id)
+      .first<any>(),
+    c.env.DB.prepare(`SELECT name, legal_name, logo_url, primary_color, address, phone, email FROM companies LIMIT 1`).first<any>(),
+  ]);
+
+  if (!emp) {
+    return c.json({ error: 'Employee badge not found.' }, 404);
+  }
+
+  const isActive = ['active', 'probation', 'on_leave'].includes(String(emp.lifecycle_status || '').toLowerCase());
+  const encodedToken = encodeURIComponent(token);
+
+  return c.json({
+    verified: true,
+    active: isActive,
+    employee: {
+      id: emp.id,
+      nik: emp.nik,
+      full_name: emp.full_name,
+      job_title: emp.job_title,
+      department_name: emp.department_name,
+      branch_name: emp.branch_name,
+      employment_status: emp.employment_status,
+      lifecycle_status: emp.lifecycle_status,
+      join_date: emp.join_date,
+      level_code: emp.level_code,
+      level_name: emp.level_name,
+      level_color: emp.level_color,
+      photo_url: emp.photo_key ? `/api/public/id-card/${encodeURIComponent(emp.id)}/photo?token=${encodedToken}` : null,
+    },
+    company: comp || null,
+  });
+});
+
+app.get('/api/public/id-card/:id/photo', async (c) => {
+  const id = c.req.param('id');
+  const token = c.req.query('token') || '';
+  const valid = await verifyBadgeToken(c.env.JWT_SECRET, id, token);
+  if (!valid) return c.json({ error: 'Invalid badge token' }, 403);
+
+  const row = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`).bind(id).first<{ photo_key?: string | null }>();
+  if (!row?.photo_key) return c.json({ error: 'Photo not found' }, 404);
+
+  const stored = await getFile(c.env, row.photo_key);
+  if (!stored) return c.json({ error: 'Photo not found' }, 404);
+
+  const normalized = normalizeStoredImage(stored);
+  if (!normalized) return c.json({ error: 'Invalid image' }, 422);
+
+  c.header('Content-Type', normalized.contentType || 'image/jpeg');
+  c.header('Cache-Control', 'public, max-age=3600');
+  return c.body(normalized.data as any);
 });
 
 // Public Petty Cash Report Verification & Viewing (token-signed)
@@ -268,6 +362,7 @@ app.get('/api/manifest.webmanifest', async (c) => {
 
 // Module guards
 app.use('/api/attendance/*', requireModule('attendance'));
+app.use('/api/client-visits/*', requireModule('attendance'));
 app.use('/api/leave/*', requireModule('leave'));
 app.use('/api/shifts/*', requireModule('shifts'));
 app.use('/api/payroll/*', requireModule('payroll'));
@@ -287,6 +382,7 @@ app.use('/api/hr/documents/*', requireModule('signing'));
 app.route('/api/auth', authRoutes);
 app.route('/api/employees', employeeRoutes);
 app.route('/api/attendance', attendanceRoutes);
+app.route('/api/client-visits', clientVisitRoutes);
 app.route('/api/leave', leaveRoutes);
 app.route('/api/shifts', shiftRoutes);
 app.route('/api/payroll', payrollRoutes);

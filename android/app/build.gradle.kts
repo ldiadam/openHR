@@ -22,8 +22,8 @@ android {
         applicationId = "id.openhr.ess"
         minSdk = 26
         targetSdk = 35
-        versionCode = 2
-        versionName = "1.1.0"
+        versionCode = 3
+        versionName = "1.2.0"
     }
 
     signingConfigs {
@@ -75,6 +75,10 @@ android {
         compose = true
         buildConfig = true
     }
+
+    androidResources {
+        noCompress += "tflite"
+    }
 }
 
 dependencies {
@@ -110,6 +114,8 @@ dependencies {
     implementation(libs.maplibre.sdk)
     implementation(libs.androidx.biometric)
     implementation(libs.androidx.fragment.ktx)
+    implementation(libs.mlkit.face.detection)
+    implementation(libs.tensorflow.lite)
 
     testImplementation(libs.junit)
     debugImplementation(libs.androidx.ui.tooling)

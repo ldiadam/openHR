@@ -149,3 +149,18 @@ a,
 ::-webkit-scrollbar-thumb:hover {
   background: rgba(100, 116, 139, 0.7);
 }
+
+/* Shared Morphing Hero Header View Transition */
+::view-transition-group(ess-hero) {
+  animation-duration: 280ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}
+::view-transition-old(ess-hero),
+::view-transition-new(ess-hero) {
+  height: 100%;
+  overflow: clip;
+}
+::view-transition-group(root) {
+  animation-duration: 240ms;
+  animation-timing-function: cubic-bezier(0.22, 1, 0.36, 1);
+}

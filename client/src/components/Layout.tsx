@@ -36,7 +36,7 @@ import { getOfflineQueue, syncOfflineQueue } from '../api';
 export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) => {
   const { user, logout, isOwnerAdmin, isManager, isFinance, isEmployee } = useAuth();
   const { t, tr } = useLanguage();
-  const { companyName, isCustomCompany, initials, legalName, logoUrl, isModuleEnabled } = useCompany();
+  const { companyName, isCustomCompany, initials, legalName, logoUrl, isModuleEnabled, palette } = useCompany();
   const location = useLocation();
   const [mobileMenuOpen, setMobileMenuOpen] = useState(false);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
@@ -165,7 +165,8 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
   const isClockInPage = location.pathname === '/app';
   const hideMobileHeader =
     isClockInPage ||
-    ['/app/attendance', '/app/requests', '/app/payslips', '/app/profile'].includes(location.pathname);
+    ['/app/attendance', '/app/calendar', '/app/requests', '/app/payslips', '/app/profile'].includes(location.pathname) ||
+    location.pathname.startsWith('/app/tasks');
 
   return (
     <div className={`min-h-screen bg-slate-50 flex flex-col md:flex-row ${isEmployee ? 'ess-no-select' : ''}`}>
@@ -430,15 +431,21 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
       {/* Main Content Area */}
       <main
         className={`flex-1 flex flex-col min-w-0 pb-20 md:pb-6 ${
-          hideMobileHeader && !isClockInPage ? 'pt-0' : 'pt-12'
+          hideMobileHeader ? 'pt-0' : 'pt-12'
         } md:pt-0`}
       >
-        <div className="flex-1 p-4 md:p-8 max-w-7xl mx-auto w-full">{children}</div>
+        <div
+          className={`flex-1 max-w-7xl mx-auto w-full ${
+            hideMobileHeader ? 'p-0 md:p-8' : 'p-4 md:p-8'
+          }`}
+        >
+          {children}
+        </div>
       </main>
 
       {/* Employee Self-Service bottom bar (also while a manager is inside /app) */}
       {showEssBottomBar && (
-        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white border-t border-slate-200 z-40 flex items-center justify-around py-1.5 px-2 shadow-lg">
+        <nav className="md:hidden fixed bottom-0 left-0 right-0 bg-white/95 backdrop-blur-md border-t border-slate-200/80 z-40 flex items-center justify-around py-1.5 px-2 shadow-[0_-4px_20px_rgba(15,23,42,0.06)]">
           {essBottomNav.map((item) => {
             const active = location.pathname === item.path;
             const Icon = item.icon;
@@ -446,11 +453,18 @@ export const Layout: React.FC<{ children: React.ReactNode }> = ({ children }) =>
               <Link
                 key={item.path}
                 to={item.path}
-                className={`flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-lg text-[10px] font-semibold transition ${
-                  active ? 'text-blue-600' : 'text-slate-500 hover:text-slate-900'
+                style={active ? { color: palette.primary } : undefined}
+                className={`relative flex-1 min-w-0 flex flex-col items-center justify-center py-1 px-1 rounded-xl text-[10px] font-semibold transition ${
+                  active ? '' : 'text-slate-400 hover:text-slate-700'
                 }`}
               >
-                <Icon size={18} className={active ? 'stroke-[2.5]' : 'stroke-[1.75]'} />
+                {active && (
+                  <span
+                    className="absolute -top-1.5 w-6 h-0.5 rounded-full"
+                    style={{ backgroundColor: palette.primary }}
+                  />
+                )}
+                <Icon size={19} className={active ? 'stroke-[2.4]' : 'stroke-[1.75]'} />
                 <span className="mt-0.5 w-full truncate text-center leading-tight">{item.name}</span>
               </Link>
             );

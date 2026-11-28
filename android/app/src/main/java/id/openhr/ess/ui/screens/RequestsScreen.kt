@@ -17,6 +17,7 @@ import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.rememberScrollState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
@@ -30,9 +31,11 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
@@ -65,7 +68,6 @@ import java.time.temporal.ChronoUnit
 import kotlin.math.round
 
 private enum class RequestSection {
-    HUB,
     APPROVALS,
     LEAVE,
     OVERTIME,
@@ -77,23 +79,17 @@ private enum class RequestSection {
     DOCUMENTS
 }
 
-private data class RequestCardSpec(
-    val section: RequestSection,
-    val title: String,
-    val subtitle: String,
-    val badge: String?,
-    val icon: ImageVector,
-    val tint: Color,
-    val bgTint: Color
-)
-
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun RequestsScreen(
     repository: EssRepository,
     sessionStore: SessionStore,
     apiClient: ApiClient,
-    isVisible: Boolean = true
+    isVisible: Boolean = true,
+    requestedSectionName: String? = null,
+    onConsumedRequestedSection: () -> Unit = {},
+    onHeroHeightChanged: (Int) -> Unit = {},
+    onBackToHome: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -108,10 +104,16 @@ fun RequestsScreen(
         user?.canApproveAny() == true
     var taskInboxCount by remember { mutableIntStateOf(0) }
     var teamPendingCount by remember { mutableIntStateOf(0) }
-    var announcements by remember { mutableStateOf<List<AnnouncementItem>>(emptyList()) }
-    var showAnnouncementsSheet by remember { mutableStateOf(false) }
 
-    var section by remember { mutableStateOf(RequestSection.HUB) }
+    var section by remember {
+        mutableStateOf(
+            requestedSectionName?.let { runCatching { RequestSection.valueOf(it) }.getOrNull() }
+                ?: RequestSection.LEAVE
+        )
+    }
+    val effectiveSection = remember(requestedSectionName, section) {
+        requestedSectionName?.let { runCatching { RequestSection.valueOf(it) }.getOrNull() } ?: section
+    }
     var showFormSheet by remember { mutableStateOf(false) }
     var statusFilter by remember { mutableStateOf("all") }
     var claimMonth by remember { mutableStateOf(YearMonth.now()) }
@@ -119,6 +121,17 @@ fun RequestsScreen(
     var refreshing by remember { mutableStateOf(false) }
     var submitting by remember { mutableStateOf(false) }
     var feedback by remember { mutableStateOf<Pair<String, Boolean>?>(null) }
+
+    LaunchedEffect(requestedSectionName) {
+        if (!requestedSectionName.isNullOrBlank()) {
+            runCatching { RequestSection.valueOf(requestedSectionName) }.getOrNull()?.let { target ->
+                section = target
+                statusFilter = "all"
+                feedback = null
+            }
+            onConsumedRequestedSection()
+        }
+    }
 
     // Data backed by repository caches
     var leaveTypes by remember { mutableStateOf<List<LeaveTypeItem>>(emptyList()) }
@@ -188,43 +201,9 @@ fun RequestsScreen(
         }
     }
 
-    fun loadHubSummary() {
-        scope.launch {
-            if (modules.leave) {
-                repository.getLeaveBalances().onSuccess { leaveBalances = it }
-                repository.getLeaveRequests().onSuccess { leaveRequests = it }
-            }
-            if (modules.attendance) {
-                repository.getOvertimeRequests().onSuccess { overtimeRequests = it }
-            }
-            if (modules.claims) {
-                repository.getReimbursements(Formatters.localMonthString(claimMonth)).onSuccess { reimbursements = it }
-                repository.getKasbonRequests().onSuccess { kasbonList = it }
-            }
-            repository.getTasks("inbox").onSuccess { taskInboxCount = it.counts.inbox }
-            repository.getAnnouncements().onSuccess { announcements = it }
-            if (isReviewer) {
-                var total = 0
-                val role = user?.role ?: "employee"
-                if (role == "owner_admin" || role == "manager" || user?.level?.capabilities?.can_approve_leave == true || user?.level?.capabilities?.can_approve_overtime == true) {
-                    if (modules.leave) repository.getTeamLeaveRequests().onSuccess { total += it.count { r -> r.status == "pending" } }
-                    if (modules.attendance) {
-                        repository.getTeamOvertimeRequests().onSuccess { total += it.count { r -> r.status == "pending" } }
-                        repository.getTeamAttendanceCorrections().onSuccess { total += it.count { r -> r.status == "pending" } }
-                    }
-                }
-                if (modules.claims) {
-                    repository.getTeamReimbursements(Formatters.localMonthString(claimMonth))
-                        .onSuccess { total += it.count { r -> r.status == "pending" } }
-                }
-                teamPendingCount = total
-            }
-        }
-    }
-
     fun loadCurrentSection(isPullRefresh: Boolean = false) {
-        val hasCache = when (section) {
-            RequestSection.HUB, RequestSection.APPROVALS, RequestSection.PETTY_CASH,
+        val hasCache = when (effectiveSection) {
+            RequestSection.APPROVALS, RequestSection.PETTY_CASH,
             RequestSection.TASKS, RequestSection.ASSETS, RequestSection.DOCUMENTS -> true
             RequestSection.LEAVE -> repository.cachedLeaveRequests != null
             RequestSection.OVERTIME -> repository.cachedOvertimeRequests != null
@@ -238,8 +217,7 @@ fun RequestsScreen(
         }
 
         scope.launch {
-            when (section) {
-                RequestSection.HUB -> loadHubSummary()
+            when (effectiveSection) {
                 RequestSection.LEAVE -> {
                     repository.getLeaveTypes().onSuccess { list ->
                         leaveTypes = list
@@ -269,12 +247,11 @@ fun RequestsScreen(
         repository.getPublicCompany().onSuccess { comp ->
             comp?.modules?.let { sessionStore.saveModules(it) }
         }
-        loadHubSummary()
     }
 
-    LaunchedEffect(modules, section, isReviewer) {
-        val allowed = when (section) {
-            RequestSection.HUB, RequestSection.TASKS, RequestSection.ASSETS, RequestSection.DOCUMENTS -> true
+    LaunchedEffect(modules, effectiveSection, isReviewer) {
+        val allowed = when (effectiveSection) {
+            RequestSection.TASKS, RequestSection.ASSETS, RequestSection.DOCUMENTS -> true
             RequestSection.APPROVALS -> isReviewer
             RequestSection.LEAVE -> modules.leave
             RequestSection.OVERTIME -> modules.attendance
@@ -283,63 +260,65 @@ fun RequestsScreen(
         }
         if (!allowed) {
             showFormSheet = false
-            section = RequestSection.HUB
+            onBackToHome()
         }
     }
 
-    LaunchedEffect(section, claimMonth) {
-        if (section != RequestSection.HUB) loadCurrentSection()
+    LaunchedEffect(effectiveSection, claimMonth) {
+        loadCurrentSection()
     }
 
-    BackHandler(enabled = isVisible && section != RequestSection.HUB && !showFormSheet) {
+    BackHandler(enabled = isVisible && !showFormSheet) {
         feedback = null
         statusFilter = "all"
-        section = RequestSection.HUB
+        onBackToHome()
     }
 
     Box(
         modifier = Modifier
             .fillMaxSize()
-            .background(palette.canvas)
     ) {
         Column(
             modifier = Modifier
-                .fillMaxSize()
-                .padding(horizontal = 16.dp, vertical = 12.dp),
+                .fillMaxSize(),
             verticalArrangement = Arrangement.spacedBy(12.dp)
         ) {
-            // Header
+            // Full-Bleed Colored Hero Header (transparent over shared morphing hero backdrop)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { onHeroHeightChanged(it.height) }
+                    .statusBarsPadding()
+                    .padding(horizontal = 16.dp, vertical = 14.dp)
+            ) {
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
             Row(
                 modifier = Modifier.fillMaxWidth(),
                 verticalAlignment = Alignment.CenterVertically,
                 horizontalArrangement = Arrangement.spacedBy(10.dp)
             ) {
-                if (section != RequestSection.HUB) {
-                    Surface(
-                        onClick = {
-                            feedback = null
-                            statusFilter = "all"
-                            section = RequestSection.HUB
-                        },
-                        shape = RoundedCornerShape(12.dp),
-                        color = palette.card,
-                        border = BorderStroke(1.dp, palette.cardBorder),
-                        modifier = Modifier.size(38.dp)
-                    ) {
-                        Box(contentAlignment = Alignment.Center) {
-                            Icon(
-                                Icons.AutoMirrored.Filled.ArrowBack,
-                                contentDescription = "Back",
-                                tint = palette.textPrimary,
-                                modifier = Modifier.size(18.dp)
-                            )
-                        }
+                Surface(
+                    onClick = {
+                        feedback = null
+                        statusFilter = "all"
+                        onBackToHome()
+                    },
+                    shape = RoundedCornerShape(12.dp),
+                    color = palette.onHero.copy(alpha = 0.16f),
+                    modifier = Modifier.size(38.dp)
+                ) {
+                    Box(contentAlignment = Alignment.Center) {
+                        Icon(
+                            Icons.AutoMirrored.Filled.ArrowBack,
+                            contentDescription = "Back",
+                            tint = palette.onHero,
+                            modifier = Modifier.size(18.dp)
+                        )
                     }
                 }
                 Column(modifier = Modifier.weight(1f)) {
                     Text(
-                        text = when (section) {
-                            RequestSection.HUB -> tr(lang, "Aktivitas & Pengajuan", "Requests & Workspace")
+                        text = when (effectiveSection) {
                             RequestSection.APPROVALS -> tr(lang, "Persetujuan Tim", "Team Approvals")
                             RequestSection.LEAVE -> tr(lang, "Cuti & Izin", "Leave & Absence")
                             RequestSection.OVERTIME -> tr(lang, "Pengajuan Lembur", "Overtime Requests")
@@ -351,11 +330,10 @@ fun RequestsScreen(
                             RequestSection.DOCUMENTS -> tr(lang, "Dokumen & Tanda Tangan", "Documents & Signing")
                         },
                         style = MaterialTheme.typography.titleLarge,
-                        color = palette.textPrimary
+                        color = palette.onHero
                     )
                     Text(
-                        text = when (section) {
-                            RequestSection.HUB -> tr(lang, "Pengajuan, tugas, aset & persetujuan", "Requests, tasks, assets & approvals")
+                        text = when (effectiveSection) {
                             RequestSection.APPROVALS -> tr(lang, "Tinjau permohonan anggota tim", "Review team requests")
                             RequestSection.TASKS -> tr(lang, "Daftar tugas & progres kerja", "Assigned tasks & progress")
                             RequestSection.ASSETS -> tr(lang, "Inventaris yang dipinjamkan", "Assigned company inventory")
@@ -363,258 +341,127 @@ fun RequestsScreen(
                             else -> tr(lang, "Riwayat & status persetujuan", "History & approval status")
                         },
                         style = MaterialTheme.typography.bodySmall,
-                        color = palette.textSecondary
+                        color = palette.onHero.copy(alpha = 0.85f)
                     )
                 }
-                val unackedCount = announcements.count { !it.acknowledged }
-                Surface(
-                    onClick = { showAnnouncementsSheet = true },
-                    shape = RoundedCornerShape(12.dp),
-                    color = palette.card,
-                    border = BorderStroke(1.dp, palette.cardBorder),
-                    modifier = Modifier.size(38.dp)
-                ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (unackedCount > 0) Icons.Default.NotificationsActive else Icons.Default.Notifications,
-                            contentDescription = "Announcements",
-                            tint = if (unackedCount > 0) palette.accent else palette.textSecondary,
-                            modifier = Modifier.size(19.dp)
-                        )
-                        if (unackedCount > 0) {
-                            Box(
-                                modifier = Modifier
-                                    .align(Alignment.TopEnd)
-                                    .padding(7.dp)
-                                    .size(8.dp)
-                                    .clip(RoundedCornerShape(50))
-                                    .background(palette.danger)
+                if (effectiveSection == RequestSection.TASKS) {
+                    Surface(
+                        onClick = { showFormSheet = true },
+                        shape = RoundedCornerShape(12.dp),
+                        color = palette.onHero.copy(alpha = 0.16f),
+                        modifier = Modifier.size(38.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = Icons.Default.Add,
+                                contentDescription = "New Task",
+                                tint = palette.onHero,
+                                modifier = Modifier.size(20.dp)
                             )
                         }
                     }
                 }
             }
+
+            // Screen 5: Annual Leave Balance Hero inside colored header
+            if (section == RequestSection.LEAVE) {
+                val annualBal = leaveBalances.firstOrNull { it.leave_type_code == "annual" } ?: leaveBalances.firstOrNull()
+                val remaining = annualBal?.remaining_days ?: 12.0
+                val used = annualBal?.used_days ?: 0.0
+                val pendingCount = leaveRequests.count { it.status == "pending" }
+                val approvedCount = leaveRequests.count { it.status == "approved" }
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(tr(lang, "Total Sisa Cuti", "Remaining Leave Balance"), fontSize = 11.sp, color = palette.onHero.copy(alpha = 0.85f))
+                    Text(
+                        text = "${if (remaining % 1.0 == 0.0) remaining.toInt() else remaining} ${tr(lang, "hari", "days")}",
+                        fontSize = 32.sp,
+                        fontWeight = FontWeight.Black,
+                        color = palette.onHero
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(tr(lang, "Diambil", "Used"), fontSize = 10.sp, color = palette.onHero.copy(alpha = 0.8f))
+                            Text("${if (used % 1.0 == 0.0) used.toInt() else used} ${tr(lang, "hari", "d")}", fontSize = 13.sp, fontWeight = FontWeight.Bold, color = palette.onHero)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(tr(lang, "Menunggu", "Pending"), fontSize = 10.sp, color = palette.onHero.copy(alpha = 0.8f))
+                            Text(pendingCount.toString(), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = palette.onHero)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(tr(lang, "Disetujui", "Approved"), fontSize = 10.sp, color = palette.onHero.copy(alpha = 0.8f))
+                            Text(approvedCount.toString(), fontSize = 13.sp, fontWeight = FontWeight.Bold, color = palette.onHero)
+                        }
+                    }
+                }
+            }
+
+            // Screen 2: Reimbursement Summary Hero inside colored header
+            if (section == RequestSection.REIMBURSEMENT) {
+                val totalClaim = reimbursements.sumOf { it.amount }
+                val approvedClaim = reimbursements.filter { it.status == "approved" || it.status == "paid" }.sumOf { it.amount }
+                val pendingClaim = reimbursements.filter { it.status == "pending" }.sumOf { it.amount }
+                val progress = if (totalClaim > 0.0) (approvedClaim / totalClaim).toFloat().coerceIn(0f, 1f) else 0f
+                Column(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalAlignment = Alignment.CenterHorizontally,
+                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                ) {
+                    Text(tr(lang, "Total Klaim Periode Ini", "Total Claims This Period"), fontSize = 11.sp, color = palette.onHero.copy(alpha = 0.85f))
+                    Text(
+                        text = Formatters.formatRupiah(totalClaim),
+                        fontSize = 26.sp,
+                        fontWeight = FontWeight.Black,
+                        color = palette.onHero
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceEvenly
+                    ) {
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(tr(lang, "Disetujui / Dibayar", "Approved / Paid"), fontSize = 10.sp, color = palette.onHero.copy(alpha = 0.8f))
+                            Text(Formatters.formatRupiah(approvedClaim), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.onHero)
+                        }
+                        Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                            Text(tr(lang, "Dalam Proses", "In Process"), fontSize = 10.sp, color = palette.onHero.copy(alpha = 0.8f))
+                            Text(Formatters.formatRupiah(pendingClaim), fontSize = 12.sp, fontWeight = FontWeight.Bold, color = palette.onHero)
+                        }
+                    }
+                    LinearProgressIndicator(
+                        progress = { progress },
+                        modifier = Modifier.fillMaxWidth().height(6.dp).clip(RoundedCornerShape(50)),
+                        color = Color.White,
+                        trackColor = palette.onHero.copy(alpha = 0.25f)
+                    )
+                }
+            }
+            }
+            }
+
+            Column(
+                modifier = Modifier
+                    .weight(1f)
+                    .padding(horizontal = 16.dp),
+                verticalArrangement = Arrangement.spacedBy(12.dp)
+            ) {
 
             feedback?.let { (msg, isErr) ->
                 FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
             }
 
             AnimatedContent(
-                targetState = section,
-                transitionSpec = { fadeIn(tween(120)) togetherWith fadeOut(tween(90)) },
+                targetState = effectiveSection,
+                transitionSpec = { fadeIn(tween(80)) togetherWith fadeOut(tween(60)) },
                 modifier = Modifier.weight(1f),
                 label = "requests_stage"
             ) { activeSection ->
-                if (activeSection == RequestSection.HUB) {
-                    val annualRemain = leaveBalances.firstOrNull { it.leave_type_code == "annual" }?.remaining_days
-                    val leavePending = leaveRequests.count { it.status == "pending" }
-                    val otPending = overtimeRequests.count { it.status == "pending" }
-                    val reimbPending = reimbursements.count { it.status == "pending" }
-                    val kasbonPending = kasbonList.count { it.status == "pending" }
-
-                    val enabledCards = buildList {
-                        if (modules.leave) {
-                            val badge = when {
-                                leavePending > 0 -> "$leavePending ${tr(lang, "menunggu", "pending")}"
-                                annualRemain != null -> "${tr(lang, "Sisa", "Left")} ${annualRemain.toInt()} ${tr(lang, "hari", "d")}"
-                                else -> null
-                            }
-                            add(
-                                RequestCardSpec(
-                                    section = RequestSection.LEAVE,
-                                    title = tr(lang, "Cuti & Izin", "Leave & Absence"),
-                                    subtitle = tr(lang, "Cuti tahunan, izin, dan sakit", "Annual leave, sick & permission"),
-                                    badge = badge,
-                                    icon = Icons.Default.EventAvailable,
-                                    tint = palette.accent,
-                                    bgTint = palette.accentSurface
-                                )
-                            )
-                        }
-                        if (modules.attendance) {
-                            add(
-                                RequestCardSpec(
-                                    section = RequestSection.OVERTIME,
-                                    title = tr(lang, "Lembur", "Overtime"),
-                                    subtitle = tr(lang, "Pengajuan kerja lembur", "Overtime work requests"),
-                                    badge = if (otPending > 0) "$otPending ${tr(lang, "menunggu", "pending")}" else null,
-                                    icon = Icons.Default.Schedule,
-                                    tint = palette.warning,
-                                    bgTint = palette.warningSurface
-                                )
-                            )
-                        }
-                        if (modules.claims) {
-                            add(
-                                RequestCardSpec(
-                                    section = RequestSection.REIMBURSEMENT,
-                                    title = tr(lang, "Klaim Biaya", "Expense Claims"),
-                                    subtitle = tr(lang, "Reimbursement & foto struk", "Expenses & receipt proof"),
-                                    badge = if (reimbPending > 0) "$reimbPending ${tr(lang, "menunggu", "pending")}" else null,
-                                    icon = Icons.AutoMirrored.Filled.ReceiptLong,
-                                    tint = palette.success,
-                                    bgTint = palette.successSurface
-                                )
-                            )
-                            add(
-                                RequestCardSpec(
-                                    section = RequestSection.KASBON,
-                                    title = tr(lang, "Kasbon", "Salary Advance"),
-                                    subtitle = tr(lang, "Pinjaman potong gaji", "Instalment advance"),
-                                    badge = if (kasbonPending > 0) "$kasbonPending ${tr(lang, "menunggu", "pending")}" else null,
-                                    icon = Icons.Default.Payments,
-                                    tint = Color(0xFF8B5CF6),
-                                    bgTint = Color(0xFF8B5CF6).copy(alpha = if (palette.isDark) 0.18f else 0.10f)
-                                )
-                            )
-                        }
-                        if (modules.petty_cash) {
-                            add(
-                                RequestCardSpec(
-                                    section = RequestSection.PETTY_CASH,
-                                    title = "Petty Cash",
-                                    subtitle = tr(lang, "Dana operasional harian", "Operational cash advance"),
-                                    badge = null,
-                                    icon = Icons.Default.AccountBalanceWallet,
-                                    tint = Color(0xFF0EA5E9),
-                                    bgTint = Color(0xFF0EA5E9).copy(alpha = if (palette.isDark) 0.18f else 0.10f)
-                                )
-                            )
-                        }
-                    }
-
-                    val workspaceCards = listOf(
-                        RequestCardSpec(
-                            section = RequestSection.TASKS,
-                            title = tr(lang, "Tugas (TMS)", "Tasks (TMS)"),
-                            subtitle = tr(lang, "Tugas masuk & penyelesaian", "Task inbox & completion"),
-                            badge = if (taskInboxCount > 0) "$taskInboxCount ${tr(lang, "aktif", "open")}" else null,
-                            icon = Icons.Default.TaskAlt,
-                            tint = palette.accent,
-                            bgTint = palette.accentSurface
-                        ),
-                        RequestCardSpec(
-                            section = RequestSection.ASSETS,
-                            title = tr(lang, "Aset Saya", "My Assets"),
-                            subtitle = tr(lang, "Laptop & inventaris kantor", "Assigned equipment"),
-                            badge = null,
-                            icon = Icons.Default.Devices,
-                            tint = palette.success,
-                            bgTint = palette.successSurface
-                        ),
-                        RequestCardSpec(
-                            section = RequestSection.DOCUMENTS,
-                            title = tr(lang, "Dokumen", "Documents"),
-                            subtitle = tr(lang, "Kontrak & tanda tangan", "Contracts & signatures"),
-                            badge = null,
-                            icon = Icons.Default.Description,
-                            tint = palette.warning,
-                            bgTint = palette.warningSurface
-                        )
-                    )
-
-                    Column(
-                        modifier = Modifier.verticalScroll(rememberScrollState()),
-                        verticalArrangement = Arrangement.spacedBy(12.dp)
-                    ) {
-                        if (isReviewer) {
-                            Surface(
-                                onClick = { section = RequestSection.APPROVALS },
-                                shape = RoundedCornerShape(20.dp),
-                                color = palette.accentSurface,
-                                border = BorderStroke(1.dp, palette.accent.copy(alpha = 0.35f)),
-                                modifier = Modifier.fillMaxWidth().pressScale()
-                            ) {
-                                Row(
-                                    modifier = Modifier.padding(16.dp),
-                                    verticalAlignment = Alignment.CenterVertically,
-                                    horizontalArrangement = Arrangement.spacedBy(12.dp)
-                                ) {
-                                    Box(
-                                        modifier = Modifier
-                                            .size(44.dp)
-                                            .clip(RoundedCornerShape(14.dp))
-                                            .background(palette.accent),
-                                        contentAlignment = Alignment.Center
-                                    ) {
-                                        Icon(Icons.Default.FactCheck, contentDescription = null, tint = Color.White)
-                                    }
-                                    Column(modifier = Modifier.weight(1f)) {
-                                        Text(
-                                            tr(lang, "Persetujuan Tim", "Team Approvals"),
-                                            fontWeight = FontWeight.ExtraBold,
-                                            fontSize = 15.sp,
-                                            color = palette.textPrimary
-                                        )
-                                        Text(
-                                            tr(lang, "Tinjau cuti, lembur, koreksi & klaim tim", "Review team leave, overtime & claims"),
-                                            fontSize = 11.sp,
-                                            color = palette.textSecondary
-                                        )
-                                    }
-                                    if (teamPendingCount > 0) {
-                                        Surface(shape = RoundedCornerShape(50), color = palette.accent) {
-                                            Text(
-                                                teamPendingCount.toString(),
-                                                color = Color.White,
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 9.dp, vertical = 4.dp)
-                                            )
-                                        }
-                                    }
-                                    Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.accent)
-                                }
-                            }
-                        }
-
-                        if (enabledCards.isNotEmpty()) {
-                            enabledCards.chunked(2).forEach { rowCards ->
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    rowCards.forEach { card ->
-                                        RequestHubCard(
-                                            spec = card,
-                                            modifier = Modifier.weight(1f),
-                                            onClick = { section = card.section }
-                                        )
-                                    }
-                                    if (rowCards.size == 1) {
-                                        Spacer(modifier = Modifier.weight(1f))
-                                    }
-                                }
-                            }
-                        }
-
-                        Text(
-                            tr(lang, "RUANG KERJA & DOKUMEN", "WORKSPACE & DOCUMENTS"),
-                            fontSize = 11.sp,
-                            fontWeight = FontWeight.Bold,
-                            color = palette.textMuted,
-                            letterSpacing = 0.7.sp,
-                            modifier = Modifier.padding(top = 4.dp, start = 2.dp)
-                        )
-                        workspaceCards.chunked(2).forEach { rowCards ->
-                            Row(
-                                horizontalArrangement = Arrangement.spacedBy(10.dp),
-                                modifier = Modifier.fillMaxWidth()
-                            ) {
-                                rowCards.forEach { card ->
-                                    RequestHubCard(
-                                        spec = card,
-                                        modifier = Modifier.weight(1f),
-                                        onClick = { section = card.section }
-                                    )
-                                }
-                                if (rowCards.size == 1) {
-                                    Spacer(modifier = Modifier.weight(1f))
-                                }
-                            }
-                        }
-                    }
-                } else if (activeSection == RequestSection.APPROVALS) {
+                if (activeSection == RequestSection.APPROVALS) {
                     TeamApprovalsSection(
                         repository = repository,
                         sessionStore = sessionStore,
@@ -625,6 +472,8 @@ fun RequestsScreen(
                     TasksSection(
                         repository = repository,
                         sessionStore = sessionStore,
+                        showNewSheet = showFormSheet,
+                        onDismissSheet = { showFormSheet = false },
                         onFeedback = { msg, err -> feedback = msg to err }
                     )
                 } else if (activeSection == RequestSection.PETTY_CASH) {
@@ -654,24 +503,45 @@ fun RequestsScreen(
                         verticalArrangement = Arrangement.spacedBy(10.dp)
                     ) {
                         val filters = listOf(
-                            "all" to tr(lang, "Semua", "All"),
-                            "pending" to tr(lang, "Menunggu", "Pending"),
-                            "approved" to tr(lang, "Disetujui", "Approved"),
-                            "paid" to tr(lang, "Dibayar", "Paid"),
-                            "rejected" to tr(lang, "Ditolak", "Rejected")
+                            Triple("all", tr(lang, "Semua", "All"), palette.accent),
+                            Triple("pending", tr(lang, "Menunggu", "Pending"), Color(0xFFF59E0B)),
+                            Triple("approved", tr(lang, "Disetujui", "Approved"), Color(0xFF10B981)),
+                            Triple("paid", tr(lang, "Dibayar", "Paid"), Color(0xFF2563EB)),
+                            Triple("rejected", tr(lang, "Ditolak", "Rejected"), Color(0xFFEF4444))
                         )
                         Row(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .horizontalScroll(rememberScrollState()),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                            horizontalArrangement = Arrangement.spacedBy(8.dp)
                         ) {
-                            filters.forEach { (key, label) ->
-                                FilterChip(
-                                    selected = statusFilter == key,
+                            filters.forEach { (key, label, dotColor) ->
+                                val selected = statusFilter == key
+                                Surface(
                                     onClick = { statusFilter = key },
-                                    label = { Text(label, fontSize = 11.sp) }
-                                )
+                                    shape = CircleShape,
+                                    color = if (selected) palette.accentSurface else palette.card,
+                                    border = BorderStroke(1.dp, if (selected) palette.accent else palette.cardBorder)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 7.dp),
+                                        verticalAlignment = Alignment.CenterVertically,
+                                        horizontalArrangement = Arrangement.spacedBy(6.dp)
+                                    ) {
+                                        Box(
+                                            modifier = Modifier
+                                                .size(7.dp)
+                                                .clip(CircleShape)
+                                                .background(dotColor)
+                                        )
+                                        Text(
+                                            text = label,
+                                            fontSize = 11.sp,
+                                            fontWeight = if (selected) FontWeight.Bold else FontWeight.SemiBold,
+                                            color = if (selected) palette.textPrimary else palette.textSecondary
+                                        )
+                                    }
+                                }
                             }
                         }
 
@@ -812,6 +682,7 @@ fun RequestsScreen(
                         }
                     }
                 }
+            }
             }
         }
 
@@ -1414,84 +1285,6 @@ fun RequestsScreen(
             }
         )
     }
-
-    if (showAnnouncementsSheet) {
-        ModalBottomSheet(
-            onDismissRequest = { showAnnouncementsSheet = false },
-            containerColor = palette.card
-        ) {
-            Column(
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 18.dp)
-                    .padding(bottom = 24.dp),
-                verticalArrangement = Arrangement.spacedBy(12.dp)
-            ) {
-                Text(
-                    tr(lang, "Pengumuman Perusahaan", "Company Announcements"),
-                    fontWeight = FontWeight.Bold,
-                    fontSize = 17.sp,
-                    color = palette.textPrimary
-                )
-                if (announcements.isEmpty()) {
-                    Text(
-                        tr(lang, "Belum ada pengumuman.", "No announcements yet."),
-                        fontSize = 13.sp,
-                        color = palette.textMuted,
-                        modifier = Modifier.padding(vertical = 12.dp)
-                    )
-                } else {
-                    announcements.take(8).forEach { item ->
-                        Surface(
-                            shape = RoundedCornerShape(14.dp),
-                            color = palette.subtleSurface,
-                            border = BorderStroke(1.dp, palette.cardBorder),
-                            modifier = Modifier.fillMaxWidth()
-                        ) {
-                            Column(
-                                modifier = Modifier.padding(12.dp),
-                                verticalArrangement = Arrangement.spacedBy(4.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Text(item.title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = palette.textPrimary, modifier = Modifier.weight(1f))
-                                    if (item.acknowledged) {
-                                        Text(tr(lang, "✓ Dibaca", "✓ Read"), fontSize = 10.sp, fontWeight = FontWeight.Bold, color = palette.success)
-                                    }
-                                }
-                                Text(item.body, fontSize = 12.sp, color = palette.textSecondary)
-                                if (!item.acknowledged) {
-                                    TextButton(
-                                        onClick = {
-                                            scope.launch {
-                                                repository.acknowledgeAnnouncement(item.id).onSuccess {
-                                                    announcements = announcements.map {
-                                                        if (it.id == item.id) it.copy(acknowledged = true) else it
-                                                    }
-                                                }
-                                            }
-                                        },
-                                        contentPadding = PaddingValues(0.dp)
-                                    ) {
-                                        Text(
-                                            if (item.require_ack) tr(lang, "Konfirmasi Dibaca", "Acknowledge")
-                                            else tr(lang, "Tandai Dibaca", "Mark Read"),
-                                            fontSize = 11.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.accent
-                                        )
-                                    }
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-        }
-    }
 }
 
 @Composable
@@ -1560,74 +1353,6 @@ private fun SheetTimeButton(
                     fontWeight = FontWeight.Bold,
                     color = palette.textPrimary,
                     style = TextStyle(fontFeatureSettings = "tnum")
-                )
-            }
-        }
-    }
-}
-
-@Composable
-private fun RequestHubCard(
-    spec: RequestCardSpec,
-    modifier: Modifier = Modifier,
-    onClick: () -> Unit
-) {
-    val palette = LocalEssPalette.current
-    Surface(
-        onClick = onClick,
-        modifier = modifier
-            .height(142.dp)
-            .pressScale(),
-        shape = RoundedCornerShape(20.dp),
-        color = palette.card,
-        border = BorderStroke(1.dp, palette.cardBorder),
-        shadowElevation = 0.dp
-    ) {
-        Column(
-            modifier = Modifier.padding(14.dp),
-            verticalArrangement = Arrangement.SpaceBetween
-        ) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.Top
-            ) {
-                Box(
-                    modifier = Modifier
-                        .size(40.dp)
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(spec.bgTint),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Icon(spec.icon, contentDescription = null, tint = spec.tint, modifier = Modifier.size(20.dp))
-                }
-
-                if (!spec.badge.isNullOrBlank()) {
-                    Surface(
-                        shape = RoundedCornerShape(50),
-                        color = spec.bgTint
-                    ) {
-                        Text(
-                            text = spec.badge,
-                            color = spec.tint,
-                            fontSize = 9.sp,
-                            fontWeight = FontWeight.Bold,
-                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                        )
-                    }
-                }
-            }
-
-            Column {
-                Text(spec.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.textPrimary)
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    spec.subtitle,
-                    fontSize = 10.sp,
-                    color = palette.textSecondary,
-                    lineHeight = 13.sp,
-                    maxLines = 2,
-                    overflow = TextOverflow.Ellipsis
                 )
             }
         }

@@ -58,6 +58,7 @@ class MainActivity : FragmentActivity() {
             val baseUrl by app.sessionStore.baseUrlFlow.collectAsState()
             val companyName by app.sessionStore.companyNameFlow.collectAsState()
             val companyLogoUrl by app.sessionStore.companyLogoUrlFlow.collectAsState()
+            val primaryColor by app.sessionStore.primaryColorFlow.collectAsState()
             val context = LocalContext.current
             val splashImageLoader = remember(app.apiClient.okHttpClient) {
                 ImageLoader.Builder(context).okHttpClient(app.apiClient.okHttpClient).build()
@@ -87,7 +88,7 @@ class MainActivity : FragmentActivity() {
                 }
             }
 
-            OpenHrTheme(themeMode = themeMode) {
+            OpenHrTheme(themeMode = themeMode, primaryColorHex = primaryColor) {
                 val palette = LocalEssPalette.current
                 var showExitConfirm by remember { mutableStateOf(false) }
 

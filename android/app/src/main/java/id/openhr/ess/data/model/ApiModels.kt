@@ -152,6 +152,7 @@ data class PublicCompany(
     val name: String? = null,
     val legal_name: String? = null,
     val logo_url: String? = null,
+    val primary_color: String? = null,
     val address: String? = null,
     val phone: String? = null,
     val email: String? = null,
@@ -166,7 +167,8 @@ data class ModulesConfig(
     @Serializable(with = FlexibleBooleanSerializer::class) val shifts: Boolean = true,
     @Serializable(with = FlexibleBooleanSerializer::class) val payroll: Boolean = true,
     @Serializable(with = FlexibleBooleanSerializer::class) val claims: Boolean = true,
-    @Serializable(with = FlexibleBooleanSerializer::class) val petty_cash: Boolean = true
+    @Serializable(with = FlexibleBooleanSerializer::class) val petty_cash: Boolean = true,
+    @Serializable(with = FlexibleBooleanSerializer::class) val announcements: Boolean = true
 )
 
 @Serializable
@@ -610,7 +612,22 @@ data class EmployeeProfile(
     val bank_account_holder: String? = null,
     val bpjs_kesehatan_number: String? = null,
     val bpjs_tk_number: String? = null,
-    @Serializable(with = FlexibleBooleanSerializer::class) val has_bpjs_tk: Boolean = false
+    @Serializable(with = FlexibleBooleanSerializer::class) val has_bpjs_tk: Boolean = false,
+    val photo_url: String? = null,
+    val department_name: String? = null,
+    val branch_name: String? = null,
+    val badge_token: String? = null
+)
+
+@Serializable
+data class UpdateEmployeePhotoRequest(
+    val photo_base64: String
+)
+
+@Serializable
+data class UpdateEmployeePhotoResponse(
+    val message: String = "",
+    val photo_url: String? = null
 )
 
 @Serializable
@@ -751,6 +768,79 @@ data class TaskCloseBody(
 data class TaskApproveBody(
     val decision: String = "approve",
     val remarks: String? = null
+)
+
+@Serializable
+data class TaskEmployeeOption(
+    val id: String,
+    val nik: String? = null,
+    val full_name: String = "",
+    val job_title: String? = null,
+    val department_name: String? = null
+)
+
+@Serializable
+data class TaskMetaResponse(
+    val companyName: String = "",
+    val nextReferenceNo: String = "TMS",
+    val employees: List<TaskEmployeeOption> = emptyList()
+)
+
+@Serializable
+data class CreateTaskBody(
+    val title: String,
+    val description: String? = null,
+    val category: String = "general",
+    val priority: String = "medium",
+    val assignee_id: String,
+    val due_at: String,
+    val remarks: String? = null
+)
+
+@Serializable
+data class CreateTaskResponse(
+    val message: String = "",
+    val task: TaskItem? = null
+)
+
+@Serializable
+data class TaskActivityItem(
+    val id: String = "",
+    val task_id: String = "",
+    val actor_id: String? = null,
+    val actor_name: String? = null,
+    val action_type: String = "",
+    val status_after: String? = null,
+    val note: String? = null,
+    val created_at: String = ""
+)
+
+@Serializable
+data class TaskAttachmentItem(
+    val id: String = "",
+    val file_name: String = "",
+    val mime_type: String? = null,
+    val file_size: Long = 0L,
+    val url: String = ""
+)
+
+@Serializable
+data class TaskDetailResponse(
+    val task: TaskItem,
+    val activities: List<TaskActivityItem> = emptyList(),
+    val attachments: List<TaskAttachmentItem> = emptyList()
+)
+
+@Serializable
+data class TaskHandoverBody(
+    val next_assignee_id: String,
+    val reason: String
+)
+
+@Serializable
+data class TaskRescheduleBody(
+    val due_at: String,
+    val reason: String
 )
 
 @Serializable

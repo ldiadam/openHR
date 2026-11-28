@@ -19,11 +19,16 @@ import {
   RefreshCw,
   UserCircle,
   AlertTriangle,
+  Camera,
+  Trash2,
+  IdCard,
 } from 'lucide-react';
 import { apiFetch, getToken } from '../api';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
 import { PageSkeleton } from '../components/Skeleton';
+import { fileToDownscaledDataUrl } from '../utils/image';
+import { EmployeeIdCardModal } from '../components/EmployeeIdCardModal';
 
 const Section: React.FC<{ title: string; icon: React.ElementType; children: React.ReactNode; action?: React.ReactNode }> = ({
   title,
@@ -87,6 +92,45 @@ export const HREmployeeDetail: React.FC = () => {
   const [data, setData] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const [uploadingPhoto, setUploadingPhoto] = useState(false);
+  const [showIdCard, setShowIdCard] = useState(false);
+  const photoInputRef = React.useRef<HTMLInputElement>(null);
+
+  const handlePhotoSelect = async (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    e.target.value = '';
+    if (!file || !id) return;
+    setUploadingPhoto(true);
+    try {
+      const dataUrl = await fileToDownscaledDataUrl(file, 512, 0.78);
+      const res = await apiFetch(`/employees/${id}/photo`, {
+        method: 'PUT',
+        body: JSON.stringify({ photo_base64: dataUrl }),
+      });
+      setData((prev: any) =>
+        prev ? { ...prev, employee: { ...prev.employee, photo_url: res.photo_url } } : prev
+      );
+    } catch (err: any) {
+      alert(err.message || tr('Gagal mengunggah foto.', 'Failed to upload photo.'));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
+
+  const handleRemovePhoto = async () => {
+    if (!id) return;
+    setUploadingPhoto(true);
+    try {
+      await apiFetch(`/employees/${id}/photo`, { method: 'DELETE' });
+      setData((prev: any) =>
+        prev ? { ...prev, employee: { ...prev.employee, photo_url: null } } : prev
+      );
+    } catch (err: any) {
+      alert(err.message || tr('Gagal menghapus foto.', 'Failed to remove photo.'));
+    } finally {
+      setUploadingPhoto(false);
+    }
+  };
 
   const load = async (silent = false) => {
     if (!silent) setLoading(true);
@@ -154,8 +198,49 @@ export const HREmployeeDetail: React.FC = () => {
         <div className="pointer-events-none absolute -right-16 -top-20 h-56 w-56 rounded-full bg-blue-400/10 blur-2xl" />
         <div className="relative flex flex-col justify-between gap-5 md:flex-row md:items-end">
           <div className="flex min-w-0 items-center gap-4">
-            <div className="flex h-16 w-16 shrink-0 items-center justify-center rounded-2xl bg-white/15 text-xl font-black backdrop-blur">
-              {initials}
+            <div className="relative shrink-0">
+              <div className="flex h-16 w-16 items-center justify-center overflow-hidden rounded-2xl bg-white/15 text-xl font-black backdrop-blur">
+                {emp.photo_url ? (
+                  <img
+                    src={`${emp.photo_url}&token=${encodeURIComponent(getToken() || '')}`}
+                    alt={emp.full_name}
+                    className="h-full w-full object-cover"
+                  />
+                ) : (
+                  initials
+                )}
+              </div>
+              {isOwnerAdmin && (
+                <>
+                  <input
+                    ref={photoInputRef}
+                    type="file"
+                    accept="image/*"
+                    className="hidden"
+                    onChange={handlePhotoSelect}
+                  />
+                  <button
+                    type="button"
+                    disabled={uploadingPhoto}
+                    onClick={() => photoInputRef.current?.click()}
+                    title={tr('Ubah Foto Profil', 'Change Profile Photo')}
+                    className="absolute -bottom-1.5 -right-1.5 flex h-6 w-6 items-center justify-center rounded-full bg-white text-slate-900 shadow-md hover:bg-slate-100 disabled:opacity-50 cursor-pointer"
+                  >
+                    <Camera size={12} />
+                  </button>
+                  {emp.photo_url && (
+                    <button
+                      type="button"
+                      disabled={uploadingPhoto}
+                      onClick={handleRemovePhoto}
+                      title={tr('Hapus Foto', 'Remove Photo')}
+                      className="absolute -top-1.5 -right-1.5 flex h-5 w-5 items-center justify-center rounded-full bg-rose-600 text-white shadow-md hover:bg-rose-700 disabled:opacity-50 cursor-pointer"
+                    >
+                      <Trash2 size={10} />
+                    </button>
+                  )}
+                </>
+              )}
             </div>
             <div className="min-w-0">
               <h1 className="truncate text-xl font-black tracking-tight md:text-2xl">{emp.full_name}</h1>
@@ -196,6 +281,12 @@ export const HREmployeeDetail: React.FC = () => {
                 <Phone size={13} /> {emp.phone}
               </a>
             )}
+            <button
+              onClick={() => setShowIdCard(true)}
+              className="inline-flex items-center gap-1.5 rounded-xl bg-white/15 px-3 py-2 text-[11px] font-bold text-white backdrop-blur transition hover:bg-white/25 cursor-pointer"
+            >
+              <IdCard size={13} /> {tr('Kartu ID', 'ID Card')}
+            </button>
             <button
               onClick={() => load(true)}
               className="inline-flex items-center gap-1.5 rounded-xl bg-white px-3 py-2 text-[11px] font-bold text-slate-900 transition hover:bg-blue-50"
@@ -607,6 +698,12 @@ export const HREmployeeDetail: React.FC = () => {
           )}
         </Section>
       </div>
+
+      <EmployeeIdCardModal
+        isOpen={showIdCard}
+        onClose={() => setShowIdCard(false)}
+        employee={emp}
+      />
     </div>
   );
 };

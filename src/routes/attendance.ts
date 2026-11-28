@@ -1,7 +1,7 @@
 import { Hono } from 'hono';
 import { Bindings, AttendanceStatus } from '../types';
 import { AuthContext, authMiddleware, requireRole } from '../middleware/auth';
-import { putFile, getFile } from '../services/storage';
+import { decodeBase64Image, getFile, normalizeStoredImage, putFile } from '../services/storage';
 import { resolveAttendanceDateTime, getZonedDateString, getZonedMonthString } from '../utils/date';
 import { makeId } from '../utils/id';
 import { getEmployeeLevelContext, hasLevelBypassOnly } from '../services/employee-levels';
@@ -9,6 +9,7 @@ import {
   ClientSecurityPayload,
   detectTeleportSpeedKmh,
   getSecurityPolicy,
+  isIpAllowed,
   logSecurityEvent,
 } from '../services/security';
 
@@ -114,7 +115,7 @@ attendanceRoutes.post('/clock', async (c) => {
   // Get employee and branch info for geofence and shift
   const emp = await c.env.DB.prepare(
     `SELECT e.*, b.latitude as branch_lat, b.longitude as branch_lng, b.radius_meters as branch_radius,
-            b.timezone as branch_timezone,
+            b.timezone as branch_timezone, b.allowed_ips as branch_allowed_ips,
             sp.start_time, sp.end_time, sp.break_minutes
      FROM employees e
      LEFT JOIN branches b ON e.branch_id = b.id
@@ -136,6 +137,33 @@ attendanceRoutes.post('/clock', async (c) => {
   const secFlags: string[] = [];
 
   const securityPolicy = await getSecurityPolicy(c.env.DB);
+
+  if (securityPolicy.require_office_ip && emp.branch_allowed_ips && String(emp.branch_allowed_ips).trim()) {
+    if (!isIpAllowed(ipAddress, emp.branch_allowed_ips)) {
+      secFlags.push('IP_MISMATCH');
+      await logSecurityEvent(c.env.DB, {
+        employeeId,
+        userId: user.userId,
+        eventType: 'IP_MISMATCH',
+        severity: 'high',
+        actionTaken: 'blocked',
+        deviceId,
+        deviceLabel,
+        ipAddress,
+        latitude: latNum,
+        longitude: lngNum,
+        details: { allowed_ips: emp.branch_allowed_ips, type },
+      });
+      return c.json(
+        {
+          error: `Presensi wajib dari jaringan/Wi-Fi kantor yang diizinkan (IP Anda: ${ipAddress || 'unknown'}).`,
+          code: 'OFFICE_IP_REQUIRED',
+        },
+        403
+      );
+    }
+  }
+
   const spoofApps = Array.isArray(sec.spoof_apps) ? sec.spoof_apps.filter((s) => typeof s === 'string' && s.trim()) : [];
 
   if (sec.is_mock_location || spoofApps.length > 0) {
@@ -287,14 +315,15 @@ attendanceRoutes.post('/clock', async (c) => {
     }
   }
 
-  // Save photo to R2 / Storage if present
+  // Save photo to R2 / Storage if present (decode base64 / data URL into binary image bytes)
   let photoKey = null;
-  if (photo_base64) {
+  if (typeof photo_base64 === 'string' && photo_base64.trim()) {
     photoKey = `attendance/${employeeId}/${todayDate}-${type}-${Date.now()}.jpg`;
+    const decoded = decodeBase64Image(photo_base64);
     await putFile(c.env, {
       key: photoKey,
-      data: photo_base64,
-      contentType: 'image/jpeg',
+      data: decoded && decoded.bytes.byteLength > 0 ? decoded.bytes : photo_base64,
+      contentType: decoded?.contentType || 'image/jpeg',
     });
   }
 
@@ -578,9 +607,12 @@ attendanceRoutes.get('/:id/photo', async (c) => {
   const stored = await getFile(c.env, key);
   if (!stored) return c.json({ error: 'File fisik tidak ditemukan' }, 404);
 
-  c.header('Content-Type', stored.contentType || 'image/jpeg');
+  const normalized = normalizeStoredImage(stored);
+  if (!normalized) return c.json({ error: 'Format foto tidak valid' }, 422);
+
+  c.header('Content-Type', normalized.contentType || 'image/jpeg');
   c.header('Content-Disposition', 'inline');
-  return c.body(stored.data as any);
+  return c.body(normalized.data as any);
 });
 
 // 3. Employee Self-Service: My Attendance this month

@@ -5,19 +5,30 @@ import android.net.ConnectivityManager
 import android.net.Network
 import android.net.NetworkCapabilities
 import androidx.activity.compose.BackHandler
+import androidx.compose.animation.AnimatedContent
+import androidx.compose.animation.core.Spring
+import androidx.compose.animation.core.animateIntAsState
+import androidx.compose.animation.core.spring
+import androidx.compose.animation.core.tween
+import androidx.compose.animation.fadeIn
+import androidx.compose.animation.fadeOut
+import androidx.compose.animation.slideInVertically
+import androidx.compose.animation.togetherWith
 import androidx.compose.foundation.background
 import androidx.compose.foundation.layout.*
-import androidx.compose.foundation.pager.HorizontalPager
-import androidx.compose.foundation.pager.rememberPagerState
+import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material.icons.outlined.*
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clipToBounds
+import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
+import androidx.compose.ui.graphics.graphicsLayer
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalDensity
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
@@ -41,6 +52,7 @@ private enum class EssTab(
 ) {
     HOME("home", Icons.Filled.Home, Icons.Outlined.Home, "Beranda", "Home"),
     ATTENDANCE("attendance", Icons.Filled.Schedule, Icons.Outlined.Schedule, "Presensi", "Attendance"),
+    CALENDAR("calendar", Icons.Filled.CalendarMonth, Icons.Outlined.CalendarMonth, "Kalender", "Calendar"),
     REQUESTS("requests", Icons.Filled.AssignmentTurnedIn, Icons.Outlined.AssignmentTurnedIn, "Pengajuan", "Requests"),
     PAYSLIPS("payslips", Icons.Filled.Receipt, Icons.Outlined.Receipt, "Slip Gaji", "Payslips"),
     PROFILE("profile", Icons.Filled.Person, Icons.Outlined.Person, "Profil", "Profile")
@@ -62,7 +74,7 @@ fun MainShell(
     val visibleTabs = remember(modules) {
         EssTab.entries.filter { tab ->
             when (tab) {
-                EssTab.HOME, EssTab.PROFILE -> true
+                EssTab.HOME, EssTab.CALENDAR, EssTab.PROFILE -> true
                 EssTab.ATTENDANCE -> modules.attendance
                 EssTab.REQUESTS -> modules.leave || modules.attendance || modules.claims
                 EssTab.PAYSLIPS -> modules.payroll
@@ -70,11 +82,26 @@ fun MainShell(
         }
     }
 
-    val pagerState = rememberPagerState(initialPage = 0, pageCount = { visibleTabs.size })
-    val currentTabIndex = pagerState.currentPage.coerceIn(0, (visibleTabs.size - 1).coerceAtLeast(0))
+    val density = LocalDensity.current
+    var activeTab by remember { mutableStateOf(EssTab.HOME) }
+    var requestedRequestsSection by remember { mutableStateOf<String?>(null) }
+    var targetHeroHeightPx by remember { mutableIntStateOf(0) }
+    var heroScrollOffsetPx by remember { mutableIntStateOf(0) }
+    val animatedHeroHeightPx by animateIntAsState(
+        targetValue = targetHeroHeightPx,
+        animationSpec = spring(dampingRatio = 0.88f, stiffness = Spring.StiffnessMediumLow),
+        label = "shared_hero_height"
+    )
 
-    BackHandler(enabled = currentTabIndex > 0) {
-        scope.launch { pagerState.scrollToPage(0) }
+    val navigateToTab: (EssTab) -> Unit = { target ->
+        if (target in visibleTabs && target != activeTab) {
+            heroScrollOffsetPx = 0
+            activeTab = target
+        }
+    }
+
+    BackHandler(enabled = activeTab != EssTab.HOME) {
+        navigateToTab(EssTab.HOME)
     }
 
     var isOnline by remember { mutableStateOf(Formatters.isNetworkConnected(context)) }
@@ -128,7 +155,7 @@ fun MainShell(
     Scaffold(
         containerColor = palette.canvas,
         bottomBar = {
-            Column {
+            Column(modifier = Modifier.navigationBarsPadding()) {
                 OfflineQueueBanner(
                     isOnline = isOnline,
                     pendingCount = offlineQueue.size,
@@ -146,97 +173,97 @@ fun MainShell(
                         }
                     }
                 )
-                HorizontalDivider(thickness = 1.dp, color = palette.cardBorder)
-                NavigationBar(
-                    containerColor = palette.dockBackground,
-                    tonalElevation = 0.dp
-                ) {
-                    visibleTabs.forEachIndexed { index, tab ->
-                        val selected = currentTabIndex == index
-                        NavigationBarItem(
-                            selected = selected,
-                            onClick = {
-                                if (!selected) {
-                                    scope.launch { pagerState.scrollToPage(index) }
-                                }
-                            },
-                            icon = {
-                                Icon(
-                                    imageVector = if (selected) tab.selectedIcon else tab.unselectedIcon,
-                                    contentDescription = null,
-                                    modifier = Modifier.size(22.dp)
-                                )
-                            },
-                            label = {
-                                Text(
-                                    text = tr(lang, tab.idLabel, tab.enLabel),
-                                    fontSize = 10.sp,
-                                    fontWeight = if (selected) FontWeight.Bold else FontWeight.Medium,
-                                    maxLines = 1
-                                )
-                            },
-                            colors = NavigationBarItemDefaults.colors(
-                                selectedIconColor = palette.accent,
-                                selectedTextColor = palette.accent,
-                                unselectedIconColor = palette.textMuted,
-                                unselectedTextColor = palette.textMuted,
-                                indicatorColor = palette.accentSurface
-                            )
-                        )
-                    }
-                }
             }
         }
     ) { innerPadding ->
         Box(
             modifier = Modifier
                 .fillMaxSize()
-                .padding(innerPadding)
+                .background(palette.canvas)
+                .padding(bottom = innerPadding.calculateBottomPadding())
         ) {
-            HorizontalPager(
-                state = pagerState,
-                key = { page -> visibleTabs.getOrElse(page) { EssTab.HOME }.route },
-                beyondViewportPageCount = 1,
-                userScrollEnabled = false,
-                modifier = Modifier.fillMaxSize()
-            ) { page ->
-                val tab = visibleTabs.getOrElse(page) { EssTab.HOME }
+            // Shared Persistent Morphing Hero Backdrop
+            if (animatedHeroHeightPx > 0) {
                 Box(
                     modifier = Modifier
-                        .fillMaxSize()
-                        .background(palette.canvas)
-                        .clipToBounds()
-                ) {
-                    when (tab) {
-                        EssTab.HOME -> HomeScreen(
-                            repository = repository,
-                            sessionStore = sessionStore,
-                            isVisible = (currentTabIndex == page)
-                        )
-                        EssTab.ATTENDANCE -> AttendanceScreen(
-                            repository = repository,
-                            sessionStore = sessionStore,
-                            apiClient = apiClient,
-                            onNavigateToRequests = {
-                                val reqIndex = visibleTabs.indexOf(EssTab.REQUESTS)
-                                if (reqIndex >= 0) scope.launch { pagerState.scrollToPage(reqIndex) }
+                        .fillMaxWidth()
+                        .height(with(density) { animatedHeroHeightPx.toDp() })
+                        .graphicsLayer { translationY = -heroScrollOffsetPx.toFloat() }
+                        .clip(RoundedCornerShape(bottomStart = 28.dp, bottomEnd = 28.dp))
+                        .background(Brush.linearGradient(listOf(palette.heroStart, palette.heroEnd)))
+                )
+            }
+
+            AnimatedContent(
+                targetState = activeTab,
+                transitionSpec = {
+                    (fadeIn(tween(220)) + slideInVertically(tween(240)) { it / 28 }) togetherWith
+                        fadeOut(tween(150))
+                },
+                modifier = Modifier.fillMaxSize(),
+                label = "ess_tab_content"
+            ) { tab ->
+                when (tab) {
+                    EssTab.HOME -> HomeScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        isVisible = (activeTab == EssTab.HOME),
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onHeroScrollChanged = { heroScrollOffsetPx = it },
+                        onNavigateToTab = { targetRoute ->
+                            when {
+                                targetRoute == "calendar" -> navigateToTab(EssTab.CALENDAR)
+                                targetRoute == "attendance" -> navigateToTab(EssTab.ATTENDANCE)
+                                targetRoute.startsWith("requests:") -> {
+                                    requestedRequestsSection = targetRoute.removePrefix("requests:")
+                                    navigateToTab(EssTab.REQUESTS)
+                                }
+                                else -> {
+                                    visibleTabs.firstOrNull { it.route == targetRoute }?.let { navigateToTab(it) }
+                                }
                             }
-                        )
-                        EssTab.REQUESTS -> RequestsScreen(
-                            repository = repository,
-                            sessionStore = sessionStore,
-                            apiClient = apiClient,
-                            isVisible = (currentTabIndex == page)
-                        )
-                        EssTab.PAYSLIPS -> PayslipsScreen(
-                            repository = repository,
-                            sessionStore = sessionStore
-                        )
-                        EssTab.PROFILE -> ProfileScreen(
-                            repository = repository,
-                            sessionStore = sessionStore
-                        )
-                    }
+                        }
+                    )
+                    EssTab.ATTENDANCE -> AttendanceScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        apiClient = apiClient,
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onBackToHome = { navigateToTab(EssTab.HOME) },
+                        onNavigateToRequests = {
+                            requestedRequestsSection = "LEAVE"
+                            navigateToTab(EssTab.REQUESTS)
+                        }
+                    )
+                    EssTab.CALENDAR -> CalendarScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onBackToHome = { navigateToTab(EssTab.HOME) }
+                    )
+                    EssTab.REQUESTS -> RequestsScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        apiClient = apiClient,
+                        isVisible = (activeTab == EssTab.REQUESTS),
+                        requestedSectionName = requestedRequestsSection,
+                        onConsumedRequestedSection = { requestedRequestsSection = null },
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onBackToHome = { navigateToTab(EssTab.HOME) }
+                    )
+                    EssTab.PAYSLIPS -> PayslipsScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onBackToHome = { navigateToTab(EssTab.HOME) }
+                    )
+                    EssTab.PROFILE -> ProfileScreen(
+                        repository = repository,
+                        sessionStore = sessionStore,
+                        onHeroHeightChanged = { targetHeroHeightPx = it },
+                        onHeroScrollChanged = { heroScrollOffsetPx = it },
+                        onBackToHome = { navigateToTab(EssTab.HOME) }
+                    )
                 }
             }
         }

@@ -32,7 +32,7 @@ const MoneyRow = ({ label, amount }: { label: string; amount: number }) => (
 
 export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, payslip }) => {
   const { tr } = useLanguage();
-  const { logoUrl } = useCompany();
+  const { logoUrl, palette } = useCompany();
   useLockBodyScroll(isOpen);
 
   if (!isOpen || !payslip) return null;
@@ -269,9 +269,12 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, pay
               row is pinned to the bottom so the two tables line up. */}
           <div className="grid grid-cols-1 gap-4 md:grid-cols-2 md:items-stretch">
             <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
-              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-white">
+              <div
+                className="flex items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-wide"
+                style={{ backgroundColor: palette.primary, color: palette.onPrimary }}
+              >
                 <span>{tr('Penghasilan', 'Earnings')}</span>
-                <span className="font-normal normal-case text-slate-300">Rupiah</span>
+                <span className="font-normal normal-case opacity-85">Rupiah</span>
               </div>
               <table className="w-full table-fixed text-[11px]">
                 <tbody className="divide-y divide-slate-100">
@@ -287,9 +290,12 @@ export const PayslipModal: React.FC<PayslipModalProps> = ({ isOpen, onClose, pay
             </div>
 
             <div className="flex flex-col overflow-hidden rounded-lg border border-slate-200">
-              <div className="flex items-center justify-between bg-slate-900 px-3 py-2 text-[10px] font-bold uppercase tracking-wide text-white">
+              <div
+                className="flex items-center justify-between px-3 py-2 text-[10px] font-bold uppercase tracking-wide"
+                style={{ backgroundColor: palette.primary, color: palette.onPrimary }}
+              >
                 <span>{tr('Potongan', 'Deductions')}</span>
-                <span className="font-normal normal-case text-slate-300">Rupiah</span>
+                <span className="font-normal normal-case opacity-85">Rupiah</span>
               </div>
               <table className="w-full table-fixed text-[11px]">
                 <tbody className="divide-y divide-slate-100">

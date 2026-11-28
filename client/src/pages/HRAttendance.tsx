@@ -23,10 +23,11 @@ import { useLanguage } from '../context/LanguageContext';
 export const HRAttendance: React.FC = () => {
   const navigate = useNavigate();
   const { t, tr, formatDate } = useLanguage();
-  const [activeTab, setActiveTab] = useState<'today' | 'recap' | 'corrections'>('today');
+  const [activeTab, setActiveTab] = useState<'today' | 'recap' | 'corrections' | 'visits'>('today');
   const [selectedDate, setSelectedDate] = useState(getLocalDateString());
   const [todayData, setTodayData] = useState<any>({ summary: {}, records: [] });
   const [corrections, setCorrections] = useState<any[]>([]);
+  const [clientVisits, setClientVisits] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
   const [showFpModal, setShowFpModal] = useState(false);
   const [fpText, setFpText] = useState('');
@@ -38,12 +39,14 @@ export const HRAttendance: React.FC = () => {
   const loadData = async () => {
     setLoading(true);
     try {
-      const [todayRes, corrRes] = await Promise.all([
+      const [todayRes, corrRes, visitsRes] = await Promise.all([
         apiFetch(`/attendance/today?date=${selectedDate}`),
         apiFetch('/attendance/corrections'),
+        apiFetch(`/client-visits?date=${selectedDate}`).catch(() => ({ visits: [] })),
       ]);
       setTodayData(todayRes);
       setCorrections(corrRes.corrections || []);
+      setClientVisits(visitsRes.visits || []);
     } catch (err: any) {
       console.warn('Attendance err:', err.message);
     } finally {
@@ -248,7 +251,97 @@ export const HRAttendance: React.FC = () => {
             </span>
           )}
         </button>
+        <button
+          onClick={() => setActiveTab('visits')}
+          className={`pb-3 transition border-b-2 -mb-px flex items-center gap-1.5 ${
+            activeTab === 'visits' ? 'border-blue-600 text-blue-600' : 'border-transparent hover:text-slate-800'
+          }`}
+        >
+          <span>{tr('Kunjungan Klien', 'Client Visits')}</span>
+          {clientVisits.length > 0 && (
+            <span className="bg-slate-200 text-slate-700 text-[10px] px-1.5 py-0.2 rounded-full">
+              {clientVisits.length}
+            </span>
+          )}
+        </button>
       </div>
+
+      {activeTab === 'visits' && (
+        <div className="space-y-4">
+          <div className="flex items-center gap-2">
+            <span className="text-xs font-semibold text-slate-700">{tr('Pilih Tanggal:', 'Select Date:')}</span>
+            <input
+              type="date"
+              value={selectedDate}
+              onChange={(e) => setSelectedDate(e.target.value)}
+              className="text-xs border border-slate-300 rounded-xl px-3 py-1.5 bg-white font-medium shadow-2xs"
+            />
+          </div>
+          <div className="bg-white rounded-3xl border border-slate-200/80 shadow-2xs overflow-hidden">
+            <div className="overflow-x-auto">
+              <table className="w-full text-left text-xs text-slate-600">
+                <thead className="bg-slate-50 text-[11px] uppercase tracking-wider text-slate-500 border-b border-slate-200">
+                  <tr>
+                    <th className="py-3 px-4 font-bold">{tr('Karyawan', 'Employee')}</th>
+                    <th className="py-3 px-4 font-bold">{tr('Klien / Perusahaan', 'Client / Company')}</th>
+                    <th className="py-3 px-4 font-bold">{tr('Check-In / Out', 'In / Out')}</th>
+                    <th className="py-3 px-4 font-bold">{tr('Tujuan & Catatan', 'Purpose & Notes')}</th>
+                    <th className="py-3 px-4 font-bold">{tr('Lokasi GPS', 'GPS Location')}</th>
+                  </tr>
+                </thead>
+                <tbody className="divide-y divide-slate-100">
+                  {clientVisits.map((v) => (
+                    <tr key={v.id} className="hover:bg-slate-50/70">
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-slate-900">{v.full_name}</div>
+                        <div className="text-[11px] text-slate-400">{v.nik} · {v.department_name || '-'}</div>
+                      </td>
+                      <td className="py-3 px-4">
+                        <div className="font-bold text-slate-800">{v.client_name}</div>
+                        {v.company_name && <div className="text-[11px] text-slate-500">{v.company_name}</div>}
+                      </td>
+                      <td className="py-3 px-4 font-mono">
+                        <div>{String(v.check_in_time || '').slice(0, 5)} → {v.check_out_time ? String(v.check_out_time).slice(0, 5) : '--:--'}</div>
+                        <span className={`mt-1 inline-block rounded-full px-2 py-0.5 text-[10px] font-bold ${
+                          v.status === 'completed' ? 'bg-emerald-50 text-emerald-700' : 'bg-blue-50 text-blue-700'
+                        }`}>
+                          {v.status === 'completed' ? tr('Selesai', 'Completed') : tr('Sedang Berkunjung', 'On Site')}
+                        </span>
+                      </td>
+                      <td className="py-3 px-4 max-w-xs">
+                        {v.purpose && <div className="font-medium text-slate-800">{v.purpose}</div>}
+                        {v.notes && <div className="text-[11px] text-slate-500">{v.notes}</div>}
+                      </td>
+                      <td className="py-3 px-4">
+                        {v.check_in_lat && v.check_in_lng ? (
+                          <a
+                            href={`https://www.google.com/maps?q=${v.check_in_lat},${v.check_in_lng}`}
+                            target="_blank"
+                            rel="noreferrer"
+                            className="inline-flex items-center gap-1 rounded-lg bg-blue-50 px-2 py-1 font-mono text-[10px] font-bold text-blue-700 hover:bg-blue-100"
+                          >
+                            <MapPin size={11} />
+                            {Number(v.check_in_lat).toFixed(4)}, {Number(v.check_in_lng).toFixed(4)}
+                          </a>
+                        ) : (
+                          <span className="text-slate-400">-</span>
+                        )}
+                      </td>
+                    </tr>
+                  ))}
+                  {!clientVisits.length && (
+                    <tr>
+                      <td colSpan={5} className="py-10 text-center text-xs text-slate-400">
+                        {tr('Belum ada kunjungan klien pada tanggal ini.', 'No client visits logged on this date.')}
+                      </td>
+                    </tr>
+                  )}
+                </tbody>
+              </table>
+            </div>
+          </div>
+        </div>
+      )}
 
       {activeTab === 'today' && (
         <div className="space-y-4">

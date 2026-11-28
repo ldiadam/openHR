@@ -4,6 +4,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.gestures.detectTapGestures
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -28,6 +29,7 @@ import androidx.compose.ui.unit.Dp
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import id.openhr.ess.ui.theme.LocalEssPalette
+import kotlinx.coroutines.delay
 import java.time.Instant
 import java.time.LocalDate
 import java.time.ZoneOffset
@@ -170,36 +172,47 @@ fun StatusPill(status: String, lang: String, lateMinutes: Int = 0) {
 fun FeedbackBanner(
     message: String,
     isError: Boolean,
+    autoDismiss: Boolean = true,
     onDismiss: () -> Unit
 ) {
     val palette = LocalEssPalette.current
     val bg = if (isError) palette.dangerSurface else palette.successSurface
     val fg = if (isError) palette.danger else palette.success
-    Row(
+
+    LaunchedEffect(message, isError, autoDismiss) {
+        if (autoDismiss) {
+            delay(2800L)
+            onDismiss()
+        }
+    }
+
+    Surface(
         modifier = Modifier
             .fillMaxWidth()
-            .clip(RoundedCornerShape(14.dp))
-            .background(bg)
-            .border(1.dp, fg.copy(alpha = 0.25f), RoundedCornerShape(14.dp))
-            .padding(horizontal = 12.dp, vertical = 10.dp),
-        verticalAlignment = Alignment.CenterVertically,
-        horizontalArrangement = Arrangement.spacedBy(8.dp)
+            .clickable(enabled = autoDismiss) { onDismiss() },
+        shape = RoundedCornerShape(16.dp),
+        color = bg,
+        border = BorderStroke(1.dp, fg.copy(alpha = 0.25f)),
+        shadowElevation = 4.dp
     ) {
-        Icon(
-            imageVector = if (isError) Icons.Default.ErrorOutline else Icons.Default.CheckCircle,
-            contentDescription = null,
-            tint = fg,
-            modifier = Modifier.size(18.dp)
-        )
-        Text(
-            text = message,
-            color = fg,
-            fontSize = 12.sp,
-            fontWeight = FontWeight.Medium,
-            modifier = Modifier.weight(1f)
-        )
-        TextButton(onClick = onDismiss, contentPadding = PaddingValues(horizontal = 6.dp, vertical = 0.dp)) {
-            Text("OK", color = fg, fontSize = 11.sp, fontWeight = FontWeight.Bold)
+        Row(
+            modifier = Modifier.padding(horizontal = 14.dp, vertical = 11.dp),
+            verticalAlignment = Alignment.CenterVertically,
+            horizontalArrangement = Arrangement.spacedBy(10.dp)
+        ) {
+            Icon(
+                imageVector = if (isError) Icons.Default.ErrorOutline else Icons.Default.CheckCircle,
+                contentDescription = null,
+                tint = fg,
+                modifier = Modifier.size(18.dp)
+            )
+            Text(
+                text = message,
+                color = fg,
+                fontSize = 12.sp,
+                fontWeight = FontWeight.SemiBold,
+                modifier = Modifier.weight(1f)
+            )
         }
     }
 }

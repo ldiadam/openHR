@@ -19,9 +19,11 @@ import {
   UserCheck,
   Inbox,
   FileText,
+  ArrowLeft,
 } from 'lucide-react';
 import { apiFetch, getToken } from '../api';
 import { useAuth } from '../context/AuthContext';
+import { useCompany } from '../context/CompanyContext';
 import { useLanguage } from '../context/LanguageContext';
 import { MobileSelect } from '../components/pickers/MobileSelect';
 import { MobileDatePicker } from '../components/pickers/MobileDatePicker';
@@ -64,10 +66,12 @@ const ACTION_LABEL: Record<string, { id: string; en: string }> = {
 export const TasksPage: React.FC = () => {
   const { user } = useAuth();
   const { tr } = useLanguage();
+  const { palette } = useCompany();
   const { taskId } = useParams<{ taskId?: string }>();
   const navigate = useNavigate();
   const location = useLocation();
-  const basePath = location.pathname.startsWith('/app/') ? '/app/tasks' : '/tasks';
+  const isEssRoute = location.pathname.startsWith('/app/');
+  const basePath = isEssRoute ? '/app/tasks' : '/tasks';
 
   const [tab, setTab] = useState<TaskTab>('inbox');
   const [viewMode, setViewMode] = useState<'modern' | 'classic'>(() => {
@@ -420,9 +424,42 @@ export const TasksPage: React.FC = () => {
   );
 
   return (
-    <div className="mx-auto max-w-6xl space-y-4">
+    <div className={isEssRoute ? 'max-w-md mx-auto pb-8 space-y-4' : 'mx-auto max-w-6xl space-y-4'}>
+      {isEssRoute ? (
+        <div
+          className="px-4 pt-5 pb-5 rounded-b-3xl md:rounded-3xl shadow-sm"
+          style={{ background: palette.gradient, color: palette.onPrimary, viewTransitionName: 'ess-hero' }}
+        >
+          <div className="flex items-center justify-between gap-2">
+            <div className="flex items-center gap-2.5 min-w-0">
+              <button
+                type="button"
+                onClick={() => navigate('/app', { viewTransition: true })}
+                className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center shrink-0 cursor-pointer"
+                aria-label={tr('Kembali', 'Back')}
+              >
+                <ArrowLeft size={18} />
+              </button>
+              <div className="min-w-0">
+                <h2 className="text-base font-bold truncate">{tr('Tugas (TMS)', 'Tasks (TMS)')}</h2>
+                <p className="text-[11px] opacity-85 truncate">
+                  {tr('Daftar tugas, progres & persetujuan', 'Task inbox, progress & approvals')}
+                </p>
+              </div>
+            </div>
+            <button
+              type="button"
+              onClick={() => setShowCreate(true)}
+              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center shrink-0 cursor-pointer"
+              title={tr('Buat Tugas Baru', 'New Task')}
+            >
+              <Plus size={18} />
+            </button>
+          </div>
+        </div>
+      ) : null}
       {/* Header */}
-      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+      <div className={`${isEssRoute ? 'px-4' : ''} flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between`}>
         <div>
           <h1 className="flex items-center gap-2 text-lg font-black text-slate-900">
             <CheckSquare size={20} className="text-blue-600" />

@@ -7,11 +7,13 @@ import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.automirrored.filled.Assignment
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
@@ -20,10 +22,12 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.vector.ImageVector
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontFamily
 import androidx.compose.ui.text.font.FontWeight
@@ -61,6 +65,8 @@ fun AttendanceScreen(
     repository: EssRepository,
     sessionStore: SessionStore,
     apiClient: ApiClient,
+    onHeroHeightChanged: (Int) -> Unit = {},
+    onBackToHome: () -> Unit = {},
     onNavigateToRequests: () -> Unit = {}
 ) {
     val context = LocalContext.current
@@ -136,48 +142,75 @@ fun AttendanceScreen(
 
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header + Month Picker Pill
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // Colored Hero Header + Month Picker Pill (transparent over shared morphing hero backdrop)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { onHeroHeightChanged(it.height) }
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(
-                    tr(lang, "Riwayat Presensi", "Attendance History"),
-                    style = MaterialTheme.typography.titleLarge,
-                    color = palette.textPrimary
-                )
-                Text(
-                    tr(lang, "Rekap jam kerja & status bulanan", "Monthly work hours & status"),
-                    style = MaterialTheme.typography.bodySmall,
-                    color = palette.textSecondary
-                )
-            }
-            Row(
-                verticalAlignment = Alignment.CenterVertically,
-                modifier = Modifier
-                    .clip(RoundedCornerShape(14.dp))
-                    .background(palette.card)
-                    .border(1.dp, palette.cardBorder, RoundedCornerShape(14.dp))
-            ) {
-                IconButton(onClick = { selectedMonth = selectedMonth.minusMonths(1) }, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Default.ChevronLeft, contentDescription = "Previous month", tint = palette.textPrimary)
-                }
-                Text(
-                    text = Formatters.formatMonthLabel(Formatters.localMonthString(selectedMonth), lang),
-                    fontSize = 11.sp,
-                    fontWeight = FontWeight.Bold,
-                    color = palette.textPrimary,
-                    modifier = Modifier.padding(horizontal = 4.dp)
-                )
-                IconButton(onClick = { selectedMonth = selectedMonth.plusMonths(1) }, modifier = Modifier.size(34.dp)) {
-                    Icon(Icons.Default.ChevronRight, contentDescription = "Next month", tint = palette.textPrimary)
+            Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
+                Row(
+                    modifier = Modifier.fillMaxWidth(),
+                    horizontalArrangement = Arrangement.SpaceBetween,
+                    verticalAlignment = Alignment.CenterVertically
+                ) {
+                    Row(
+                        modifier = Modifier.weight(1f),
+                        verticalAlignment = Alignment.CenterVertically,
+                        horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        IconButton(
+                            onClick = onBackToHome,
+                            modifier = Modifier
+                                .size(36.dp)
+                                .clip(CircleShape)
+                                .background(palette.onHero.copy(alpha = 0.16f))
+                        ) {
+                            Icon(
+                                Icons.AutoMirrored.Filled.ArrowBack,
+                                contentDescription = "Back",
+                                tint = palette.onHero,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                        Column(modifier = Modifier.weight(1f)) {
+                            Text(
+                                tr(lang, "Riwayat Presensi", "Attendance History"),
+                                style = MaterialTheme.typography.titleLarge,
+                                color = palette.onHero
+                            )
+                            Text(
+                                tr(lang, "Rekap jam kerja & status bulanan", "Monthly work hours & status"),
+                                style = MaterialTheme.typography.bodySmall,
+                                color = palette.onHero.copy(alpha = 0.85f)
+                            )
+                        }
+                    }
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(14.dp))
+                            .background(palette.onHero.copy(alpha = 0.16f))
+                    ) {
+                        IconButton(onClick = { selectedMonth = selectedMonth.minusMonths(1) }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Previous month", tint = palette.onHero)
+                        }
+                        Text(
+                            text = Formatters.formatMonthLabel(Formatters.localMonthString(selectedMonth), lang),
+                            fontSize = 11.sp,
+                            fontWeight = FontWeight.Bold,
+                            color = palette.onHero,
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                        IconButton(onClick = { selectedMonth = selectedMonth.plusMonths(1) }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Next month", tint = palette.onHero)
+                        }
+                    }
                 }
             }
         }

@@ -109,6 +109,7 @@ export interface EmployeePayrollInput {
   attendance_bonus?: number;
   commission_bonus?: number;
   thr_amount?: number;
+  leave_allowance_amount?: number;
   other_deductions?: number;
   other_deductions_reason?: string;
   
@@ -142,6 +143,7 @@ export interface PayrollCalculationResult {
   commission_bonus: number;
   reimbursement_amount: number;
   thr_amount: number;
+  leave_allowance_amount: number;
   gross_earnings: number;
   
   late_deduction: number;
@@ -244,6 +246,7 @@ export function calculateEmployeePayroll(
   const commissionBonus = input.commission_bonus || 0;
   const reimbursementAmount = input.reimbursement_amount || 0;
   const thrAmount = input.thr_amount || 0;
+  const leaveAllowanceAmount = input.leave_allowance_amount || 0;
 
   // Gross Earnings (taxable compensation; reimbursements are non-earning expense repayments)
   const grossEarnings =
@@ -252,7 +255,8 @@ export function calculateEmployeePayroll(
     overtimePay +
     attendanceBonus +
     commissionBonus +
-    thrAmount;
+    thrAmount +
+    leaveAllowanceAmount;
 
   // BPJS Wage Base (subject to cap)
   const bpjsWageBase = input.bpjs_wage_basis && input.bpjs_wage_basis > 0
@@ -351,6 +355,7 @@ export function calculateEmployeePayroll(
     commission_bonus: commissionBonus,
     reimbursement_amount: reimbursementAmount,
     thr_amount: thrAmount,
+    leave_allowance_amount: leaveAllowanceAmount,
     gross_earnings: grossEarnings,
     late_deduction: lateDeduction,
     unpaid_leave_deduction: unpaidLeaveDeduction,

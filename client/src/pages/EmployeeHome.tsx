@@ -9,12 +9,37 @@ import {
   ShieldAlert,
   Loader2,
   WifiOff,
+  Bell,
+  Clock,
+  Calendar,
+  DollarSign,
+  Receipt,
+  Briefcase,
+  CheckSquare,
+  UserCircle,
+  Plane,
+  ChevronDown,
+  ChevronUp,
 } from 'lucide-react';
 import { Link } from 'react-router-dom';
 import { useAuth } from '../context/AuthContext';
 import { useLanguage } from '../context/LanguageContext';
+import { useCompany } from '../context/CompanyContext';
+import {
+  IsoAttendanceIcon,
+  IsoCalendarIcon,
+  IsoClaimReceiptIcon,
+  IsoKasbonIcon,
+  IsoLeavePlaneIcon,
+  IsoOvertimeIcon,
+  IsoPettyCashIcon,
+  IsoProfileIcon,
+  IsoTasksIcon,
+  IsoWalletIcon,
+} from '../components/IsometricIcons';
 import {
   apiFetch,
+  getToken,
   saveToOfflineQueue,
   getOfflineQueue,
   getLocalDateString,
@@ -28,6 +53,8 @@ import { apiFetchCached } from '../utils/offlineCache';
 export const EmployeeHome: React.FC = () => {
   const { user } = useAuth();
   const { t, tr, lang } = useLanguage();
+  const { palette, isModuleEnabled } = useCompany();
+  const [showMap, setShowMap] = useState(false);
 
   const [currentTime, setCurrentTime] = useState(new Date());
   const [todayAttendance, setTodayAttendance] = useState<any>(null);
@@ -81,6 +108,9 @@ export const EmployeeHome: React.FC = () => {
   });
 
   const [feedback, setFeedback] = useState<{ type: 'success' | 'error'; message: string } | null>(null);
+  const [announcements, setAnnouncements] = useState<any[]>([]);
+  const [selectedAnnouncement, setSelectedAnnouncement] = useState<any | null>(null);
+  const [profilePhotoUrl, setProfilePhotoUrl] = useState<string | null>(null);
 
   // Clock ticker
   useEffect(() => {
@@ -88,18 +118,33 @@ export const EmployeeHome: React.FC = () => {
     return () => clearInterval(timer);
   }, []);
 
+  // Auto-dismiss toast feedback
+  useEffect(() => {
+    if (!feedback) return;
+    const t = setTimeout(() => setFeedback(null), 3200);
+    return () => clearTimeout(t);
+  }, [feedback]);
+
   // Fetch initial data & config
   const loadDashboardData = async () => {
     try {
       const todayStr = getLocalDateString();
-      const [todayRes, attConfig, branchRes] = await Promise.all([
+      const [todayRes, attConfig, branchRes, annRes, empRes] = await Promise.all([
         apiFetchCached(`/attendance/today?date=${todayStr}`),
         apiFetchCached('/settings/attendance').catch(() => ({ require_selfie: false, require_location: true })),
         apiFetchCached('/attendance/branch').catch(() => ({ branch: null })),
+        isModuleEnabled('announcements')
+          ? apiFetchCached('/announcements').catch(() => ({ announcements: [] }))
+          : Promise.resolve({ announcements: [] }),
+        user?.employeeId
+          ? apiFetchCached(`/employees/${user.employeeId}`).catch(() => ({ employee: null }))
+          : Promise.resolve({ employee: null }),
       ]);
 
       setAttendanceConfig(attConfig);
       setOffice(branchRes?.branch || null);
+      setAnnouncements(annRes?.announcements || []);
+      setProfilePhotoUrl(empRes?.employee?.photo_url || null);
 
       const myRecord = (todayRes.records || []).find((r: any) => r.employee_id === user?.employeeId);
       setTodayAttendance(myRecord || null);
@@ -316,338 +361,508 @@ export const EmployeeHome: React.FC = () => {
   const shiftEnd = todayAttendance?.shift_end_time || '';
   const hasShift = Boolean(shiftStart && shiftEnd);
 
+  const hour = currentTime.getHours();
+  const greetingText =
+    hour < 11
+      ? tr('Selamat Pagi!!', 'Good Morning!!')
+      : hour < 15
+      ? tr('Selamat Siang!!', 'Good Afternoon!!')
+      : hour < 19
+      ? tr('Selamat Sore!!', 'Good Evening!!')
+      : tr('Selamat Malam!!', 'Good Night!!');
+
+  const weekdayName = currentTime.toLocaleDateString(lang === 'id' ? 'id-ID' : 'en-US', {
+    weekday: 'long',
+  });
+  const fullDateString = currentTime.toLocaleDateString(lang === 'id' ? 'id-ID' : 'en-US', {
+    day: 'numeric',
+    month: 'long',
+    year: 'numeric',
+  });
+
+  // Live elapsed timer since clock_in_time ("HH:MM" or "HH:MM:SS")
+  let elapsedText = '';
+  if (hasClockIn && !hasClockOut && todayAttendance?.clock_in_time) {
+    const parts = String(todayAttendance.clock_in_time).split(':').map(Number);
+    if (parts.length >= 2 && !Number.isNaN(parts[0]) && !Number.isNaN(parts[1])) {
+      const startDate = new Date(currentTime);
+      startDate.setHours(parts[0], parts[1], parts[2] || 0, 0);
+      const diffSec = Math.max(0, Math.floor((currentTime.getTime() - startDate.getTime()) / 1000));
+      const hh = String(Math.floor(diffSec / 3600)).padStart(2, '0');
+      const mm = String(Math.floor((diffSec % 3600) / 60)).padStart(2, '0');
+      const ss = String(diffSec % 60).padStart(2, '0');
+      elapsedText = `${hh}:${mm}:${ss}`;
+    }
+  }
+
+  const quickActions = [
+    {
+      label: tr('Kehadiran', 'Attendance'),
+      to: '/app/attendance',
+      icon: IsoAttendanceIcon,
+      bg: 'bg-orange-50/70',
+      show: isModuleEnabled('attendance'),
+    },
+    {
+      label: tr('Izin Cuti', 'Leave'),
+      to: '/app/requests?type=leave',
+      icon: IsoLeavePlaneIcon,
+      bg: 'bg-sky-50/70',
+      show: isModuleEnabled('leave'),
+    },
+    {
+      label: tr('Gaji', 'Payslips'),
+      to: '/app/payslips',
+      icon: IsoWalletIcon,
+      bg: 'bg-lime-50/70',
+      show: isModuleEnabled('payroll'),
+    },
+    {
+      label: tr('Kalender', 'Calendar'),
+      to: '/app/calendar',
+      icon: IsoCalendarIcon,
+      bg: 'bg-rose-50/70',
+      show: true,
+    },
+    {
+      label: tr('Klaim', 'Claims'),
+      to: '/app/requests?type=reimbursement',
+      icon: IsoClaimReceiptIcon,
+      bg: 'bg-amber-50/70',
+      show: isModuleEnabled('claims'),
+    },
+    {
+      label: tr('Lembur', 'Overtime'),
+      to: '/app/requests?type=overtime',
+      icon: IsoOvertimeIcon,
+      bg: 'bg-violet-50/70',
+      show: isModuleEnabled('shifts'),
+    },
+    {
+      label: tr('Petty Cash', 'Petty Cash'),
+      to: '/app/requests?type=petty',
+      icon: IsoPettyCashIcon,
+      bg: 'bg-cyan-50/70',
+      show: isModuleEnabled('petty_cash'),
+    },
+    {
+      label: tr('Kasbon', 'Advance'),
+      to: '/app/requests?type=reimbursement',
+      icon: IsoKasbonIcon,
+      bg: 'bg-emerald-50/70',
+      show: false,
+    },
+    {
+      label: tr('Tugas', 'Tasks'),
+      to: '/app/tasks',
+      icon: IsoTasksIcon,
+      bg: 'bg-indigo-50/70',
+      show: isModuleEnabled('tasks'),
+    },
+    {
+      label: tr('Profil', 'Profile'),
+      to: '/app/profile',
+      icon: IsoProfileIcon,
+      bg: 'bg-teal-50/70',
+      show: true,
+    },
+  ].filter((a) => a.show);
+
   return (
-    <div>
-      {/* Full-screen map */}
-      <div className="fixed inset-x-0 top-0 bottom-16 z-10 md:left-64 md:top-0 md:bottom-0">
-        {coords ? (
-          isOnline ? (
-            <LocationMap
-              lat={coords.lat}
-              lng={coords.lng}
-              accuracy={accuracy}
-              office={office}
-              className="h-full w-full"
-            />
-          ) : (
-            <div className="h-full w-full bg-gradient-to-b from-slate-200 via-slate-100 to-slate-300" />
-          )
-        ) : (
-          <div className="flex h-full w-full items-center justify-center bg-gradient-to-b from-slate-200 via-slate-100 to-slate-300 px-4">
-            <div className="w-full max-w-sm rounded-3xl border border-white/70 bg-white/95 p-6 text-center shadow-xl backdrop-blur">
-              <div
-                className={`mx-auto mb-3 flex h-14 w-14 items-center justify-center rounded-full ${
-                  gpsBlocked ? 'bg-rose-50 text-rose-600' : 'bg-blue-50 text-blue-600'
-                }`}
-              >
-                {detectingGps ? (
-                  <Loader2 size={24} className="animate-spin" />
-                ) : gpsBlocked ? (
-                  <ShieldAlert size={24} />
-                ) : (
-                  <MapPin size={24} />
-                )}
-              </div>
+    <div className="max-w-md mx-auto pb-8">
+      {/* Colored Hero Header */}
+      <div
+        className="px-5 pt-6 pb-16 rounded-b-[28px] md:rounded-3xl relative overflow-hidden shadow-sm"
+        style={{ background: palette.gradient, color: palette.onPrimary, viewTransitionName: 'ess-hero' }}
+      >
+        {/* Subtle decorative circles */}
+        <div className="pointer-events-none absolute -right-10 -top-10 w-40 h-40 rounded-full bg-white/10" />
+        <div className="pointer-events-none absolute -left-8 bottom-0 w-28 h-28 rounded-full bg-white/5" />
 
-              <h2 className="text-sm font-bold text-slate-900">
-                {gpsBlocked
-                  ? tr('Lokasi Tidak Tersedia', 'Location Unavailable')
-                  : tr('Mendeteksi Lokasi...', 'Detecting Location...')}
-              </h2>
-              <p className="mt-1 text-[11px] leading-relaxed text-slate-500">
-                {gpsBlocked
-                  ? tr(
-                      'Akses lokasi diblokir. Aktifkan GPS dan izinkan akses lokasi untuk situs ini, lalu coba lagi.',
-                      'Location access is blocked. Turn on GPS and allow location access for this site, then try again.'
-                    )
-                  : tr(
-                      'Pastikan GPS perangkat aktif dan izin lokasi diizinkan.',
-                      'Make sure your device GPS is on and location permission is allowed.'
-                    )}
-              </p>
-
-              {gpsBlocked && (
-                <ol className="mt-3 space-y-1.5 rounded-xl bg-slate-50 p-3 text-left text-[11px] leading-relaxed text-slate-600">
-                  <li>1. {tr('Aktifkan GPS / Location di perangkat.', 'Turn on GPS / Location on your device.')}</li>
-                  <li>2. {tr('Izinkan akses lokasi untuk situs ini di pengaturan browser.', 'Allow location access for this site in your browser settings.')}</li>
-                  <li>3. {tr('Tekan tombol di bawah untuk mencoba lagi.', 'Tap the button below to try again.')}</li>
-                </ol>
+        <div className="relative z-10 flex items-center justify-between gap-3">
+          <div className="flex items-center gap-3 min-w-0">
+            <Link
+              to="/app/profile"
+              viewTransition
+              className="w-12 h-12 rounded-full bg-white/20 border-2 border-white/40 flex items-center justify-center font-black text-lg shrink-0 shadow-xs overflow-hidden"
+            >
+              {profilePhotoUrl ? (
+                <img
+                  src={`${profilePhotoUrl}&token=${encodeURIComponent(getToken() || '')}`}
+                  alt={user?.name || 'Profile'}
+                  className="w-full h-full object-cover"
+                />
+              ) : (
+                user?.name?.charAt(0) || 'U'
               )}
-
-              <button
-                type="button"
-                onClick={detectLocation}
-                disabled={detectingGps}
-                className="mt-4 flex w-full items-center justify-center gap-2 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white transition hover:bg-slate-800 disabled:opacity-60 cursor-pointer"
-              >
-                <RefreshCw size={14} className={detectingGps ? 'animate-spin' : ''} />
-                <span>
-                  {gpsBlocked
-                    ? t.attendance.gpsRetryBtn
-                    : detectingGps
-                    ? tr('Mendeteksi...', 'Detecting...')
-                    : tr('Deteksi Lokasi', 'Detect Location')}
-                </span>
-              </button>
+            </Link>
+            <div className="min-w-0">
+              <p className="text-xs opacity-90 font-medium">{greetingText}</p>
+              <h1 className="text-lg font-bold tracking-tight truncate">{user?.name}</h1>
             </div>
           </div>
-        )}
 
-        {office && coords && (
-          <div className="pointer-events-none absolute bottom-3 left-3 z-10 inline-flex items-center gap-1.5 rounded-full border border-white/60 bg-white/90 px-2.5 py-1 text-[10px] font-semibold text-slate-700 shadow-lg backdrop-blur">
-            <span className="h-2 w-2 rounded-full border border-blue-600 bg-blue-600/20" />
-            <span className="max-w-[140px] truncate">{office.name || tr('Kantor', 'Office')}</span>
-            <span className="text-slate-400">·</span>
-            <span>{office.radius_meters}m</span>
-          </div>
-        )}
-
-        {/* Scrims for floating UI legibility (map mode only) */}
-        {coords && isOnline && (
-          <>
-            <div className="pointer-events-none absolute inset-x-0 top-0 h-28 bg-gradient-to-b from-slate-900/35 to-transparent" />
-            <div className="pointer-events-none absolute inset-x-0 bottom-0 h-64 bg-gradient-to-t from-slate-900/50 via-slate-900/15 to-transparent" />
-          </>
-        )}
-      </div>
-
-      {/* Floating top status */}
-      <div className="pointer-events-none fixed left-3 right-3 top-3 z-20 md:left-[calc(16rem+1rem)] md:right-4 md:top-4">
-        <div className="pointer-events-auto mx-auto flex max-w-md items-center gap-3 rounded-2xl border border-white/50 bg-white/95 px-3.5 py-2.5 shadow-lg backdrop-blur">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-slate-900 text-xs font-black text-white">
-            {user?.name?.charAt(0) || 'U'}
-          </div>
-          <div className="min-w-0 flex-1">
-            <p className="truncate text-sm font-bold text-slate-900">{user?.name}</p>
-            <p className="truncate text-[10px] font-medium text-slate-500">
-              {user?.jobTitle || tr('Staff', 'Staff')}
-            </p>
-          </div>
-          {user?.role && user.role !== 'employee' && (
-            <Link
-              to="/"
-              className="shrink-0 rounded-lg bg-slate-100 px-2 py-1.5 text-[10px] font-bold text-slate-700 transition hover:bg-slate-200"
-              title={tr('Kembali ke HR', 'Back to HR')}
+          <div className="flex items-center gap-2 shrink-0">
+            {user?.role && user.role !== 'employee' && (
+              <Link
+                to="/"
+                className="rounded-full bg-white/15 hover:bg-white/25 px-3 py-1.5 text-[11px] font-bold transition"
+                title={tr('Kembali ke HR', 'Back to HR')}
+              >
+                HR
+              </Link>
+            )}
+            <button
+              type="button"
+              onClick={() => {
+                loadDashboardData();
+                detectLocation();
+              }}
+              className="w-10 h-10 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center transition cursor-pointer"
+              aria-label={tr('Muat ulang', 'Refresh')}
+              title={tr('Muat ulang', 'Refresh')}
             >
-              {tr('HR', 'HR')}
-            </Link>
-          )}
-          <div className="shrink-0 text-right">
-            <div className="font-mono text-sm font-bold tracking-tight text-slate-900">{timeString}</div>
-            <div className="text-[9px] font-medium text-slate-500">{shortDateString}</div>
+              <RefreshCw size={17} className={detectingGps ? 'animate-spin' : ''} />
+            </button>
           </div>
-          <button
-            type="button"
-            disabled={detectingGps}
-            onClick={detectLocation}
-            className="shrink-0 rounded-lg p-1.5 text-slate-500 transition hover:bg-slate-100 hover:text-slate-900 cursor-pointer disabled:opacity-50"
-            aria-label={t.common.refresh}
-            title={t.common.refresh}
-          >
-            <RefreshCw size={14} className={detectingGps ? 'animate-spin' : ''} />
-          </button>
         </div>
       </div>
 
-      {/* Offline location summary */}
-      {coords && !isOnline && (
-        <div className="pointer-events-none fixed left-3 right-3 top-[78px] z-20 md:left-[calc(16rem+1rem)] md:right-4 md:top-[86px]">
-          <div className="pointer-events-auto mx-auto max-w-md rounded-2xl border border-amber-200 bg-amber-50/95 p-3 shadow-lg backdrop-blur">
-            <div className="flex items-center gap-2">
-              <span className="flex h-7 w-7 shrink-0 items-center justify-center rounded-full bg-amber-100 text-amber-700">
-                <WifiOff size={14} />
-              </span>
-              <div className="min-w-0 flex-1">
-                <p className="text-xs font-bold text-amber-900">{tr('Mode Offline', 'Offline Mode')}</p>
-                <p className="truncate text-[10px] text-amber-700">
-                  {tr('GPS tetap aktif. Presensi akan diantrekan.', 'GPS is still active. Attendance will be queued.')}
-                </p>
+      {/* Overlapping Today Attendance Card (with Live GPS Map Background) */}
+      <div className="-mt-11 px-4 relative z-20">
+        <div className="relative overflow-hidden bg-white rounded-3xl border border-slate-100 shadow-[0_10px_30px_rgba(15,23,42,0.08)] p-4">
+          {coords && isOnline && (
+            <div className="absolute inset-0 z-0 pointer-events-none">
+              <LocationMap
+                lat={coords.lat}
+                lng={coords.lng}
+                accuracy={accuracy}
+                office={office}
+                className="h-full w-full opacity-55"
+              />
+              <div className="absolute inset-0 bg-gradient-to-b from-white/75 via-white/82 to-white/92 backdrop-blur-[1px]" />
+            </div>
+          )}
+          <div className="relative z-10 space-y-3">
+          <div className="flex items-center justify-between text-xs">
+            <span className="font-bold text-slate-900 capitalize">{weekdayName}</span>
+            <span className="text-slate-500 font-medium">{fullDateString}</span>
+          </div>
+
+          <div className="rounded-2xl border border-slate-100/90 bg-slate-50/85 backdrop-blur-xs p-3 grid grid-cols-2 divide-x divide-slate-200/80">
+            {/* Clock In Column */}
+            <div className="pr-3 flex flex-col items-center justify-center text-center">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 mb-1.5">
+                <LogIn size={13} className="text-sky-600" />
+                <span>{t.attendance.todayMasuk}</span>
               </div>
+              {hasClockIn ? (
+                <>
+                  <span className={`font-mono text-2xl font-black tracking-tight ${clockInTone}`}>
+                    {todayAttendance?.clock_in_time}
+                  </span>
+                  {lateMinutes > 0 && (
+                    <span className="mt-0.5 text-[10px] font-semibold text-rose-600">
+                      {tr(`Terlambat ${lateMinutes}m`, `Late ${lateMinutes}m`)}
+                    </span>
+                  )}
+                </>
+              ) : (
+                <button
+                  type="button"
+                  disabled={!coords || submitting}
+                  onClick={handlePrimaryClockClick}
+                  style={coords ? { backgroundColor: palette.primary, color: palette.onPrimary } : undefined}
+                  className={`w-full py-2 px-3 rounded-full text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    !coords ? 'bg-slate-200 text-slate-500' : 'hover:opacity-95 active:scale-95'
+                  }`}
+                >
+                  {submitting
+                    ? t.common.submitting
+                    : !coords
+                    ? detectingGps
+                      ? tr('GPS...', 'GPS...')
+                      : tr('Tunggu GPS', 'Wait GPS')
+                    : tr('Masuk', 'Clock In')}
+                </button>
+              )}
+            </div>
+
+            {/* Clock Out Column */}
+            <div className="pl-3 flex flex-col items-center justify-center text-center">
+              <div className="flex items-center gap-1.5 text-[11px] font-semibold text-slate-600 mb-1.5">
+                <LogOut size={13} className="text-rose-500" />
+                <span>{t.attendance.todayPulang}</span>
+              </div>
+              {hasClockOut ? (
+                <>
+                  <span className={`font-mono text-2xl font-black tracking-tight ${clockOutTone}`}>
+                    {todayAttendance?.clock_out_time}
+                  </span>
+                  {earlyMinutes > 0 && (
+                    <span className="mt-0.5 text-[10px] font-semibold text-rose-600">
+                      {tr(`Awal ${earlyMinutes}m`, `Early ${earlyMinutes}m`)}
+                    </span>
+                  )}
+                </>
+              ) : hasClockIn ? (
+                <button
+                  type="button"
+                  disabled={!coords || submitting}
+                  onClick={handlePrimaryClockClick}
+                  style={coords ? { backgroundColor: palette.primary, color: palette.onPrimary } : undefined}
+                  className={`w-full py-2 px-3 rounded-full text-xs font-bold shadow-xs transition cursor-pointer disabled:opacity-50 disabled:cursor-not-allowed ${
+                    !coords ? 'bg-slate-200 text-slate-500' : 'hover:opacity-95 active:scale-95'
+                  }`}
+                >
+                  {submitting ? t.common.submitting : tr('Keluar', 'Clock Out')}
+                </button>
+              ) : (
+                <span className="font-mono text-2xl font-black text-slate-300">--:--</span>
+              )}
+            </div>
+          </div>
+
+          {/* Live Status Chip */}
+          <div className="flex flex-col items-center gap-1.5">
+            {dayComplete ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 px-3.5 py-1 text-[11px] font-semibold">
+                <CheckCircle2 size={13} />
+                <span>{tr('Presensi hari ini selesai', 'Today’s attendance is complete')}</span>
+              </div>
+            ) : hasClockIn && elapsedText ? (
+              <div className="inline-flex items-center gap-1.5 rounded-full bg-emerald-50 text-emerald-700 px-3.5 py-1 text-[11px] font-semibold">
+                <Clock size={13} />
+                <span>
+                  {tr(`Presensi masuk ${elapsedText} yang lalu`, `Clocked in ${elapsedText} ago`)}
+                </span>
+              </div>
+            ) : (
               <button
                 type="button"
                 onClick={detectLocation}
-                disabled={detectingGps}
-                aria-label={tr('Perbarui lokasi', 'Refresh location')}
-                className="shrink-0 rounded-lg p-1.5 text-amber-700 transition hover:bg-amber-100 disabled:opacity-50 cursor-pointer"
-              >
-                <RefreshCw size={14} className={detectingGps ? 'animate-spin' : ''} />
-              </button>
-            </div>
-
-            <div className="mt-2 grid grid-cols-3 gap-1.5">
-              <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                <span className="block text-[8px] font-semibold uppercase tracking-wide text-slate-400">Lat</span>
-                <span className="font-mono text-[10px] font-bold text-slate-800">{coords.lat.toFixed(5)}</span>
-              </div>
-              <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                <span className="block text-[8px] font-semibold uppercase tracking-wide text-slate-400">Lng</span>
-                <span className="font-mono text-[10px] font-bold text-slate-800">{coords.lng.toFixed(5)}</span>
-              </div>
-              <div className="rounded-lg bg-white/80 px-2 py-1.5">
-                <span className="block text-[8px] font-semibold uppercase tracking-wide text-slate-400">
-                  {tr('Akurasi', 'Accuracy')}
-                </span>
-                <span className="font-mono text-[10px] font-bold text-slate-800">±{Math.round(accuracy || 0)}m</span>
-              </div>
-            </div>
-
-            {office && distanceToOffice != null && (
-              <div
-                className={`mt-1.5 rounded-lg px-2 py-1.5 text-[10px] font-semibold ${
-                  withinOffice ? 'bg-emerald-50 text-emerald-700' : 'bg-amber-100 text-amber-800'
+                className={`inline-flex items-center gap-1.5 rounded-full px-3.5 py-1 text-[11px] font-semibold cursor-pointer ${
+                  !coords
+                    ? gpsBlocked
+                      ? 'bg-rose-50 text-rose-700'
+                      : 'bg-amber-50 text-amber-700'
+                    : withinOffice
+                    ? 'bg-emerald-50 text-emerald-700'
+                    : 'bg-amber-50 text-amber-700'
                 }`}
               >
-                {withinOffice
-                  ? tr(
-                      `Dalam radius kantor · ±${Math.round(distanceToOffice)} m`,
-                      `Inside office radius · ~${Math.round(distanceToOffice)} m`
-                    )
-                  : tr(
-                      `Di luar radius kantor · ±${Math.round(distanceToOffice)} m (radius ${office.radius_meters} m)`,
-                      `Outside office radius · ~${Math.round(distanceToOffice)} m (radius ${office.radius_meters} m)`
-                    )}
-              </div>
+                <MapPin size={12} />
+                <span>
+                  {!coords
+                    ? locationStatus
+                    : office && distanceToOffice != null
+                    ? withinOffice
+                      ? tr(`Dalam radius kantor (±${Math.round(distanceToOffice)}m)`, `Inside office (±${Math.round(distanceToOffice)}m)`)
+                      : tr(`Di luar radius (±${Math.round(distanceToOffice)}m)`, `Outside radius (±${Math.round(distanceToOffice)}m)`)
+                    : tr('GPS Siap · Tap untuk refresh', 'GPS Ready · Tap to refresh')}
+                </span>
+                <RefreshCw size={11} className={detectingGps ? 'animate-spin' : ''} />
+              </button>
+            )}
+
+            {hasShift && (
+              <p className="text-[10px] font-medium text-slate-500">
+                {tr('Shift', 'Shift')}: <span className="font-mono text-slate-700">{shiftStart} – {shiftEnd}</span>
+                {todayAttendance?.shift_name ? ` · ${todayAttendance.shift_name}` : ''}
+              </p>
             )}
           </div>
+          </div>
         </div>
-      )}
+      </div>
 
-      {/* Feedback toast */}
+      {/* Floating Auto-Dismiss Toast */}
       {feedback && (
-        <div className="pointer-events-none fixed left-3 right-3 top-[84px] z-20 md:left-[calc(16rem+1rem)] md:right-4 md:top-24">
+        <div
+          onClick={() => setFeedback(null)}
+          className="fixed bottom-5 left-1/2 -translate-x-1/2 z-50 w-[calc(100%-2rem)] max-w-sm cursor-pointer"
+        >
           <div
-            className={`pointer-events-auto mx-auto flex max-w-md items-start justify-between gap-2 rounded-xl border px-3.5 py-3 text-xs shadow-lg backdrop-blur ${
+            className={`flex items-center gap-2 rounded-2xl border px-4 py-3 text-xs shadow-lg backdrop-blur-md ${
               feedback.type === 'success'
                 ? 'border-emerald-200 bg-emerald-50/95 text-emerald-900'
                 : 'border-rose-200 bg-rose-50/95 text-rose-900'
             }`}
           >
-            <div className="flex min-w-0 items-start gap-2">
-              {feedback.type === 'success' ? (
-                <CheckCircle2 size={16} className="mt-0.5 shrink-0" />
-              ) : (
-                <AlertTriangle size={16} className="mt-0.5 shrink-0" />
-              )}
-              <span className="font-medium break-words">{feedback.message}</span>
-            </div>
-            <button onClick={() => setFeedback(null)} className="shrink-0 text-xs underline opacity-80 hover:opacity-100">
-              {t.common.close}
-            </button>
+            {feedback.type === 'success' ? (
+              <CheckCircle2 size={16} className="shrink-0" />
+            ) : (
+              <AlertTriangle size={16} className="shrink-0" />
+            )}
+            <span className="font-semibold break-words">{feedback.message}</span>
           </div>
         </div>
       )}
 
-      {/* Floating clock action */}
-      <div
-        className={`pointer-events-none fixed inset-x-0 z-20 md:left-64 ${
-          offlineBarVisible ? 'bottom-[124px] md:bottom-[52px]' : 'bottom-[72px] md:bottom-6'
-        }`}
-      >
-        <div className="mx-auto flex max-w-md flex-col items-center gap-3 px-4">
-          <div className="pointer-events-auto flex h-44 w-44 items-center justify-center rounded-full bg-white/90 p-1.5 shadow-[inset_0_4px_10px_rgba(15,23,42,0.28)]">
-            <button
-              type="button"
-              disabled={!coords || submitting || dayComplete}
-              onClick={handlePrimaryClockClick}
-              aria-label={dayComplete ? tr('Presensi Selesai', 'Attendance Complete') : clockAction === 'in' ? t.attendance.clockInNow : t.attendance.clockOut}
-              className={`clock-press flex h-40 w-40 flex-col items-center justify-center gap-2 rounded-full font-bold text-white shadow-[0_8px_0_rgba(15,23,42,0.32),0_18px_32px_-12px_rgba(15,23,42,0.6)] transition duration-150 enabled:hover:brightness-110 cursor-pointer disabled:cursor-not-allowed ${
-                dayComplete
-                  ? 'bg-gradient-to-b from-emerald-500 to-emerald-700'
-                  : !coords
-                  ? 'bg-gradient-to-b from-slate-300 to-slate-400'
-                  : clockAction === 'in'
-                  ? 'bg-gradient-to-b from-slate-800 to-slate-950'
-                  : 'bg-gradient-to-b from-amber-500 to-amber-700'
-              }`}
-            >
-              {dayComplete ? (
-                <CheckCircle2 size={32} strokeWidth={2.2} />
-              ) : !coords ? (
-                detectingGps ? (
-                  <Loader2 size={30} className="animate-spin" />
-                ) : gpsBlocked ? (
-                  <ShieldAlert size={30} />
-                ) : (
-                  <MapPin size={30} />
-                )
-              ) : clockAction === 'in' ? (
-                <LogIn size={32} strokeWidth={2.2} />
-              ) : (
-                <LogOut size={32} strokeWidth={2.2} />
-              )}
-              <span className="px-6 text-center text-[11px] leading-snug">
-                {submitting
-                  ? t.common.submitting
-                  : dayComplete
-                  ? tr('Presensi Selesai', 'Attendance Complete')
-                  : !coords
-                  ? detectingGps
-                    ? tr('Mendeteksi...', 'Detecting...')
-                    : gpsBlocked
-                    ? tr('GPS Nonaktif', 'GPS Off')
-                    : tr('Menunggu GPS', 'Waiting for GPS')
-                  : clockAction === 'in'
-                  ? attendanceConfig.require_selfie
-                    ? t.attendance.clockInWithSelfie
-                    : t.attendance.clockInNow
-                  : t.attendance.clockOut}
-              </span>
-            </button>
-          </div>
-
-          {coords && isOnline && (
-            <p className="rounded-full bg-slate-900/35 px-3 py-1 text-[11px] font-medium text-white backdrop-blur">
-              {dayComplete
-                ? tr('Presensi hari ini selesai.', 'Today’s attendance is complete.')
-                : clockAction === 'in'
-                ? tr('Ketuk untuk presensi masuk', 'Tap to clock in')
-                : tr('Ketuk untuk presensi pulang', 'Tap to clock out')}
-            </p>
-          )}
-
-          {isOnline && (
-          <div className="pointer-events-auto grid w-full grid-cols-2 gap-2 rounded-2xl border border-white/50 bg-white/95 p-2 shadow-lg backdrop-blur">
-            <div className="rounded-xl bg-slate-50 px-3 py-2">
-              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                {t.attendance.todayMasuk}
-              </span>
-              <span className={`block font-mono text-sm font-bold ${clockInTone}`}>
-                {todayAttendance?.clock_in_time || '--:--'}
-              </span>
-              {hasClockIn && lateMinutes > 0 && (
-                <span className="mt-0.5 block text-[9px] font-semibold text-rose-600">
-                  {tr(`Terlambat ${lateMinutes} mnt`, `Late ${lateMinutes} min`)}
-                </span>
-              )}
+      {/* Offline Banner */}
+      {!isOnline && (
+        <div className="px-4 mt-3">
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-3 flex items-center gap-2.5 text-xs text-amber-900">
+            <WifiOff size={16} className="shrink-0 text-amber-700" />
+            <div className="min-w-0 flex-1">
+              <p className="font-bold">{tr('Mode Offline', 'Offline Mode')}</p>
+              <p className="text-[11px] text-amber-700">
+                {tr('GPS tetap aktif. Presensi akan diantrekan otomatis.', 'GPS is active. Punches will be queued automatically.')}
+              </p>
             </div>
-            <div className="rounded-xl bg-slate-50 px-3 py-2">
-              <span className="block text-[10px] font-semibold uppercase tracking-wide text-slate-500">
-                {t.attendance.todayPulang}
-              </span>
-              <span className={`block font-mono text-sm font-bold ${clockOutTone}`}>
-                {todayAttendance?.clock_out_time || '--:--'}
-              </span>
-              {hasClockOut && earlyMinutes > 0 && (
-                <span className="mt-0.5 block text-[9px] font-semibold text-rose-600">
-                  {tr(`Pulang awal ${earlyMinutes} mnt`, `Left early ${earlyMinutes} min`)}
-                </span>
-              )}
-            </div>
-            {hasShift && (
-              <div className="col-span-2 flex items-center justify-center gap-1.5 rounded-xl bg-white/70 py-1 text-[10px] font-semibold text-slate-500">
-                <span>{tr('Shift', 'Shift')}:</span>
-                <span className="font-mono text-slate-700">
-                  {shiftStart} – {shiftEnd}
-                </span>
-                {todayAttendance?.shift_name && (
-                  <span className="truncate text-slate-400">· {todayAttendance.shift_name}</span>
-                )}
-              </div>
-            )}
           </div>
-          )}
+        </div>
+      )}
+
+      {/* 4-Column Quick Action Grid */}
+      <div className="px-4 pt-6">
+        <div className="grid grid-cols-4 gap-y-5 gap-x-2">
+          {quickActions.map((action) => {
+            const Icon = action.icon;
+            return (
+              <Link
+                key={action.label}
+                to={action.to}
+                viewTransition
+                className="flex flex-col items-center text-center group"
+              >
+                <div
+                  className={`w-15 h-15 rounded-2xl ${action.bg} flex items-center justify-center group-hover:scale-105 transition`}
+                >
+                  <Icon size={46} />
+                </div>
+                <span className="mt-1.5 text-[11px] font-semibold text-slate-700 leading-tight line-clamp-1">
+                  {action.label}
+                </span>
+              </Link>
+            );
+          })}
         </div>
       </div>
+
+      {/* Company Announcements Blog Feed (Home only) */}
+      {isModuleEnabled('announcements') && announcements.length > 0 && (
+        <div className="px-4 mt-6 space-y-3">
+          <div className="flex items-center justify-between">
+            <h3 className="text-sm font-extrabold text-slate-900">
+              {tr('Pengumuman Perusahaan', 'Company Announcements')}
+            </h3>
+            {announcements.filter((a) => !a.acknowledged).length > 0 && (
+              <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[10px] font-bold text-sky-700">
+                {announcements.filter((a) => !a.acknowledged).length} {tr('baru', 'new')}
+              </span>
+            )}
+          </div>
+          <div className="space-y-3">
+            {[...announcements]
+              .sort((a, b) => Number(Boolean(b.pinned)) - Number(Boolean(a.pinned)))
+              .map((post) => (
+                <button
+                  key={post.id}
+                  type="button"
+                  onClick={() => setSelectedAnnouncement(post)}
+                  className={`w-full text-left rounded-3xl bg-white p-4 border shadow-2xs transition hover:shadow-xs cursor-pointer space-y-2 ${
+                    post.pinned || !post.acknowledged ? 'border-sky-200' : 'border-slate-200/80'
+                  }`}
+                >
+                  <div className="flex items-center justify-between gap-2">
+                    <div className="flex items-center gap-1.5">
+                      <span className="rounded-full bg-sky-50 px-2 py-0.5 text-[9px] font-bold uppercase text-sky-700">
+                        {post.category || 'general'}
+                      </span>
+                      {Boolean(post.pinned) && (
+                        <span className="rounded-full bg-amber-50 px-2 py-0.5 text-[9px] font-bold uppercase text-amber-700">
+                          PINNED
+                        </span>
+                      )}
+                    </div>
+                    <span className="text-[10px] text-slate-400">
+                      {post.published_at ? String(post.published_at).slice(0, 10) : ''}
+                    </span>
+                  </div>
+                  <h4 className="text-sm font-extrabold text-slate-900 line-clamp-2">{post.title}</h4>
+                  <p className="text-xs text-slate-600 line-clamp-3 leading-relaxed">{post.body}</p>
+                  <div className="pt-2 border-t border-slate-100 flex items-center justify-between text-[11px]">
+                    <span className="font-semibold text-sky-600">
+                      {post.publisher_name || 'HR'} · {tr('Baca selengkapnya →', 'Read more →')}
+                    </span>
+                    {post.acknowledged ? (
+                      <span className="text-[10px] font-bold text-emerald-600">{tr('✓ Dibaca', '✓ Read')}</span>
+                    ) : post.require_ack ? (
+                      <span className="text-[10px] font-bold text-amber-600">{tr('Perlu konfirmasi', 'Action needed')}</span>
+                    ) : null}
+                  </div>
+                </button>
+              ))}
+          </div>
+        </div>
+      )}
+
+      {/* Announcement Blog Article Reader Modal */}
+      {selectedAnnouncement && (
+        <div
+          className="fixed inset-0 z-[70] flex items-end justify-center bg-slate-900/60 p-4 backdrop-blur-sm sm:items-center"
+          onClick={(e) => {
+            if (e.target === e.currentTarget) setSelectedAnnouncement(null);
+          }}
+        >
+          <div className="w-full max-w-md max-h-[85vh] overflow-y-auto rounded-3xl bg-white p-5 shadow-2xl space-y-3">
+            <div className="flex items-center justify-between gap-2">
+              <div className="flex items-center gap-1.5">
+                <span className="rounded-full bg-sky-50 px-2.5 py-0.5 text-[10px] font-bold uppercase text-sky-700">
+                  {selectedAnnouncement.category || 'general'}
+                </span>
+                {Boolean(selectedAnnouncement.pinned) && (
+                  <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-[10px] font-bold uppercase text-amber-700">
+                    PINNED
+                  </span>
+                )}
+              </div>
+              <button
+                type="button"
+                onClick={() => setSelectedAnnouncement(null)}
+                className="text-xs font-bold text-slate-400 hover:text-slate-700 cursor-pointer"
+              >
+                ✕
+              </button>
+            </div>
+            <h3 className="text-base font-extrabold text-slate-900">{selectedAnnouncement.title}</h3>
+            <p className="text-[11px] text-slate-400">
+              {selectedAnnouncement.publisher_name || 'HR'} ·{' '}
+              {selectedAnnouncement.published_at ? String(selectedAnnouncement.published_at).slice(0, 10) : ''}
+            </p>
+            <div className="border-t border-slate-100 pt-3 text-xs text-slate-700 whitespace-pre-wrap leading-relaxed">
+              {selectedAnnouncement.body}
+            </div>
+            <div className="pt-2 flex flex-wrap items-center gap-2">
+              {!selectedAnnouncement.acknowledged ? (
+                <button
+                  type="button"
+                  onClick={async () => {
+                    try {
+                      await apiFetch(`/announcements/${selectedAnnouncement.id}/ack`, { method: 'POST' });
+                      setAnnouncements((prev) =>
+                        prev.map((a) => (a.id === selectedAnnouncement.id ? { ...a, acknowledged: true } : a))
+                      );
+                      setSelectedAnnouncement((prev: any) => (prev ? { ...prev, acknowledged: true } : prev));
+                    } catch {}
+                  }}
+                  style={{ backgroundColor: palette.primary, color: palette.onPrimary }}
+                  className="rounded-xl px-4 py-2 text-xs font-bold cursor-pointer"
+                >
+                  {selectedAnnouncement.require_ack
+                    ? tr('Konfirmasi Sudah Membaca', 'Acknowledge')
+                    : tr('Tandai Sudah Dibaca', 'Mark as Read')}
+                </button>
+              ) : (
+                <span className="rounded-xl bg-emerald-50 px-3 py-1.5 text-xs font-bold text-emerald-700">
+                  {tr('✓ Sudah Dibaca', '✓ Acknowledged')}
+                </span>
+              )}
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Outside-geofence reason prompt */}
       {geofenceDialog && (
@@ -657,7 +872,7 @@ export const EmployeeHome: React.FC = () => {
             if (event.target === event.currentTarget) setGeofenceDialog(null);
           }}
         >
-          <div className="w-full max-w-sm space-y-3 rounded-2xl bg-white p-5 shadow-2xl">
+          <div className="w-full max-w-sm space-y-3 rounded-3xl bg-white p-5 shadow-2xl">
             <div className="flex items-start gap-2.5">
               <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-amber-50 text-amber-600">
                 <MapPin size={18} />
@@ -681,14 +896,14 @@ export const EmployeeHome: React.FC = () => {
               value={geofenceDialog.reason}
               onChange={(e) => setGeofenceDialog({ ...geofenceDialog, reason: e.target.value })}
               placeholder={tr('Contoh: Kunjungan klien, tugas lapangan...', 'Example: Client visit, field assignment...')}
-              className="w-full rounded-xl border border-slate-300 p-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:border-blue-500 focus:outline-none focus:ring-2 focus:ring-blue-500/20"
+              className="w-full rounded-xl border border-slate-300 p-2.5 text-xs text-slate-900 placeholder:text-slate-400 focus:outline-none"
             />
 
             <div className="flex gap-2">
               <button
                 type="button"
                 onClick={() => setGeofenceDialog(null)}
-                className="flex-1 rounded-xl bg-slate-100 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 cursor-pointer"
+                className="flex-1 rounded-full bg-slate-100 py-2.5 text-xs font-semibold text-slate-700 transition hover:bg-slate-200 cursor-pointer"
               >
                 {t.common.cancel}
               </button>
@@ -696,7 +911,8 @@ export const EmployeeHome: React.FC = () => {
                 type="button"
                 disabled={!geofenceDialog.reason.trim()}
                 onClick={submitGeofenceReason}
-                className="flex-1 rounded-xl bg-slate-900 py-2.5 text-xs font-bold text-white transition hover:bg-slate-800 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
+                style={{ backgroundColor: palette.primary, color: palette.onPrimary }}
+                className="flex-1 rounded-full py-2.5 text-xs font-bold transition hover:opacity-95 disabled:cursor-not-allowed disabled:opacity-50 cursor-pointer"
               >
                 {tr('Lanjutkan Presensi', 'Continue Clock')}
               </button>
@@ -711,10 +927,15 @@ export const EmployeeHome: React.FC = () => {
         onClose={() => setCameraOpen(false)}
         onCapture={handlePhotoCaptured}
         title={tr(
-          `Foto Selfie Presensi ${clockAction === 'in' ? 'Masuk' : 'Pulang'}`,
-          `Attendance Selfie Photo ${clockAction === 'in' ? 'Clock In' : 'Clock Out'}`
+          `Presensi ${clockAction === 'in' ? 'Masuk' : 'Keluar'}`,
+          `Attendance ${clockAction === 'in' ? 'Clock In' : 'Clock Out'}`
         )}
         facingMode="user"
+        attendanceTime={`${currentTime.toLocaleDateString('en-GB')} ${timeString}`}
+        distanceMeters={distanceToOffice}
+        isOutsideOffice={withinOffice === false}
+        officeName={office?.name}
+        coordsText={coords ? `${coords.lat.toFixed(5)}, ${coords.lng.toFixed(5)} (±${Math.round(accuracy || 0)}m)` : undefined}
       />
     </div>
   );

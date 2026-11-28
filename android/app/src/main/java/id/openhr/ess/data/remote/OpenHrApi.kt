@@ -90,6 +90,17 @@ interface OpenHrApi {
         @Body request: UpdateBankDetailsRequest
     ): SimpleMessageResponse
 
+    @PUT("api/employees/{id}/photo")
+    suspend fun updateEmployeePhoto(
+        @Path("id") employeeId: String,
+        @Body request: UpdateEmployeePhotoRequest
+    ): UpdateEmployeePhotoResponse
+
+    @retrofit2.http.DELETE("api/employees/{id}/photo")
+    suspend fun deleteEmployeePhoto(
+        @Path("id") employeeId: String
+    ): SimpleMessageResponse
+
     // Announcements & Policy Acks
     @GET("api/announcements")
     suspend fun getAnnouncements(): AnnouncementsResponse
@@ -151,13 +162,38 @@ interface OpenHrApi {
     ): SimpleMessageResponse
 
     // Tasks (TMS)
+    @GET("api/tasks/meta")
+    suspend fun getTaskMeta(): TaskMetaResponse
+
     @GET("api/tasks")
-    suspend fun getTasks(@Query("tab") tab: String = "inbox"): TasksResponse
+    suspend fun getTasks(
+        @Query("tab") tab: String = "inbox",
+        @Query("priority") priority: String? = null,
+        @Query("search") search: String? = null
+    ): TasksResponse
+
+    @POST("api/tasks")
+    suspend fun createTask(@Body body: CreateTaskBody): CreateTaskResponse
+
+    @GET("api/tasks/{id}")
+    suspend fun getTaskDetail(@Path("id") id: String): TaskDetailResponse
 
     @POST("api/tasks/{id}/action")
     suspend fun takeTaskAction(
         @Path("id") id: String,
         @Body body: TaskActionBody
+    ): SimpleMessageResponse
+
+    @POST("api/tasks/{id}/handover")
+    suspend fun handoverTask(
+        @Path("id") id: String,
+        @Body body: TaskHandoverBody
+    ): SimpleMessageResponse
+
+    @POST("api/tasks/{id}/reschedule")
+    suspend fun rescheduleTask(
+        @Path("id") id: String,
+        @Body body: TaskRescheduleBody
     ): SimpleMessageResponse
 
     @POST("api/tasks/{id}/close")

@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { useSearchParams, Link } from 'react-router-dom';
+import { useSearchParams, Link, useNavigate } from 'react-router-dom';
 import {
   AlertCircle,
   ArrowLeft,
@@ -33,15 +33,18 @@ import { fileToDownscaledDataUrl } from '../utils/image';
 
 export const EmployeeRequests: React.FC = () => {
   const { t, tr, lang, formatDate, formatCurrency } = useLanguage();
-  const { companyName, isModuleEnabled } = useCompany();
+  const { companyName, isModuleEnabled, palette } = useCompany();
   const { user } = useAuth();
+  const navigate = useNavigate();
   const [searchParams] = useSearchParams();
   const initialType = searchParams.get('type');
   const initialView =
-    initialType === 'reimbursement' || initialType === 'overtime' || initialType === 'petty'
+    initialType === 'reimbursement' ||
+    initialType === 'overtime' ||
+    initialType === 'petty'
       ? initialType
-      : 'hub';
-  const [view, setView] = useState<'hub' | 'leave' | 'overtime' | 'reimbursement' | 'petty'>(initialView);
+      : 'leave';
+  const [view, setView] = useState<'leave' | 'overtime' | 'reimbursement' | 'petty'>(initialView);
   const [showForm, setShowForm] = useState(false);
   const [pettyFormOpen, setPettyFormOpen] = useState(false);
   const [statusFilter, setStatusFilter] = useState<'all' | 'pending' | 'approved' | 'paid' | 'rejected'>('all');
@@ -391,21 +394,147 @@ export const EmployeeRequests: React.FC = () => {
   ].filter((item) => isModuleEnabled(item.moduleId));
 
   const currentCard = REQUEST_CARDS.find((item) => item.key === view) || REQUEST_CARDS[0];
+  const annualBal = leaveBalances.find((b) => b.leave_type_code === 'annual') || leaveBalances[0];
+  const remainingLeaveDays = annualBal?.remaining_days ?? 12;
+  const usedLeaveDays = annualBal?.used_days ?? 0;
+
+  const totalClaimAmount = history.reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const approvedClaimAmount = history
+    .filter((item) => item.status === 'approved' || item.status === 'paid')
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const pendingClaimAmount = history
+    .filter((item) => item.status === 'pending')
+    .reduce((sum, item) => sum + (Number(item.amount) || 0), 0);
+  const claimProgressPct =
+    totalClaimAmount > 0 ? Math.min(100, Math.round((approvedClaimAmount / totalClaimAmount) * 100)) : 0;
 
   return (
-    <div className="max-w-md mx-auto flex flex-col gap-4">
-      <div>
-        <h2 className="text-xl font-bold text-slate-900">{t.nav.requests}</h2>
-        {view === 'hub' && (
-          <p className="text-xs text-slate-500">
-            {tr('Pilih jenis permohonan yang ingin dibuat', 'Choose the type of request you want to make')}
-          </p>
+    <div className="max-w-md mx-auto pb-8">
+      {/* Colored Hero Header */}
+      <div
+        className="px-4 pt-5 pb-6 rounded-b-[28px] md:rounded-3xl shadow-sm"
+        style={{ background: palette.gradient, color: palette.onPrimary, viewTransitionName: 'ess-hero' }}
+      >
+        <div className="flex items-center justify-between gap-2">
+          <div className="flex items-center gap-2.5 min-w-0">
+            <button
+              type="button"
+              onClick={() => {
+                setMsg(null);
+                if (showForm) {
+                  setShowForm(false);
+                } else {
+                  navigate('/app', { viewTransition: true });
+                }
+              }}
+              className="w-9 h-9 rounded-full bg-white/15 hover:bg-white/25 flex items-center justify-center shrink-0 cursor-pointer"
+              aria-label={tr('Kembali', 'Back')}
+            >
+              <ArrowLeft size={18} />
+            </button>
+            <div className="min-w-0">
+              <h2 className="text-base font-bold truncate">
+                {currentCard.title}
+              </h2>
+              <p className="text-[11px] opacity-85 truncate">
+                {showForm
+                  ? tr('Form pengajuan baru', 'New request form')
+                  : currentCard.description}
+              </p>
+            </div>
+          </div>
+
+          {view !== 'petty' && !showForm && (
+            <button
+              type="button"
+              onClick={() => {
+                setMsg(null);
+                setShowForm(true);
+              }}
+              className="inline-flex items-center gap-1 rounded-full bg-white/20 hover:bg-white/30 px-3 py-1.5 text-xs font-bold shrink-0 cursor-pointer"
+            >
+              <Plus size={14} />
+              <span>{tr('Ajukan', 'New')}</span>
+            </button>
+          )}
+        </div>
+
+        {/* Screen 5: Annual Leave Balance Hero */}
+        {view === 'leave' && !showForm && (
+          <div className="mt-5 text-center space-y-3">
+            <div>
+              <p className="text-[11px] opacity-85 font-medium">{tr('Total Sisa Cuti', 'Remaining Leave Balance')}</p>
+              <div className="mt-1 flex items-baseline justify-center gap-1.5">
+                <span className="text-4xl font-black tracking-tight">{remainingLeaveDays}</span>
+                <span className="text-sm font-semibold opacity-90">{tr('hari', 'days')}</span>
+              </div>
+            </div>
+
+            <div className="inline-flex items-center gap-1.5 rounded-full bg-white/15 px-3.5 py-1 text-[11px] font-medium">
+              <Calendar size={12} />
+              <span>
+                {tr('Periode Cuti Tahunan', 'Annual Leave Period')}: {new Date().getFullYear()}
+              </span>
+            </div>
+
+            <div className="grid grid-cols-3 divide-x divide-white/20 pt-2 text-center">
+              <div>
+                <span className="block text-[10px] opacity-80">{tr('Cuti Diambil', 'Used')}</span>
+                <span className="block text-sm font-bold mt-0.5">{usedLeaveDays} {tr('hari', 'd')}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] opacity-80">{tr('Menunggu', 'Pending')}</span>
+                <span className="block text-sm font-bold mt-0.5">{statusCounts.pending}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] opacity-80">{tr('Disetujui', 'Approved')}</span>
+                <span className="block text-sm font-bold mt-0.5">{statusCounts.approved}</span>
+              </div>
+            </div>
+          </div>
+        )}
+
+        {/* Screen 2: Reimbursement / Claim Summary Hero */}
+        {view === 'reimbursement' && !showForm && (
+          <div className="mt-5 text-center space-y-3">
+            <div>
+              <p className="text-[11px] opacity-85 font-medium">{tr('Total Klaim Periode Ini', 'Total Claims This Period')}</p>
+              <div className="mt-1 text-3xl font-black tracking-tight font-mono">
+                {formatCurrency(totalClaimAmount)}
+              </div>
+            </div>
+
+            <div className="grid grid-cols-2 divide-x divide-white/20 pt-1">
+              <div>
+                <span className="block text-[10px] opacity-80">{tr('Disetujui / Dibayar', 'Approved / Paid')}</span>
+                <span className="block text-xs font-bold mt-0.5 font-mono">{formatCurrency(approvedClaimAmount)}</span>
+              </div>
+              <div>
+                <span className="block text-[10px] opacity-80">{tr('Dalam Proses', 'In Process')}</span>
+                <span className="block text-xs font-bold mt-0.5 font-mono">{formatCurrency(pendingClaimAmount)}</span>
+              </div>
+            </div>
+
+            <div className="pt-1 space-y-1">
+              <div className="w-full h-2 rounded-full bg-white/25 overflow-hidden">
+                <div
+                  className="h-full rounded-full bg-white transition-all duration-300"
+                  style={{ width: `${claimProgressPct}%` }}
+                />
+              </div>
+              <div className="flex items-center justify-between text-[10px] opacity-85">
+                <span>{tr(`Periode ${formatDate(claimPeriodStart)} – ${formatDate(claimPeriodEnd)}`, `Period ${formatDate(claimPeriodStart)} – ${formatDate(claimPeriodEnd)}`)}</span>
+                <span className="font-bold">{claimProgressPct}%</span>
+              </div>
+            </div>
+          </div>
         )}
       </div>
 
+      <div className="px-4 pt-4 flex flex-col gap-4">
       {msg && (
         <div
-          className={`p-3 rounded-xl text-xs flex items-center gap-2 ${
+          className={`p-3 rounded-2xl text-xs flex items-center gap-2 ${
             msg.type === 'success' ? 'bg-emerald-50 text-emerald-800 border border-emerald-200' : 'bg-rose-50 text-rose-800 border border-rose-200'
           }`}
         >
@@ -414,78 +543,11 @@ export const EmployeeRequests: React.FC = () => {
         </div>
       )}
 
-      {view === 'hub' ? (
-        <div className="order-1 grid grid-cols-2 gap-2.5">
-          {REQUEST_CARDS.map((item) => {
-            const Icon = item.icon;
-            return (
-              <button
-                key={item.key}
-                type="button"
-                onClick={() => {
-                  setMsg(null);
-                  setShowForm(false);
-                  setPettyFormOpen(false);
-                  setStatusFilter('all');
-                  setView(item.key);
-                }}
-                className="flex min-h-[118px] flex-col justify-between rounded-2xl border border-slate-200/80 bg-white p-3.5 text-left shadow-2xs transition hover:border-slate-300 hover:shadow-xs cursor-pointer"
-              >
-                <span className={`flex h-9 w-9 items-center justify-center rounded-xl ${item.tint}`}>
-                  <Icon size={17} />
-                </span>
-                <span className="mt-2 block">
-                  <span className="block text-xs font-bold leading-tight text-slate-900">{item.title}</span>
-                  <span className="mt-0.5 block text-[10px] leading-snug text-slate-500">{item.description}</span>
-                </span>
-              </button>
-            );
-          })}
-        </div>
-      ) : (
-        <div className="order-1 space-y-3">
-          {!(showForm || (view === 'petty' && pettyFormOpen)) && (
-          <div className="flex items-start gap-2">
-            <button
-              type="button"
-              onClick={() => {
-                setMsg(null);
-                setShowForm(false);
-                setStatusFilter('all');
-                setView('hub');
-              }}
-              className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 cursor-pointer"
-              aria-label={tr('Kembali', 'Back')}
-            >
-              <ArrowLeft size={15} />
-            </button>
-            <div className="min-w-0">
-              <h3 className="text-sm font-bold text-slate-900">{currentCard.title}</h3>
-              <p className="text-[11px] text-slate-500">{currentCard.description}</p>
-            </div>
-          </div>
-          )}
-
+      <div className="order-1 space-y-3">
           {view === 'petty' ? (
             <PettyCashPanel onFormOpenChange={setPettyFormOpen} />
           ) : showForm ? (
             <>
-              <div className="flex items-start gap-2">
-                <button
-                  type="button"
-                  onClick={() => setShowForm(false)}
-                  className="mt-0.5 flex h-8 w-8 shrink-0 items-center justify-center rounded-xl border border-slate-200 bg-white text-slate-600 transition hover:bg-slate-100 cursor-pointer"
-                  aria-label={tr('Kembali', 'Back')}
-                >
-                  <ArrowLeft size={15} />
-                </button>
-                <div className="min-w-0">
-                  <h3 className="text-sm font-bold text-slate-900">{currentCard.title}</h3>
-                  <p className="text-[11px] text-slate-500">
-                    {tr('Form pengajuan baru', 'New request form')}
-                  </p>
-                </div>
-              </div>
 
       {/* TAB 1: CUTI / IZIN */}
       {view === 'leave' && (
@@ -848,30 +910,42 @@ export const EmployeeRequests: React.FC = () => {
           </button>
         </div>
 
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex items-center gap-1.5 overflow-x-auto no-scrollbar pb-1">
           {[
-            { key: 'all', label: tr('Semua', 'All'), count: history.length },
-            { key: 'pending', label: tr('Menunggu', 'Pending'), count: statusCounts.pending },
-            { key: 'approved', label: tr('Disetujui', 'Approved'), count: statusCounts.approved },
-            { key: 'paid', label: tr('Dibayar', 'Paid'), count: statusCounts.paid },
-            { key: 'rejected', label: tr('Ditolak', 'Rejected'), count: statusCounts.rejected },
-          ].map((filter) => (
-            <button
-              key={filter.key}
-              type="button"
-              onClick={() => setStatusFilter(filter.key as typeof statusFilter)}
-              className={`inline-flex items-center gap-1 rounded-full px-2.5 py-1 text-[10px] font-bold transition cursor-pointer ${
-                statusFilter === filter.key
-                  ? 'bg-slate-900 text-white'
-                  : 'bg-slate-100 text-slate-600 hover:bg-slate-200'
-              }`}
-            >
-              <span>{filter.label}</span>
-              <span className={`rounded-full px-1.5 py-0.5 text-[9px] ${statusFilter === filter.key ? 'bg-white/20' : 'bg-white'}`}>
-                {filter.count}
-              </span>
-            </button>
-          ))}
+            { key: 'all', label: tr('Semua', 'All'), count: history.length, dot: palette.primary },
+            { key: 'pending', label: tr('Menunggu', 'Pending'), count: statusCounts.pending, dot: '#F59E0B' },
+            { key: 'approved', label: tr('Disetujui', 'Approved'), count: statusCounts.approved, dot: '#10B981' },
+            { key: 'paid', label: tr('Dibayar', 'Paid'), count: statusCounts.paid, dot: '#2563EB' },
+            { key: 'rejected', label: tr('Ditolak', 'Rejected'), count: statusCounts.rejected, dot: '#EF4444' },
+          ].map((filter) => {
+            const active = statusFilter === filter.key;
+            return (
+              <button
+                key={filter.key}
+                type="button"
+                onClick={() => setStatusFilter(filter.key as typeof statusFilter)}
+                style={active ? { borderColor: palette.primary, backgroundColor: palette.primarySoft } : undefined}
+                className={`inline-flex items-center gap-1.5 rounded-full border px-3 py-1.5 text-[11px] font-bold whitespace-nowrap transition cursor-pointer ${
+                  active
+                    ? 'text-slate-900 shadow-2xs'
+                    : 'border-slate-200 bg-white text-slate-600 hover:bg-slate-50'
+                }`}
+              >
+                <span className="w-2 h-2 rounded-full shrink-0" style={{ backgroundColor: filter.dot }} />
+                <span>{filter.label}</span>
+                <span
+                  className="rounded-full px-1.5 py-0.5 text-[9px] font-bold"
+                  style={
+                    active
+                      ? { backgroundColor: palette.primary, color: palette.onPrimary }
+                      : { backgroundColor: '#F1F5F9', color: '#475569' }
+                  }
+                >
+                  {filter.count}
+                </span>
+              </button>
+            );
+          })}
         </div>
 
         {view === 'reimbursement' && (
@@ -1007,7 +1081,7 @@ export const EmployeeRequests: React.FC = () => {
             </>
           )}
         </div>
-      )}
+      </div>
 
       {/* Image Preview Modal */}
       {previewModalImg && (

@@ -55,6 +55,9 @@ class SessionStore(context: Context) {
     private val _companyNameFlow = MutableStateFlow(prefs.getString(KEY_COMPANY_NAME, "openHR") ?: "openHR")
     val companyNameFlow: StateFlow<String> = _companyNameFlow.asStateFlow()
 
+    private val _primaryColorFlow = MutableStateFlow(prefs.getString(KEY_PRIMARY_COLOR, "#E12D53") ?: "#E12D53")
+    val primaryColorFlow: StateFlow<String> = _primaryColorFlow.asStateFlow()
+
     private val _cachedBranchFlow = MutableStateFlow(loadCachedBranch())
     val cachedBranchFlow: StateFlow<BranchInfo?> = _cachedBranchFlow.asStateFlow()
 
@@ -63,6 +66,31 @@ class SessionStore(context: Context) {
 
     private val _shiftReminderEnabledFlow = MutableStateFlow(prefs.getBoolean(KEY_SHIFT_REMINDER, false))
     val shiftReminderEnabledFlow: StateFlow<Boolean> = _shiftReminderEnabledFlow.asStateFlow()
+
+    private val _faceEnrolledVersionFlow = MutableStateFlow(0)
+    val faceEnrolledVersionFlow: StateFlow<Int> = _faceEnrolledVersionFlow.asStateFlow()
+
+    fun getFaceEmbedding(employeeId: String?): FloatArray? {
+        if (employeeId.isNullOrBlank()) return null
+        val raw = prefs.getString("${KEY_FACE_EMBEDDING_PREFIX}$employeeId", null) ?: return null
+        return runCatching { json.decodeFromString<List<Float>>(raw).toFloatArray() }
+            .getOrNull()
+            ?.takeIf { it.isNotEmpty() }
+    }
+
+    fun saveFaceEmbedding(employeeId: String?, embedding: FloatArray) {
+        if (employeeId.isNullOrBlank()) return
+        prefs.edit()
+            .putString("${KEY_FACE_EMBEDDING_PREFIX}$employeeId", json.encodeToString(embedding.toList()))
+            .apply()
+        _faceEnrolledVersionFlow.value += 1
+    }
+
+    fun clearFaceEmbedding(employeeId: String?) {
+        if (employeeId.isNullOrBlank()) return
+        prefs.edit().remove("${KEY_FACE_EMBEDDING_PREFIX}$employeeId").apply()
+        _faceEnrolledVersionFlow.value += 1
+    }
 
     fun setShiftReminderEnabled(enabled: Boolean) {
         prefs.edit().putBoolean(KEY_SHIFT_REMINDER, enabled).apply()
@@ -117,16 +145,24 @@ class SessionStore(context: Context) {
         _modulesFlow.value = modules
     }
 
-    fun saveCompanyBranding(name: String?, logoUrl: String?) {
+    fun saveCompanyBranding(name: String?, logoUrl: String?, primaryColor: String? = null) {
         val cleanName = name?.trim()?.takeIf { it.isNotEmpty() } ?: "openHR"
         val cleanLogo = logoUrl?.trim()?.takeIf { it.isNotEmpty() }
-        if (_companyNameFlow.value == cleanName && _companyLogoUrlFlow.value == cleanLogo) return
+        val cleanColor = primaryColor?.trim()?.takeIf {
+            Regex("^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$").matches(it)
+        }?.uppercase() ?: "#E12D53"
+        if (_companyNameFlow.value == cleanName &&
+            _companyLogoUrlFlow.value == cleanLogo &&
+            _primaryColorFlow.value == cleanColor
+        ) return
         prefs.edit()
             .putString(KEY_COMPANY_NAME, cleanName)
             .putString(KEY_LOGO_URL, cleanLogo)
+            .putString(KEY_PRIMARY_COLOR, cleanColor)
             .apply()
         _companyNameFlow.value = cleanName
         _companyLogoUrlFlow.value = cleanLogo
+        _primaryColorFlow.value = cleanColor
     }
 
     fun setThemeMode(mode: String) {
@@ -250,11 +286,13 @@ class SessionStore(context: Context) {
         private const val KEY_HIDE_SALARY = "hide_salary"
         private const val KEY_LOGO_URL = "company_logo_url"
         private const val KEY_COMPANY_NAME = "company_name"
+        private const val KEY_PRIMARY_COLOR = "company_primary_color"
         private const val KEY_CACHED_BRANCH = "cached_branch"
         private const val KEY_CACHED_SETTINGS = "cached_attendance_settings"
         private const val KEY_CACHED_TODAY_DATE = "cached_today_date"
         private const val KEY_CACHED_TODAY_RECORD = "cached_today_record"
         private const val KEY_SHIFT_REMINDER = "shift_reminder_enabled"
+        private const val KEY_FACE_EMBEDDING_PREFIX = "face_embedding_"
 
         fun normalizeBaseUrl(url: String): String {
             var trimmed = url.trim().removeSuffix("/")

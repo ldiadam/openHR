@@ -167,7 +167,24 @@ payrollRoutes.post('/runs/thr', requireRole(['owner_admin']), async (c) => {
       ? pay.getDate() - join.getDate()
       : 30 - join.getDate() + pay.getDate();
     const totalMonths = Math.max(0, months) + Math.max(0, daysRemainder) / 30;
-    const factor = Math.min(1, totalMonths / 12);
+    let factor = Math.min(1, totalMonths / 12);
+    if (totalMonths >= 12 && (settings as any).thr_progressive_tiers_json) {
+      try {
+        const tiers = JSON.parse((settings as any).thr_progressive_tiers_json);
+        if (Array.isArray(tiers)) {
+          const tenureYears = totalMonths / 12;
+          for (const tier of tiers) {
+            const minYears = Number(tier?.min_years || 0);
+            const mult = Number(tier?.multiplier || 1);
+            if (minYears > 0 && tenureYears >= minYears && mult > factor) {
+              factor = mult;
+            }
+          }
+        }
+      } catch {
+        // ignore invalid tiers JSON
+      }
+    }
     const wage = Number(emp.base_salary || 0) + Number(emp.fixed_allowances || 0);
     const thrAmount = Math.round(wage * factor);
     if (thrAmount <= 0) continue;
@@ -205,7 +222,7 @@ payrollRoutes.post('/runs/thr', requireRole(['owner_admin']), async (c) => {
         id, tenant_id, payroll_run_id, employee_id,
         employee_nik, employee_name, job_title, department_name, ptkp_status, bank_name, bank_account_number,
         base_salary, fixed_allowance, prorated_salary, days_worked, expected_working_days,
-        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount,
+        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount, leave_allowance_amount,
         gross_earnings, late_deduction, unpaid_leave_deduction, kasbon_deduction, other_deductions,
         alpha_days, alpha_deduction,
         bpjs_kes_employee, bpjs_jht_employee, bpjs_jp_employee, pph21_amount, pph21_method,
@@ -216,7 +233,7 @@ payrollRoutes.post('/runs/thr', requireRole(['owner_admin']), async (c) => {
         ?, 'default', ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
@@ -247,6 +264,7 @@ payrollRoutes.post('/runs/thr', requireRole(['owner_admin']), async (c) => {
         0,
         0,
         calc.thr_amount,
+        0,
         calc.gross_earnings,
         0, // late_deduction
         0, // unpaid_leave_deduction
@@ -548,6 +566,21 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
       priorMonthsJhtJp = Number(prior?.jht_jp || 0);
     }
 
+    // 7b. Optional Tunjangan Cuti (Leave Allowance on work anniversary month with >= 1 year tenure)
+    let leaveAllowanceAmount = 0;
+    if ((settings as any).leave_allowance_enabled === 1 && emp.join_date) {
+      const joinDate = new Date(`${emp.join_date}T00:00:00`);
+      const periodEndDate = new Date(`${run.period_end}T00:00:00`);
+      const yearsCompleted =
+        periodEndDate.getFullYear() -
+        joinDate.getFullYear() -
+        (periodEndDate.getMonth() < joinDate.getMonth() ? 1 : 0);
+      if (yearsCompleted >= 1 && joinDate.getMonth() + 1 === runMonth) {
+        const mult = Number((settings as any).leave_allowance_multiplier ?? 1);
+        leaveAllowanceAmount = Math.max(0, Math.round((Number(emp.base_salary || 0) + Number(emp.fixed_allowances || 0)) * mult));
+      }
+    }
+
     // Calculate item using Indonesian rules
     const calc = calculateEmployeePayroll(
       {
@@ -573,6 +606,7 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         overtime_holiday_hours: otHolidayHours,
         kasbon_deduction: kasbonDeduction,
         reimbursement_amount: reimbTotal,
+        leave_allowance_amount: leaveAllowanceAmount,
         is_new_joiner_mid_month: isNewJoiner,
         is_leaver_mid_month: isLeaver,
         is_december_recalc: runMonth === 12,
@@ -589,7 +623,7 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         id, tenant_id, payroll_run_id, employee_id,
         employee_nik, employee_name, job_title, department_name, ptkp_status, bank_name, bank_account_number,
         base_salary, fixed_allowance, prorated_salary, days_worked, expected_working_days,
-        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount,
+        overtime_hours, overtime_pay, attendance_bonus, commission_bonus, reimbursement_amount, thr_amount, leave_allowance_amount,
         gross_earnings, late_deduction, unpaid_leave_deduction, kasbon_deduction, other_deductions,
         alpha_days, alpha_deduction,
         bpjs_kes_employee, bpjs_jht_employee, bpjs_jp_employee, pph21_amount, pph21_method,
@@ -600,7 +634,7 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         ?, 'default', ?, ?,
         ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
-        ?, ?, ?, ?, ?, ?,
+        ?, ?, ?, ?, ?, ?, ?,
         ?, ?, ?, ?, ?,
         ?, ?,
         ?, ?, ?, ?, ?,
@@ -631,6 +665,7 @@ payrollRoutes.post('/runs/:id/pull-inputs', requireRole(['owner_admin']), async 
         calc.commission_bonus,
         calc.reimbursement_amount,
         calc.thr_amount,
+        calc.leave_allowance_amount,
         calc.gross_earnings,
         calc.late_deduction,
         calc.unpaid_leave_deduction,
@@ -1326,4 +1361,53 @@ payrollRoutes.get('/my-payslips', async (c) => {
     .all<any>();
 
   return c.json({ payslips: items.results || [] });
+});
+
+// 12. Annual 1721-A1 Tax Withholding Summary (Bukti Potong Pajak)
+payrollRoutes.get('/tax-slips', async (c) => {
+  const user = c.get('user');
+  const year = String(c.req.query('year') || new Date().getFullYear());
+  const requestedEmpId = c.req.query('employee_id');
+
+  const isPrivileged = user.role === 'owner_admin' || user.role === 'manager';
+  const targetEmpId = isPrivileged ? requestedEmpId : user.employeeId;
+
+  if (!isPrivileged && !targetEmpId) {
+    return c.json({ error: 'User tidak terhubung ke karyawan' }, 400);
+  }
+
+  let sql = `
+    SELECT e.id as employee_id, e.nik, e.full_name, e.job_title, e.npwp as employee_npwp, e.ptkp_status,
+           COALESCE(te.name, c.legal_name, c.name) as company_name,
+           COALESCE(te.npwp, c.npwp) as company_npwp,
+           COALESCE(te.address, c.address) as company_address,
+           COUNT(DISTINCT pr.id) as months_count,
+           COALESCE(SUM(pi.base_salary + pi.fixed_allowance), 0) as total_base_salary,
+           COALESCE(SUM(pi.overtime_pay + pi.attendance_bonus + pi.commission_bonus), 0) as total_overtime,
+           COALESCE(SUM(pi.thr_amount), 0) as total_thr,
+           COALESCE(SUM(pi.leave_allowance_amount), 0) as total_leave_allowance,
+           COALESCE(SUM(pi.gross_earnings), 0) as total_gross,
+           COALESCE(SUM(pi.bpjs_jht_employee + pi.bpjs_jp_employee), 0) as total_bpjs_tk_employee,
+           COALESCE(SUM(pi.bpjs_kes_employee), 0) as total_bpjs_kes_employee,
+           COALESCE(SUM(pi.pph21_amount), 0) as total_pph21,
+           COALESCE(SUM(pi.take_home_pay), 0) as total_take_home_pay
+    FROM payroll_items pi
+    JOIN payroll_runs pr ON pi.payroll_run_id = pr.id
+    JOIN employees e ON pi.employee_id = e.id
+    LEFT JOIN branches b ON e.branch_id = b.id
+    LEFT JOIN company_tax_entities te ON b.tax_entity_id = te.id
+    LEFT JOIN companies c ON c.tenant_id = 'default'
+    WHERE pr.status IN ('locked', 'paid')
+      AND substr(pr.period_end, 1, 4) = ?
+  `;
+  const params: any[] = [year];
+  if (targetEmpId) {
+    sql += ` AND pi.employee_id = ?`;
+    params.push(targetEmpId);
+  }
+  sql += ` GROUP BY e.id ORDER BY e.full_name ASC`;
+
+  const rows = await c.env.DB.prepare(sql).bind(...params).all<any>();
+  const slips = (rows.results || []).map((r: any) => ({ ...r, year }));
+  return c.json({ year, slips });
 });

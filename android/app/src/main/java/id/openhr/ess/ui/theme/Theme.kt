@@ -10,6 +10,8 @@ import androidx.compose.runtime.CompositionLocalProvider
 import androidx.compose.runtime.Immutable
 import androidx.compose.runtime.staticCompositionLocalOf
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.graphics.lerp
+import androidx.compose.ui.graphics.luminance
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.sp
@@ -53,10 +55,42 @@ data class EssPalette(
     val dangerSurface: Color,
     val heroStart: Color,
     val heroEnd: Color,
+    val onHero: Color,
     val dockBackground: Color,
     val shimmerBase: Color,
     val shimmerHighlight: Color
 )
+
+fun parseHexColor(hex: String?, fallback: Color = Color(0xFFE12D53)): Color {
+    val clean = hex?.trim()?.removePrefix("#") ?: return fallback
+    val normalized = when (clean.length) {
+        3 -> clean.map { "$it$it" }.joinToString("")
+        6 -> clean
+        else -> return fallback
+    }
+    return runCatching {
+        Color(("FF$normalized").toLong(16))
+    }.getOrDefault(fallback)
+}
+
+fun buildEssPalette(isDark: Boolean, primaryHex: String?): EssPalette {
+    val base = if (isDark) DarkEssPalette else LightEssPalette
+    val primary = parseHexColor(primaryHex, Color(0xFFE12D53))
+    val primaryDark = lerp(primary, Color.Black, 0.22f)
+    val primarySoft = if (isDark) {
+        lerp(primary, Color(0xFF111827), 0.78f)
+    } else {
+        lerp(primary, Color.White, 0.88f)
+    }
+    val onHero = if (primary.luminance() > 0.45f) Color(0xFF0F172A) else Color.White
+    return base.copy(
+        accent = primary,
+        accentSurface = primarySoft,
+        heroStart = primary,
+        heroEnd = primaryDark,
+        onHero = onHero
+    )
+}
 
 val LightEssPalette = EssPalette(
     isDark = false,
@@ -67,16 +101,17 @@ val LightEssPalette = EssPalette(
     textPrimary = Color(0xFF0F172A),
     textSecondary = Color(0xFF475569),
     textMuted = Color(0xFF64748B),
-    accent = Color(0xFF2563EB),
-    accentSurface = Color(0xFFEFF6FF),
+    accent = Color(0xFFE12D53),
+    accentSurface = Color(0xFFFFEDF1),
     success = Color(0xFF059669),
     successSurface = Color(0xFFECFDF5),
     warning = Color(0xFFD97706),
     warningSurface = Color(0xFFFFFBEB),
     danger = Color(0xFFE11D48),
     dangerSurface = Color(0xFFFFF1F2),
-    heroStart = Color(0xFF0F172A),
-    heroEnd = Color(0xFF1E293B),
+    heroStart = Color(0xFFE12D53),
+    heroEnd = Color(0xFFB02241),
+    onHero = Color.White,
     dockBackground = Color(0xF7FFFFFF),
     shimmerBase = Color(0xFFE2E8F0),
     shimmerHighlight = Color(0xFFF8FAFC)
@@ -91,16 +126,17 @@ val DarkEssPalette = EssPalette(
     textPrimary = Color(0xFFF8FAFC),
     textSecondary = Color(0xFFCBD5E1),
     textMuted = Color(0xFF94A3B8),
-    accent = Color(0xFF60A5FA),
-    accentSurface = Color(0xFF172554),
+    accent = Color(0xFFE12D53),
+    accentSurface = Color(0xFF3F1320),
     success = Color(0xFF34D399),
     successSurface = Color(0xFF064E3B),
     warning = Color(0xFFFBBF24),
     warningSurface = Color(0xFF451A03),
     danger = Color(0xFFFB7185),
     dangerSurface = Color(0xFF4C0519),
-    heroStart = Color(0xFF1E293B),
-    heroEnd = Color(0xFF0F172A),
+    heroStart = Color(0xFFE12D53),
+    heroEnd = Color(0xFF9E1F3A),
+    onHero = Color.White,
     dockBackground = Color(0xF5111827),
     shimmerBase = Color(0xFF1F2937),
     shimmerHighlight = Color(0xFF334155)
@@ -166,6 +202,7 @@ private fun buildTypography(palette: EssPalette) = Typography(
 @Composable
 fun OpenHrTheme(
     themeMode: String = "system",
+    primaryColorHex: String? = null,
     content: @Composable () -> Unit
 ) {
     val useDark = when (themeMode) {
@@ -173,8 +210,12 @@ fun OpenHrTheme(
         "light" -> false
         else -> isSystemInDarkTheme()
     }
-    val palette = if (useDark) DarkEssPalette else LightEssPalette
-    val colorScheme = if (useDark) DarkColors else LightColors
+    val palette = buildEssPalette(useDark, primaryColorHex)
+    val colorScheme = if (useDark) {
+        DarkColors.copy(primary = palette.accent, secondary = palette.accent, onPrimary = palette.onHero)
+    } else {
+        LightColors.copy(primary = palette.accent, secondary = palette.accent, onPrimary = palette.onHero)
+    }
 
     CompositionLocalProvider(LocalEssPalette provides palette) {
         MaterialTheme(

@@ -10,6 +10,7 @@ import androidx.compose.animation.core.*
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.background
 import androidx.compose.foundation.border
+import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.rememberScrollState
 import androidx.compose.foundation.shape.CircleShape
@@ -29,6 +30,10 @@ import androidx.compose.ui.draw.shadow
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.hapticfeedback.HapticFeedbackType
+import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
+import coil.compose.AsyncImage
+import coil.request.ImageRequest
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalHapticFeedback
 import androidx.compose.ui.text.TextStyle
@@ -42,16 +47,33 @@ import id.openhr.ess.data.local.SessionStore
 import id.openhr.ess.data.model.AnnouncementItem
 import id.openhr.ess.data.model.AttendanceSettingsResponse
 import id.openhr.ess.data.model.BranchInfo
+import id.openhr.ess.data.model.ClientSecurityPayload
 import id.openhr.ess.data.model.ClockRequest
 import id.openhr.ess.data.model.OfflineClockRecord
+import id.openhr.ess.data.model.SecurityPolicyDto
 import id.openhr.ess.data.model.TodayAttendanceRecord
 import id.openhr.ess.data.repository.EssRepository
 import id.openhr.ess.ui.components.AttendanceMapView
 import id.openhr.ess.ui.components.CameraCaptureDialog
 import id.openhr.ess.ui.components.FeedbackBanner
+import id.openhr.ess.ui.components.IsoApprovalIcon
+import id.openhr.ess.ui.components.IsoAttendanceIcon
+import id.openhr.ess.ui.components.IsoCalendarIcon
+import id.openhr.ess.ui.components.IsoClaimReceiptIcon
+import id.openhr.ess.ui.components.IsoKasbonIcon
+import id.openhr.ess.ui.components.IsoLeavePlaneIcon
+import id.openhr.ess.ui.components.IsoOvertimeIcon
+import id.openhr.ess.ui.components.IsoPettyCashIcon
+import id.openhr.ess.ui.components.IsoProfileIcon
+import id.openhr.ess.ui.components.IsoRefreshIcon
+import id.openhr.ess.ui.components.IsoTasksIcon
+import id.openhr.ess.ui.components.IsoWalletIcon
 import id.openhr.ess.ui.components.pressScale
 import id.openhr.ess.ui.components.tr
 import id.openhr.ess.ui.theme.LocalEssPalette
+import id.openhr.ess.util.FaceExtractResult
+import id.openhr.ess.util.FaceMath
+import id.openhr.ess.util.FaceRecognizer
 import id.openhr.ess.util.Formatters
 import id.openhr.ess.util.GpsReading
 import id.openhr.ess.util.LocationHelper
@@ -170,7 +192,10 @@ private fun MapBackgroundLayer(
 fun HomeScreen(
     repository: EssRepository,
     sessionStore: SessionStore,
-    isVisible: Boolean = true
+    isVisible: Boolean = true,
+    onHeroHeightChanged: (Int) -> Unit = {},
+    onHeroScrollChanged: (Int) -> Unit = {},
+    onNavigateToTab: (String) -> Unit = {}
 ) {
     val context = LocalContext.current
     val haptics = LocalHapticFeedback.current
@@ -179,7 +204,9 @@ fun HomeScreen(
 
     val user by sessionStore.userFlow.collectAsState()
     val lang by sessionStore.langFlow.collectAsState()
+    val modules by sessionStore.modulesFlow.collectAsState()
     val offlineQueue by sessionStore.offlineQueueFlow.collectAsState()
+    var showMapSection by remember { mutableStateOf(false) }
     val cachedBranch by sessionStore.cachedBranchFlow.collectAsState()
     val cachedSettings by sessionStore.cachedSettingsFlow.collectAsState()
 
@@ -211,7 +238,8 @@ fun HomeScreen(
     val baseUrl by sessionStore.baseUrlFlow.collectAsState()
     val token by sessionStore.tokenFlow.collectAsState()
     var announcements by remember { mutableStateOf<List<AnnouncementItem>>(repository.cachedAnnouncements ?: emptyList()) }
-    var showAnnouncementsSheet by remember { mutableStateOf(false) }
+    var selectedAnnouncement by remember { mutableStateOf<AnnouncementItem?>(null) }
+    var profilePhotoUrl by remember { mutableStateOf(repository.cachedProfile?.photo_url) }
     var securityPolicy by remember { mutableStateOf(SecurityPolicyDto()) }
     val deviceId = remember { sessionStore.getOrCreateDeviceId() }
     val securityReport = remember(gps, securityPolicy) {
@@ -248,6 +276,13 @@ fun HomeScreen(
         }
         scope.launch {
             repository.getAnnouncements().onSuccess { announcements = it }
+        }
+        user?.employeeId?.let { empId ->
+            scope.launch {
+                repository.getEmployee(empId).onSuccess { emp ->
+                    profilePhotoUrl = emp?.photo_url
+                }
+            }
         }
         scope.launch {
             repository.getPublicCompany().onSuccess { comp ->
@@ -537,18 +572,38 @@ fun HomeScreen(
         }
     }
 
-    Box(modifier = Modifier.fillMaxSize()) {
-        // Full-screen MapLibre Positron Map
-        MapBackgroundLayer(
-            gps = gps,
-            branch = branch,
-            isVisible = isVisible,
-            recenterTrigger = recenterTrigger,
-            detectingGps = detectingGps,
-            gpsBlocked = gpsBlocked,
-            hasLocationPermission = hasLocationPermission,
-            lang = lang,
-            onRequestLocation = {
+    val scrollState = rememberScrollState()
+    val locale = if (lang == "id") Locale("id", "ID") else Locale.US
+    val greetingText = when (currentTime.hour) {
+        in 0..10 -> tr(lang, "Selamat Pagi!!", "Good Morning!!")
+        in 11..14 -> tr(lang, "Selamat Siang!!", "Good Afternoon!!")
+        in 15..18 -> tr(lang, "Selamat Sore!!", "Good Evening!!")
+        else -> tr(lang, "Selamat Malam!!", "Good Night!!")
+    }
+    val weekdayText = LocalDate.now().format(DateTimeFormatter.ofPattern("EEEE", locale))
+    val fullDateText = LocalDate.now().format(DateTimeFormatter.ofPattern("dd MMMM yyyy", locale))
+    val inTime = effectiveTodayRecord?.clock_in_time
+    val outTime = effectiveTodayRecord?.clock_out_time
+    val hasClockIn = !inTime.isNullOrBlank()
+    val hasClockOut = !outTime.isNullOrBlank()
+
+    // Live elapsed timer since clock_in_time
+    val elapsedText = remember(inTime, hasClockOut, currentTime) {
+        if (!hasClockIn || hasClockOut || inTime == null) null
+        else runCatching {
+            val parts = inTime.split(":").mapNotNull { it.toIntOrNull() }
+            if (parts.size >= 2) {
+                val start = LocalTime.of(parts[0], parts[1], parts.getOrElse(2) { 0 })
+                val diffSec = java.time.Duration.between(start, currentTime).seconds.coerceAtLeast(0)
+                String.format(Locale.US, "%02d:%02d:%02d", diffSec / 3600, (diffSec % 3600) / 60, diffSec % 60)
+            } else null
+        }.getOrNull()
+    }
+
+    val triggerClockAction = {
+        if (!dayComplete && !submitting && securityBlockReason == null) {
+            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
+            if (gps == null) {
                 if (!hasLocationPermission) {
                     permissionLauncher.launch(
                         arrayOf(
@@ -559,83 +614,319 @@ fun HomeScreen(
                 } else {
                     detectLocation()
                 }
+            } else if (clockAction == "in" && settings.require_selfie) {
+                cameraOpen = true
+            } else {
+                executeClock(clockAction)
             }
-        )
+        }
+    }
 
-        // Floating Top HUD
+    LaunchedEffect(scrollState.value) {
+        onHeroScrollChanged(scrollState.value)
+    }
+
+    Box(modifier = Modifier.fillMaxSize()) {
         Column(
             modifier = Modifier
-                .align(Alignment.TopCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 12.dp),
-            verticalArrangement = Arrangement.spacedBy(8.dp)
+                .fillMaxSize()
+                .verticalScroll(scrollState)
+                .padding(bottom = 24.dp)
         ) {
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = palette.card.copy(alpha = 0.96f),
-                border = BorderStroke(1.dp, palette.cardBorder),
-                shadowElevation = 4.dp
+            // Colored Hero Header (transparent over MainShell shared morphing hero backdrop)
+            Box(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .onSizeChanged { onHeroHeightChanged(it.height) }
+                    .statusBarsPadding()
+                    .padding(start = 18.dp, end = 18.dp, top = 16.dp, bottom = 58.dp)
             ) {
                 Row(
-                    modifier = Modifier.padding(horizontal = 12.dp, vertical = 10.dp),
+                    modifier = Modifier.fillMaxWidth(),
                     verticalAlignment = Alignment.CenterVertically,
-                    horizontalArrangement = Arrangement.spacedBy(10.dp)
+                    horizontalArrangement = Arrangement.spacedBy(12.dp)
                 ) {
                     Box(
                         modifier = Modifier
-                            .size(40.dp)
+                            .size(48.dp)
                             .clip(CircleShape)
-                            .background(Brush.linearGradient(listOf(palette.accent, Color(0xFF1D4ED8)))),
+                            .background(palette.onHero.copy(alpha = 0.2f))
+                            .border(2.dp, palette.onHero.copy(alpha = 0.45f), CircleShape)
+                            .clickable { onNavigateToTab("profile") },
                         contentAlignment = Alignment.Center
                     ) {
-                        Text(
-                            text = user?.name?.firstOrNull()?.uppercase() ?: "U",
-                            color = Color.White,
-                            fontWeight = FontWeight.Black,
-                            fontSize = 15.sp
-                        )
+                        if (!profilePhotoUrl.isNullOrBlank()) {
+                            AsyncImage(
+                                model = ImageRequest.Builder(context)
+                                    .data("$baseUrl$profilePhotoUrl&token=$token")
+                                    .crossfade(true)
+                                    .build(),
+                                contentDescription = "Profile Photo",
+                                contentScale = ContentScale.Crop,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                        } else {
+                            Text(
+                                text = user?.name?.firstOrNull()?.uppercase() ?: "U",
+                                color = palette.onHero,
+                                fontWeight = FontWeight.Black,
+                                fontSize = 18.sp
+                            )
+                        }
                     }
 
                     Column(modifier = Modifier.weight(1f)) {
                         Text(
+                            text = greetingText,
+                            color = palette.onHero.copy(alpha = 0.88f),
+                            fontSize = 12.sp,
+                            fontWeight = FontWeight.Medium
+                        )
+                        Text(
                             text = user?.name ?: "-",
+                            color = palette.onHero,
                             fontWeight = FontWeight.Bold,
-                            fontSize = 14.sp,
-                            color = palette.textPrimary,
+                            fontSize = 18.sp,
                             maxLines = 1,
                             overflow = TextOverflow.Ellipsis
-                        )
-                        Text(
-                            text = user?.jobTitle ?: "Staff",
-                            fontSize = 11.sp,
-                            color = palette.textMuted,
-                            maxLines = 1,
-                            overflow = TextOverflow.Ellipsis
-                        )
-                    }
-
-                    Column(horizontalAlignment = Alignment.End) {
-                        Text(
-                            text = currentTime.format(DateTimeFormatter.ofPattern("HH:mm")),
-                            style = TextStyle(
-                                fontWeight = FontWeight.ExtraBold,
-                                fontSize = 15.sp,
-                                color = palette.textPrimary,
-                                fontFeatureSettings = "tnum"
-                            )
-                        )
-                        val locale = if (lang == "id") Locale("id", "ID") else Locale.US
-                        Text(
-                            text = LocalDate.now().format(DateTimeFormatter.ofPattern("EEE, dd MMM", locale)),
-                            fontSize = 10.sp,
-                            color = palette.textMuted
                         )
                     }
 
                     IconButton(
                         onClick = {
                             loadDashboard()
+                            if (hasLocationPermission) detectLocation()
+                        },
+                        modifier = Modifier
+                            .size(40.dp)
+                            .clip(CircleShape)
+                            .background(palette.onHero.copy(alpha = 0.16f))
+                    ) {
+                        if (detectingGps) {
+                            CircularProgressIndicator(
+                                modifier = Modifier.size(16.dp),
+                                strokeWidth = 2.dp,
+                                color = palette.onHero
+                            )
+                        } else {
+                            Icon(
+                                Icons.Default.Refresh,
+                                contentDescription = "Refresh",
+                                tint = palette.onHero,
+                                modifier = Modifier.size(20.dp)
+                            )
+                        }
+                    }
+                }
+            }
+
+            // Overlapping Today Attendance Card (with Live GPS Map background)
+            Surface(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .offset(y = (-42).dp),
+                shape = RoundedCornerShape(24.dp),
+                color = palette.card,
+                border = BorderStroke(1.dp, palette.cardBorder),
+                shadowElevation = 6.dp
+            ) {
+                Box(modifier = Modifier.fillMaxWidth().height(IntrinsicSize.Min)) {
+                    if (gps != null) {
+                        Box(modifier = Modifier.matchParentSize()) {
+                            AttendanceMapView(
+                                lat = gps!!.latitude,
+                                lng = gps!!.longitude,
+                                office = branch,
+                                isVisible = isVisible,
+                                recenterTrigger = recenterTrigger,
+                                modifier = Modifier.fillMaxSize()
+                            )
+                            Box(
+                                modifier = Modifier
+                                    .fillMaxSize()
+                                    .background(
+                                        Brush.verticalGradient(
+                                            listOf(
+                                                palette.card.copy(alpha = 0.72f),
+                                                palette.card.copy(alpha = 0.84f),
+                                                palette.card.copy(alpha = 0.90f)
+                                            )
+                                        )
+                                    )
+                            )
+                        }
+                    }
+                    Column(
+                        modifier = Modifier.padding(16.dp),
+                        verticalArrangement = Arrangement.spacedBy(12.dp)
+                    ) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        Text(
+                            text = weekdayText.replaceFirstChar { it.uppercase() },
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 14.sp,
+                            color = palette.textPrimary
+                        )
+                        Text(
+                            text = fullDateText,
+                            fontSize = 12.sp,
+                            color = palette.textMuted,
+                            fontWeight = FontWeight.Medium
+                        )
+                    }
+
+                    Row(
+                        modifier = Modifier
+                            .fillMaxWidth()
+                            .clip(RoundedCornerShape(16.dp))
+                            .background(palette.subtleSurface.copy(alpha = 0.86f))
+                            .padding(12.dp),
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        // Presensi Masuk
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Login,
+                                    contentDescription = null,
+                                    tint = Color(0xFF0284C7),
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = tr(lang, "Presensi Masuk", "Clock In"),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textSecondary
+                                )
+                            }
+                            if (hasClockIn) {
+                                Text(
+                                    text = inTime ?: "--:--",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 22.sp,
+                                    color = if ((effectiveTodayRecord?.late_minutes ?: 0) > 0) palette.danger else palette.textPrimary
+                                )
+                            } else {
+                                Button(
+                                    onClick = { triggerClockAction() },
+                                    enabled = !submitting && securityBlockReason == null,
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = if (gps != null) palette.accent else palette.accent.copy(alpha = 0.65f),
+                                        contentColor = palette.onHero
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(38.dp).pressScale()
+                                ) {
+                                    if (submitting || (gps == null && detectingGps)) {
+                                        CircularProgressIndicator(
+                                            modifier = Modifier.size(15.dp),
+                                            strokeWidth = 2.dp,
+                                            color = palette.onHero
+                                        )
+                                        Spacer(modifier = Modifier.width(6.dp))
+                                    }
+                                    Text(
+                                        text = when {
+                                            submitting -> tr(lang, "Mengirim...", "Sending...")
+                                            gps == null && detectingGps -> tr(lang, "GPS...", "GPS...")
+                                            gps == null -> tr(lang, "Deteksi GPS", "Detect GPS")
+                                            else -> tr(lang, "Masuk", "Clock In")
+                                        },
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            }
+                        }
+
+                        Box(
+                            modifier = Modifier
+                                .width(1.dp)
+                                .height(46.dp)
+                                .background(palette.cardBorder)
+                        )
+
+                        // Presensi Keluar
+                        Column(
+                            modifier = Modifier.weight(1f),
+                            horizontalAlignment = Alignment.CenterHorizontally,
+                            verticalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            Row(
+                                verticalAlignment = Alignment.CenterVertically,
+                                horizontalArrangement = Arrangement.spacedBy(4.dp)
+                            ) {
+                                Icon(
+                                    Icons.AutoMirrored.Filled.Logout,
+                                    contentDescription = null,
+                                    tint = palette.accent,
+                                    modifier = Modifier.size(14.dp)
+                                )
+                                Text(
+                                    text = tr(lang, "Presensi Keluar", "Clock Out"),
+                                    fontSize = 11.sp,
+                                    fontWeight = FontWeight.SemiBold,
+                                    color = palette.textSecondary
+                                )
+                            }
+                            if (hasClockOut) {
+                                Text(
+                                    text = outTime ?: "--:--",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 22.sp,
+                                    color = palette.textPrimary
+                                )
+                            } else if (hasClockIn) {
+                                Button(
+                                    onClick = { triggerClockAction() },
+                                    enabled = !submitting && securityBlockReason == null,
+                                    shape = CircleShape,
+                                    colors = ButtonDefaults.buttonColors(
+                                        containerColor = palette.accent,
+                                        contentColor = palette.onHero
+                                    ),
+                                    contentPadding = PaddingValues(horizontal = 18.dp, vertical = 6.dp),
+                                    modifier = Modifier.height(36.dp)
+                                ) {
+                                    Text(
+                                        text = if (submitting) "..." else tr(lang, "Keluar", "Clock Out"),
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp
+                                    )
+                                }
+                            } else {
+                                Text(
+                                    text = "--:--",
+                                    fontWeight = FontWeight.Black,
+                                    fontSize = 22.sp,
+                                    color = palette.textMuted.copy(alpha = 0.5f)
+                                )
+                            }
+                        }
+                    }
+
+                    // Live Status Chip
+                    Surface(
+                        shape = CircleShape,
+                        color = when {
+                            dayComplete || elapsedText != null || withinOffice == true -> palette.successSurface
+                            else -> palette.warningSurface
+                        },
+                        modifier = Modifier.align(Alignment.CenterHorizontally),
+                        onClick = {
                             if (!hasLocationPermission) {
                                 permissionLauncher.launch(
                                     arrayOf(
@@ -646,255 +937,357 @@ fun HomeScreen(
                             } else {
                                 detectLocation()
                             }
-                        },
-                        enabled = !detectingGps,
-                        modifier = Modifier.size(32.dp)
-                    ) {
-                        if (detectingGps) {
-                            CircularProgressIndicator(modifier = Modifier.size(15.dp), strokeWidth = 2.dp)
-                        } else {
-                            Icon(Icons.Default.Refresh, contentDescription = "Refresh", tint = palette.textSecondary, modifier = Modifier.size(17.dp))
                         }
-                    }
-                }
-            }
-
-            securityBlockReason?.let { reason ->
-                FeedbackBanner(message = reason, isError = true, onDismiss = {})
-            }
-
-            feedback?.let { (msg, isErr) ->
-                FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
-            }
-        }
-
-        // Floating Bottom Clock Action + Today Summary
-        Column(
-            modifier = Modifier
-                .align(Alignment.BottomCenter)
-                .fillMaxWidth()
-                .padding(horizontal = 14.dp, vertical = 14.dp),
-            horizontalAlignment = Alignment.CenterHorizontally,
-            verticalArrangement = Arrangement.spacedBy(10.dp)
-        ) {
-            val buttonBrush = when {
-                dayComplete -> Brush.verticalGradient(listOf(Color(0xFF10B981), Color(0xFF047857)))
-                gps == null -> Brush.verticalGradient(listOf(Color(0xFFCBD5E1), Color(0xFF94A3B8)))
-                clockAction == "in" -> Brush.verticalGradient(listOf(Color(0xFF1E293B), Color(0xFF020617)))
-                else -> Brush.verticalGradient(listOf(Color(0xFFF59E0B), Color(0xFFB45309)))
-            }
-
-            val pulseTransition = rememberInfiniteTransition(label = "clock_pulse")
-            val pulseScale by pulseTransition.animateFloat(
-                initialValue = 1f,
-                targetValue = if (isVisible && gps != null && !dayComplete && !submitting) 1.08f else 1f,
-                animationSpec = infiniteRepeatable(
-                    animation = tween(1400, easing = FastOutSlowInEasing),
-                    repeatMode = RepeatMode.Reverse
-                ),
-                label = "pulse_scale"
-            )
-
-            Box(contentAlignment = Alignment.Center) {
-                if (gps != null && !dayComplete) {
-                    Box(
-                        modifier = Modifier
-                            .size(144.dp)
-                            .scale(pulseScale)
-                            .clip(CircleShape)
-                            .background(
-                                (if (clockAction == "in") Color(0xFF2563EB) else Color(0xFFF59E0B)).copy(alpha = 0.16f)
-                            )
-                    )
-                }
-
-                Box(
-                    modifier = Modifier
-                        .size(134.dp)
-                        .shadow(12.dp, CircleShape)
-                        .clip(CircleShape)
-                        .background(palette.card.copy(alpha = 0.94f))
-                        .border(1.5.dp, Color.White.copy(alpha = 0.7f), CircleShape)
-                        .padding(6.dp),
-                    contentAlignment = Alignment.Center
-                ) {
-                    Button(
-                        onClick = {
-                            if (dayComplete || submitting) return@Button
-                            haptics.performHapticFeedback(HapticFeedbackType.LongPress)
-                            if (gps == null) {
-                                detectLocation()
-                                return@Button
-                            }
-                            if (clockAction == "in" && settings.require_selfie) {
-                                cameraOpen = true
-                            } else {
-                                executeClock(clockAction)
-                            }
-                        },
-                        enabled = !submitting && !dayComplete && securityBlockReason == null,
-                        shape = CircleShape,
-                        colors = ButtonDefaults.buttonColors(
-                            containerColor = Color.Transparent,
-                            disabledContainerColor = Color.Transparent,
-                            contentColor = Color.White,
-                            disabledContentColor = Color.White
-                        ),
-                        contentPadding = PaddingValues(0.dp),
-                        modifier = Modifier
-                            .fillMaxSize()
-                            .pressScale(0.95f)
-                            .clip(CircleShape)
-                            .background(buttonBrush)
                     ) {
-                        Column(
-                            horizontalAlignment = Alignment.CenterHorizontally,
-                            verticalArrangement = Arrangement.spacedBy(6.dp),
-                            modifier = Modifier.padding(14.dp)
+                        Row(
+                            modifier = Modifier.padding(horizontal = 14.dp, vertical = 7.dp),
+                            verticalAlignment = Alignment.CenterVertically,
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            when {
-                                submitting -> CircularProgressIndicator(color = Color.White, modifier = Modifier.size(30.dp))
-                                dayComplete -> Icon(Icons.Default.CheckCircle, contentDescription = null, modifier = Modifier.size(34.dp))
-                                gps == null -> Icon(Icons.Default.LocationOn, contentDescription = null, modifier = Modifier.size(32.dp))
-                                clockAction == "in" -> Icon(Icons.AutoMirrored.Filled.Login, contentDescription = null, modifier = Modifier.size(32.dp))
-                                else -> Icon(Icons.AutoMirrored.Filled.Logout, contentDescription = null, modifier = Modifier.size(32.dp))
+                            val chipColor = when {
+                                dayComplete || elapsedText != null || withinOffice == true -> palette.success
+                                else -> palette.warning
                             }
+                            Icon(
+                                imageVector = if (elapsedText != null || dayComplete) Icons.Default.Schedule else Icons.Default.LocationOn,
+                                contentDescription = null,
+                                tint = chipColor,
+                                modifier = Modifier.size(14.dp)
+                            )
                             Text(
                                 text = when {
-                                    submitting -> tr(lang, "Mengirim...", "Submitting...")
-                                    dayComplete -> tr(lang, "Selesai", "Complete")
-                                    gps == null -> tr(lang, "Deteksi GPS", "Detect GPS")
-                                    clockAction == "in" && settings.require_selfie -> tr(lang, "Masuk + Selfie", "Clock In + Selfie")
-                                    clockAction == "in" -> tr(lang, "Presensi Masuk", "Clock In")
-                                    else -> tr(lang, "Presensi Pulang", "Clock Out")
+                                    dayComplete -> tr(lang, "Presensi hari ini selesai", "Today's attendance complete")
+                                    elapsedText != null -> tr(lang, "Presensi masuk $elapsedText yang lalu", "Clocked in $elapsedText ago")
+                                    gps == null -> if (detectingGps) tr(lang, "Mendeteksi GPS...", "Detecting GPS...") else tr(lang, "Tap untuk deteksi GPS", "Tap to detect GPS")
+                                    distanceToOffice != null -> if (withinOffice == true) {
+                                        tr(lang, "Dalam radius kantor (±${distanceToOffice.roundToInt()}m)", "Inside office (±${distanceToOffice.roundToInt()}m)")
+                                    } else {
+                                        tr(lang, "Di luar radius (±${distanceToOffice.roundToInt()}m)", "Outside radius (±${distanceToOffice.roundToInt()}m)")
+                                    }
+                                    else -> tr(lang, "GPS Siap", "GPS Ready")
                                 },
-                                fontWeight = FontWeight.Bold,
-                                fontSize = 12.sp,
-                                textAlign = TextAlign.Center
+                                fontSize = 11.5.sp,
+                                fontWeight = FontWeight.SemiBold,
+                                color = chipColor
                             )
                         }
                     }
                 }
+                }
             }
 
-            Surface(
-                modifier = Modifier.fillMaxWidth(),
-                shape = RoundedCornerShape(20.dp),
-                color = palette.card.copy(alpha = 0.96f),
-                border = BorderStroke(1.dp, palette.cardBorder),
-                shadowElevation = 4.dp
+            // Banners
+            Column(
+                modifier = Modifier
+                    .padding(horizontal = 16.dp)
+                    .offset(y = (-24).dp),
+                verticalArrangement = Arrangement.spacedBy(8.dp)
             ) {
-                Column(modifier = Modifier.padding(12.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) {
-                    Row(horizontalArrangement = Arrangement.spacedBy(10.dp), modifier = Modifier.fillMaxWidth()) {
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(palette.subtleSurface)
-                                .padding(horizontal = 12.dp, vertical = 9.dp)
-                        ) {
-                            Text(tr(lang, "MASUK", "CLOCK IN"), fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = palette.textMuted)
-                            val inTime = effectiveTodayRecord?.clock_in_time
-                            val isLate = (effectiveTodayRecord?.late_minutes ?: 0) > 0 || effectiveTodayRecord?.status == "late"
-                            Text(
-                                text = inTime ?: "--:--",
-                                style = TextStyle(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 16.sp,
-                                    fontFeatureSettings = "tnum",
-                                    color = when {
-                                        inTime.isNullOrBlank() -> palette.textPrimary
-                                        isLate -> palette.danger
-                                        else -> palette.success
+                securityBlockReason?.let { reason ->
+                    FeedbackBanner(message = reason, isError = true, autoDismiss = false, onDismiss = {})
+                }
+                feedback?.let { (msg, isErr) ->
+                    FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
+                }
+            }
+
+            // 4-Column 3D Isometric Quick Action Grid
+            val isReviewer = (user?.role ?: "employee") in setOf("owner_admin", "manager", "finance") ||
+                user?.canApproveAny() == true
+            val quickItems: List<Pair<Triple<String, Color, @Composable () -> Unit>, () -> Unit>> = listOfNotNull(
+                if (modules.attendance) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Kehadiran", "Attendance"), Color(0xFFF97316)) { IsoAttendanceIcon(44.dp) } to { onNavigateToTab("attendance") } else null,
+                if (modules.leave) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Izin Cuti", "Leave"), Color(0xFF0EA5E9)) { IsoLeavePlaneIcon(44.dp) } to { onNavigateToTab("requests:LEAVE") } else null,
+                if (modules.payroll) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Gaji", "Payslips"), Color(0xFF65A30D)) { IsoWalletIcon(44.dp) } to { onNavigateToTab("payslips") } else null,
+                Triple<String, Color, @Composable () -> Unit>(tr(lang, "Kalender", "Calendar"), Color(0xFFF43F5E)) { IsoCalendarIcon(44.dp) } to { onNavigateToTab("calendar") },
+                if (modules.claims) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Klaim", "Claims"), Color(0xFFF59E0B)) { IsoClaimReceiptIcon(44.dp) } to { onNavigateToTab("requests:REIMBURSEMENT") } else null,
+                if (modules.shifts) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Lembur", "Overtime"), Color(0xFF8B5CF6)) { IsoOvertimeIcon(44.dp) } to { onNavigateToTab("requests:OVERTIME") } else null,
+                if (modules.claims) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Kasbon", "Advance"), Color(0xFF10B981)) { IsoKasbonIcon(44.dp) } to { onNavigateToTab("requests:KASBON") } else null,
+                if (modules.petty_cash) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Petty Cash", "Petty Cash"), Color(0xFF06B6D4)) { IsoPettyCashIcon(44.dp) } to { onNavigateToTab("requests:PETTY_CASH") } else null,
+                Triple<String, Color, @Composable () -> Unit>(tr(lang, "Tugas", "Tasks"), Color(0xFF6366F1)) { IsoTasksIcon(44.dp) } to { onNavigateToTab("requests:TASKS") },
+                if (isReviewer) Triple<String, Color, @Composable () -> Unit>(tr(lang, "Persetujuan", "Approvals"), Color(0xFFF43F5E)) { IsoApprovalIcon(44.dp) } to { onNavigateToTab("requests:APPROVALS") } else null,
+                Triple<String, Color, @Composable () -> Unit>(tr(lang, "Profil", "Profile"), Color(0xFF14B8A6)) { IsoProfileIcon(44.dp) } to { onNavigateToTab("profile") }
+            )
+
+            Column(
+                modifier = Modifier
+                    .fillMaxWidth()
+                    .padding(horizontal = 16.dp)
+                    .offset(y = (-12).dp),
+                verticalArrangement = Arrangement.spacedBy(16.dp)
+            ) {
+                quickItems.chunked(4).forEach { rowItems ->
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.SpaceBetween
+                    ) {
+                        rowItems.forEach { (meta, action) ->
+                            val (label, tint, isoIcon) = meta
+                            Column(
+                                modifier = Modifier.weight(1f),
+                                horizontalAlignment = Alignment.CenterHorizontally
+                            ) {
+                                Surface(
+                                    onClick = action,
+                                    shape = RoundedCornerShape(18.dp),
+                                    color = tint.copy(alpha = 0.08f),
+                                    modifier = Modifier.size(60.dp)
+                                ) {
+                                    Box(contentAlignment = Alignment.Center) {
+                                        isoIcon()
                                     }
-                                )
-                            )
-                            if (pendingTodayIn != null && todayRecord?.clock_in_time.isNullOrBlank()) {
+                                }
+                                Spacer(modifier = Modifier.height(6.dp))
                                 Text(
-                                    text = tr(lang, "Antrean offline", "Queued offline"),
-                                    fontSize = 10.sp,
+                                    text = label,
+                                    fontSize = 11.sp,
                                     fontWeight = FontWeight.SemiBold,
-                                    color = palette.warning
-                                )
-                            } else if ((effectiveTodayRecord?.late_minutes ?: 0) > 0) {
-                                Text(
-                                    text = tr(lang, "Terlambat ${effectiveTodayRecord!!.late_minutes}m", "Late ${effectiveTodayRecord!!.late_minutes}m"),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.danger
+                                    color = palette.textPrimary,
+                                    maxLines = 1,
+                                    overflow = TextOverflow.Ellipsis,
+                                    textAlign = TextAlign.Center
                                 )
                             }
                         }
-
-                        Column(
-                            modifier = Modifier
-                                .weight(1f)
-                                .clip(RoundedCornerShape(14.dp))
-                                .background(palette.subtleSurface)
-                                .padding(horizontal = 12.dp, vertical = 9.dp)
-                        ) {
-                            Text(tr(lang, "PULANG", "CLOCK OUT"), fontSize = 9.5.sp, fontWeight = FontWeight.Bold, color = palette.textMuted)
-                            val outTime = effectiveTodayRecord?.clock_out_time
-                            val isEarly = (effectiveTodayRecord?.early_minutes ?: 0) > 0
-                            Text(
-                                text = outTime ?: "--:--",
-                                style = TextStyle(
-                                    fontWeight = FontWeight.ExtraBold,
-                                    fontSize = 16.sp,
-                                    fontFeatureSettings = "tnum",
-                                    color = when {
-                                        outTime.isNullOrBlank() -> palette.textPrimary
-                                        isEarly -> palette.danger
-                                        else -> palette.success
-                                    }
-                                )
-                            )
-                            if (pendingTodayOut != null && todayRecord?.clock_out_time.isNullOrBlank()) {
-                                Text(
-                                    text = tr(lang, "Antrean offline", "Queued offline"),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.warning
-                                )
-                            } else if ((effectiveTodayRecord?.early_minutes ?: 0) > 0) {
-                                Text(
-                                    text = tr(lang, "Pulang awal ${effectiveTodayRecord!!.early_minutes}m", "Early ${effectiveTodayRecord!!.early_minutes}m"),
-                                    fontSize = 10.sp,
-                                    fontWeight = FontWeight.SemiBold,
-                                    color = palette.danger
-                                )
-                            }
+                        repeat(4 - rowItems.size) {
+                            Spacer(modifier = Modifier.weight(1f))
                         }
                     }
+                }
 
-                    if (!effectiveTodayRecord?.shift_start_time.isNullOrBlank() && !effectiveTodayRecord?.shift_end_time.isNullOrBlank()) {
-                        Text(
-                            text = "Shift ${effectiveTodayRecord?.shift_start_time} – ${effectiveTodayRecord?.shift_end_time}" +
-                                (effectiveTodayRecord?.shift_name?.let { " · $it" } ?: ""),
-                            fontSize = 10.5.sp,
-                            fontWeight = FontWeight.Medium,
-                            color = palette.textMuted,
-                            modifier = Modifier.align(Alignment.CenterHorizontally)
+                // Company Announcements Blog Feed (Home only)
+                if (modules.announcements && announcements.isNotEmpty()) {
+                    val sortedPosts = remember(announcements) {
+                        announcements.sortedWith(
+                            compareByDescending<AnnouncementItem> { it.pinned }
+                                .thenByDescending { it.published_at }
                         )
+                    }
+                    val unreadCount = sortedPosts.count { !it.acknowledged }
+                    Column(
+                        modifier = Modifier.padding(top = 6.dp),
+                        verticalArrangement = Arrangement.spacedBy(10.dp)
+                    ) {
+                        Row(
+                            modifier = Modifier.fillMaxWidth(),
+                            horizontalArrangement = Arrangement.SpaceBetween,
+                            verticalAlignment = Alignment.CenterVertically
+                        ) {
+                            Text(
+                                text = tr(lang, "Pengumuman Perusahaan", "Company Announcements"),
+                                fontSize = 14.sp,
+                                fontWeight = FontWeight.ExtraBold,
+                                color = palette.textPrimary
+                            )
+                            if (unreadCount > 0) {
+                                Surface(shape = RoundedCornerShape(50), color = palette.accentSurface) {
+                                    Text(
+                                        text = "$unreadCount ${tr(lang, "baru", "new")}",
+                                        fontSize = 10.sp,
+                                        fontWeight = FontWeight.Bold,
+                                        color = palette.accent,
+                                        modifier = Modifier.padding(horizontal = 9.dp, vertical = 3.dp)
+                                    )
+                                }
+                            }
+                        }
+
+                        sortedPosts.forEach { post ->
+                            Surface(
+                                onClick = { selectedAnnouncement = post },
+                                modifier = Modifier.fillMaxWidth().pressScale(),
+                                shape = RoundedCornerShape(20.dp),
+                                color = palette.card,
+                                border = BorderStroke(
+                                    1.dp,
+                                    if (post.pinned || !post.acknowledged) palette.accent.copy(alpha = 0.35f) else palette.cardBorder
+                                )
+                            ) {
+                                Column(
+                                    modifier = Modifier.padding(16.dp),
+                                    verticalArrangement = Arrangement.spacedBy(8.dp)
+                                ) {
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                                            Surface(shape = RoundedCornerShape(50), color = palette.accentSurface) {
+                                                Text(
+                                                    post.category.uppercase(),
+                                                    color = palette.accent,
+                                                    fontSize = 9.sp,
+                                                    fontWeight = FontWeight.Bold,
+                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                )
+                                            }
+                                            if (post.pinned) {
+                                                Surface(shape = RoundedCornerShape(50), color = palette.warningSurface) {
+                                                    Text(
+                                                        "PINNED",
+                                                        color = palette.warning,
+                                                        fontSize = 9.sp,
+                                                        fontWeight = FontWeight.Bold,
+                                                        modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                                                    )
+                                                }
+                                            }
+                                        }
+                                        Text(
+                                            text = Formatters.formatDisplayDate(post.published_at, lang),
+                                            fontSize = 10.sp,
+                                            color = palette.textMuted
+                                        )
+                                    }
+
+                                    Text(
+                                        text = post.title,
+                                        fontSize = 15.sp,
+                                        fontWeight = FontWeight.ExtraBold,
+                                        color = palette.textPrimary,
+                                        maxLines = 2,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    Text(
+                                        text = post.body,
+                                        fontSize = 12.5.sp,
+                                        color = palette.textSecondary,
+                                        lineHeight = 18.sp,
+                                        maxLines = 3,
+                                        overflow = TextOverflow.Ellipsis
+                                    )
+
+                                    HorizontalDivider(color = palette.cardBorder.copy(alpha = 0.6f))
+
+                                    Row(
+                                        modifier = Modifier.fillMaxWidth(),
+                                        horizontalArrangement = Arrangement.SpaceBetween,
+                                        verticalAlignment = Alignment.CenterVertically
+                                    ) {
+                                        Text(
+                                            text = "${post.publisher_name ?: "HR"} · ${tr(lang, "Baca selengkapnya →", "Read more →")}",
+                                            fontSize = 11.sp,
+                                            fontWeight = FontWeight.SemiBold,
+                                            color = palette.accent
+                                        )
+                                        if (post.acknowledged) {
+                                            Text(
+                                                text = tr(lang, "✓ Dibaca", "✓ Read"),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.success
+                                            )
+                                        } else if (post.require_ack) {
+                                            Text(
+                                                text = tr(lang, "Perlu konfirmasi", "Action needed"),
+                                                fontSize = 10.sp,
+                                                fontWeight = FontWeight.Bold,
+                                                color = palette.warning
+                                            )
+                                        }
+                                    }
+                                }
+                            }
+                        }
                     }
                 }
             }
         }
     }
 
+    var pendingFaceMismatch by remember { mutableStateOf<Pair<String, Float?>?>(null) }
+
     if (cameraOpen) {
         CameraCaptureDialog(
             title = tr(
                 lang,
-                "Foto Selfie Presensi ${if (clockAction == "in") "Masuk" else "Pulang"}",
-                "Attendance Selfie ${if (clockAction == "in") "Clock In" else "Clock Out"}"
+                "Presensi ${if (clockAction == "in") "Masuk" else "Keluar"}",
+                "Attendance ${if (clockAction == "in") "Clock In" else "Clock Out"}"
             ),
             useFrontCamera = true,
             lang = lang,
+            attendanceTime = "${LocalDate.now().format(DateTimeFormatter.ofPattern("dd/MM/yyyy"))} ${currentTime.format(DateTimeFormatter.ofPattern("HH:mm:ss"))}",
+            distanceMeters = distanceToOffice,
+            isOutsideOffice = withinOffice == false,
+            officeName = branch?.name,
+            coordsText = gps?.let { String.format(Locale.US, "%.5f, %.5f", it.latitude, it.longitude) },
             onDismiss = { cameraOpen = false },
             onCaptured = { base64 ->
                 cameraOpen = false
-                executeClock(clockAction, photoBase64 = base64)
+                val enrolled = sessionStore.getFaceEmbedding(user?.employeeId)
+                if (enrolled == null) {
+                    executeClock(clockAction, photoBase64 = base64)
+                } else {
+                    scope.launch {
+                        when (val result = FaceRecognizer.extractFromDataUrl(context, base64)) {
+                            is FaceExtractResult.Success -> {
+                                val sim = FaceMath.cosineSimilarity(enrolled, result.embedding)
+                                if (sim >= FaceMath.DEFAULT_MATCH_THRESHOLD) {
+                                    executeClock(clockAction, photoBase64 = base64)
+                                } else {
+                                    pendingFaceMismatch = base64 to sim
+                                }
+                            }
+                            is FaceExtractResult.NoFace,
+                            is FaceExtractResult.Error -> {
+                                pendingFaceMismatch = base64 to null
+                            }
+                        }
+                    }
+                }
+            }
+        )
+    }
+
+    pendingFaceMismatch?.let { (capturedBase64, score) ->
+        AlertDialog(
+            onDismissRequest = { pendingFaceMismatch = null },
+            title = {
+                Text(
+                    tr(lang, "Verifikasi Wajah (Opsional)", "Face Check (Optional)"),
+                    fontWeight = FontWeight.Bold
+                )
+            },
+            text = {
+                Text(
+                    text = if (score != null) {
+                        tr(
+                            lang,
+                            "Kemiripan wajah ${(score * 100).roundToInt()}% (di bawah ${(FaceMath.DEFAULT_MATCH_THRESHOLD * 100).roundToInt()}%). Anda tetap dapat melanjutkan presensi.",
+                            "Face similarity is ${(score * 100).roundToInt()}% (below ${(FaceMath.DEFAULT_MATCH_THRESHOLD * 100).roundToInt()}%). You can still continue."
+                        )
+                    } else {
+                        tr(
+                            lang,
+                            "Wajah tidak terdeteksi jelas pada foto. Anda tetap dapat melanjutkan presensi.",
+                            "Face was not clearly detected in the photo. You can still continue."
+                        )
+                    },
+                    fontSize = 13.sp,
+                    color = palette.textSecondary
+                )
+            },
+            confirmButton = {
+                Button(
+                    onClick = {
+                        pendingFaceMismatch = null
+                        executeClock(clockAction, photoBase64 = capturedBase64)
+                    },
+                    colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onHero)
+                ) {
+                    Text(tr(lang, "Tetap Lanjutkan", "Continue Anyway"))
+                }
+            },
+            dismissButton = {
+                TextButton(
+                    onClick = {
+                        pendingFaceMismatch = null
+                        cameraOpen = true
+                    }
+                ) {
+                    Text(tr(lang, "Foto Ulang", "Retake"))
+                }
             }
         )
     }
@@ -946,10 +1339,10 @@ fun HomeScreen(
         )
     }
 
-    if (showAnnouncementsSheet) {
+    selectedAnnouncement?.let { item ->
         val sheetState = rememberModalBottomSheetState(skipPartiallyExpanded = true)
         ModalBottomSheet(
-            onDismissRequest = { showAnnouncementsSheet = false },
+            onDismissRequest = { selectedAnnouncement = null },
             sheetState = sheetState,
             containerColor = palette.card,
             contentColor = palette.textPrimary,
@@ -964,138 +1357,106 @@ fun HomeScreen(
                     .padding(bottom = 24.dp),
                 verticalArrangement = Arrangement.spacedBy(12.dp)
             ) {
+                Row(horizontalArrangement = Arrangement.spacedBy(6.dp), verticalAlignment = Alignment.CenterVertically) {
+                    Surface(shape = RoundedCornerShape(50), color = palette.accentSurface) {
+                        Text(
+                            item.category.uppercase(),
+                            color = palette.accent,
+                            fontSize = 9.sp,
+                            fontWeight = FontWeight.Bold,
+                            modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                        )
+                    }
+                    if (item.pinned) {
+                        Surface(shape = RoundedCornerShape(50), color = palette.warningSurface) {
+                            Text(
+                                "PINNED",
+                                color = palette.warning,
+                                fontSize = 9.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
+                            )
+                        }
+                    }
+                }
+
                 Text(
-                    tr(lang, "Pengumuman & Kebijakan", "Announcements & Policies"),
+                    text = item.title,
                     fontWeight = FontWeight.ExtraBold,
-                    fontSize = 18.sp,
+                    fontSize = 19.sp,
                     color = palette.textPrimary
                 )
 
-                if (announcements.isEmpty()) {
-                    Text(
-                        tr(lang, "Belum ada pengumuman saat ini.", "No announcements right now."),
-                        fontSize = 12.sp,
-                        color = palette.textSecondary,
-                        modifier = Modifier.padding(vertical = 16.dp)
-                    )
-                } else {
-                    announcements.forEach { item ->
-                        Surface(
-                            shape = RoundedCornerShape(16.dp),
-                            color = palette.subtleSurface,
-                            border = BorderStroke(
-                                1.dp,
-                                if (item.pinned || !item.acknowledged) palette.accent.copy(alpha = 0.45f) else palette.cardBorder
-                            ),
-                            modifier = Modifier.fillMaxWidth()
+                Text(
+                    text = "${item.publisher_name ?: "HR"} · ${Formatters.formatDisplayDate(item.published_at, lang)}",
+                    fontSize = 11.sp,
+                    color = palette.textMuted
+                )
+
+                HorizontalDivider(color = palette.cardBorder)
+
+                Text(
+                    text = item.body,
+                    fontSize = 13.5.sp,
+                    color = palette.textSecondary,
+                    lineHeight = 20.sp
+                )
+
+                Row(
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp)
+                ) {
+                    if (!item.attachment_url.isNullOrBlank()) {
+                        OutlinedButton(
+                            onClick = {
+                                val url = "$baseUrl${item.attachment_url}?token=$token"
+                                runCatching {
+                                    context.startActivity(
+                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                    )
+                                }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
-                            Column(
-                                modifier = Modifier.padding(14.dp),
-                                verticalArrangement = Arrangement.spacedBy(6.dp)
-                            ) {
-                                Row(
-                                    modifier = Modifier.fillMaxWidth(),
-                                    horizontalArrangement = Arrangement.SpaceBetween,
-                                    verticalAlignment = Alignment.CenterVertically
-                                ) {
-                                    Row(horizontalArrangement = Arrangement.spacedBy(6.dp)) {
-                                        Surface(
-                                            shape = RoundedCornerShape(50),
-                                            color = palette.accentSurface
-                                        ) {
-                                            Text(
-                                                item.category.uppercase(),
-                                                color = palette.accent,
-                                                fontSize = 9.sp,
-                                                fontWeight = FontWeight.Bold,
-                                                modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                            )
+                            Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(14.dp))
+                            Spacer(modifier = Modifier.width(4.dp))
+                            Text(item.attachment_name ?: tr(lang, "Lampiran", "Attachment"), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
+                        }
+                    }
+
+                    if (!item.acknowledged) {
+                        Button(
+                            onClick = {
+                                scope.launch {
+                                    repository.acknowledgeAnnouncement(item.id).onSuccess {
+                                        announcements = announcements.map {
+                                            if (it.id == item.id) it.copy(acknowledged = true) else it
                                         }
-                                        if (item.pinned) {
-                                            Surface(
-                                                shape = RoundedCornerShape(50),
-                                                color = palette.warningSurface
-                                            ) {
-                                                Text(
-                                                    "PINNED",
-                                                    color = palette.warning,
-                                                    fontSize = 9.sp,
-                                                    fontWeight = FontWeight.Bold,
-                                                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp)
-                                                )
-                                            }
-                                        }
-                                    }
-                                    if (item.acknowledged) {
-                                        Text(
-                                            tr(lang, "✓ Dibaca", "✓ Read"),
-                                            fontSize = 10.sp,
-                                            fontWeight = FontWeight.Bold,
-                                            color = palette.success
-                                        )
+                                        selectedAnnouncement = item.copy(acknowledged = true)
                                     }
                                 }
-
-                                Text(item.title, fontWeight = FontWeight.Bold, fontSize = 14.sp, color = palette.textPrimary)
-                                Text(item.body, fontSize = 12.sp, color = palette.textSecondary, lineHeight = 17.sp)
-                                Text(
-                                    "${item.publisher_name ?: "HR"} · ${Formatters.formatDisplayDate(item.published_at, lang)}",
-                                    fontSize = 10.sp,
-                                    color = palette.textMuted
-                                )
-
-                                Row(
-                                    horizontalArrangement = Arrangement.spacedBy(8.dp),
-                                    modifier = Modifier.fillMaxWidth()
-                                ) {
-                                    if (!item.attachment_url.isNullOrBlank()) {
-                                        OutlinedButton(
-                                            onClick = {
-                                                val url = "$baseUrl${item.attachment_url}?token=$token"
-                                                runCatching {
-                                                    context.startActivity(
-                                                        Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                                            .addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                                    )
-                                                }
-                                            },
-                                            shape = RoundedCornerShape(10.dp),
-                                            contentPadding = PaddingValues(horizontal = 10.dp, vertical = 4.dp)
-                                        ) {
-                                            Icon(Icons.Default.AttachFile, contentDescription = null, modifier = Modifier.size(14.dp))
-                                            Spacer(modifier = Modifier.width(4.dp))
-                                            Text(item.attachment_name ?: tr(lang, "Lampiran", "Attachment"), fontSize = 11.sp, maxLines = 1, overflow = TextOverflow.Ellipsis)
-                                        }
-                                    }
-
-                                    if (!item.acknowledged) {
-                                        FilledTonalButton(
-                                            onClick = {
-                                                scope.launch {
-                                                    repository.acknowledgeAnnouncement(item.id).onSuccess {
-                                                        announcements = announcements.map {
-                                                            if (it.id == item.id) it.copy(acknowledged = true) else it
-                                                        }
-                                                    }
-                                                }
-                                            },
-                                            shape = RoundedCornerShape(10.dp),
-                                            colors = ButtonDefaults.filledTonalButtonColors(
-                                                containerColor = palette.accentSurface,
-                                                contentColor = palette.accent
-                                            ),
-                                            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 4.dp)
-                                        ) {
-                                            Text(
-                                                if (item.require_ack) tr(lang, "Konfirmasi Dibaca", "Acknowledge")
-                                                else tr(lang, "Tandai Dibaca", "Mark Read"),
-                                                fontSize = 11.sp,
-                                                fontWeight = FontWeight.Bold
-                                            )
-                                        }
-                                    }
-                                }
-                            }
+                            },
+                            shape = RoundedCornerShape(12.dp),
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onHero)
+                        ) {
+                            Text(
+                                if (item.require_ack) tr(lang, "Konfirmasi Sudah Membaca", "Acknowledge")
+                                else tr(lang, "Tandai Sudah Dibaca", "Mark as Read"),
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold
+                            )
+                        }
+                    } else {
+                        Surface(shape = RoundedCornerShape(12.dp), color = palette.successSurface) {
+                            Text(
+                                text = tr(lang, "✓ Sudah Dibaca", "✓ Acknowledged"),
+                                color = palette.success,
+                                fontSize = 12.sp,
+                                fontWeight = FontWeight.Bold,
+                                modifier = Modifier.padding(horizontal = 12.dp, vertical = 8.dp)
+                            )
                         }
                     }
                 }

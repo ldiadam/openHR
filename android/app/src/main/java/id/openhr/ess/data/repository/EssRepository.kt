@@ -67,7 +67,7 @@ class EssRepository(
 
     suspend fun getPublicCompany(): Result<PublicCompany?> = safeCall {
         api.getPublicCompany().company?.also { comp ->
-            sessionStore.saveCompanyBranding(comp.name, comp.logo_url)
+            sessionStore.saveCompanyBranding(comp.name, comp.logo_url, comp.primary_color)
             comp.modules?.let { sessionStore.saveModules(it) }
         }
     }
@@ -216,6 +216,18 @@ class EssRepository(
         api.updateBankDetails(employeeId, req).message
     }
 
+    suspend fun updateEmployeePhoto(employeeId: String, photoBase64: String): Result<UpdateEmployeePhotoResponse> = safeCall {
+        api.updateEmployeePhoto(employeeId, UpdateEmployeePhotoRequest(photoBase64)).also { res ->
+            cachedProfile = cachedProfile?.copy(photo_url = res.photo_url)
+        }
+    }
+
+    suspend fun deleteEmployeePhoto(employeeId: String): Result<String> = safeCall {
+        api.deleteEmployeePhoto(employeeId).message.also {
+            cachedProfile = cachedProfile?.copy(photo_url = null)
+        }
+    }
+
     // Announcements
     var cachedAnnouncements: List<AnnouncementItem>? = null
         private set
@@ -271,12 +283,40 @@ class EssRepository(
     }
 
     // Tasks (TMS)
-    suspend fun getTasks(tab: String = "inbox"): Result<TasksResponse> = safeCall {
-        api.getTasks(tab)
+    suspend fun getTaskMeta(): Result<TaskMetaResponse> = safeCall {
+        api.getTaskMeta()
+    }
+
+    suspend fun getTasks(
+        tab: String = "inbox",
+        priority: String? = null,
+        search: String? = null
+    ): Result<TasksResponse> = safeCall {
+        api.getTasks(
+            tab = tab,
+            priority = priority?.takeIf { it.isNotBlank() },
+            search = search?.takeIf { it.isNotBlank() }
+        )
+    }
+
+    suspend fun createTask(body: CreateTaskBody): Result<CreateTaskResponse> = safeCall {
+        api.createTask(body)
+    }
+
+    suspend fun getTaskDetail(id: String): Result<TaskDetailResponse> = safeCall {
+        api.getTaskDetail(id)
     }
 
     suspend fun takeTaskAction(id: String, status: String, note: String): Result<String> = safeCall {
         api.takeTaskAction(id, TaskActionBody(status, note)).message
+    }
+
+    suspend fun handoverTask(id: String, toEmployeeId: String, reason: String): Result<String> = safeCall {
+        api.handoverTask(id, TaskHandoverBody(toEmployeeId, reason)).message
+    }
+
+    suspend fun rescheduleTask(id: String, newDueAt: String, reason: String): Result<String> = safeCall {
+        api.rescheduleTask(id, TaskRescheduleBody(newDueAt, reason)).message
     }
 
     suspend fun closeTask(id: String, remarks: String): Result<String> = safeCall {

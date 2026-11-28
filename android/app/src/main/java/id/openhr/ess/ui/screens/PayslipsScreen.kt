@@ -6,7 +6,6 @@ import android.os.ParcelFileDescriptor
 import androidx.compose.foundation.BorderStroke
 import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
-import androidx.compose.foundation.border
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
@@ -16,6 +15,7 @@ import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.*
 import androidx.compose.material3.*
 import androidx.compose.material3.pulltorefresh.PullToRefreshBox
@@ -27,9 +27,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.graphics.asImageBitmap
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.ui.layout.onSizeChanged
 import androidx.compose.ui.platform.LocalContext
-import kotlinx.coroutines.Dispatchers
-import kotlinx.coroutines.withContext
 import androidx.compose.ui.text.TextStyle
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.unit.dp
@@ -38,7 +37,6 @@ import androidx.compose.ui.window.Dialog
 import androidx.compose.ui.window.DialogProperties
 import id.openhr.ess.data.local.SessionStore
 import id.openhr.ess.data.model.PayslipDetail
-import id.openhr.ess.data.model.PayslipSummaryItem
 import id.openhr.ess.data.repository.EssRepository
 import id.openhr.ess.ui.components.FeedbackBanner
 import id.openhr.ess.ui.components.ListSkeletonCards
@@ -46,17 +44,19 @@ import id.openhr.ess.ui.components.pressScale
 import id.openhr.ess.ui.components.tr
 import id.openhr.ess.ui.theme.LocalEssPalette
 import id.openhr.ess.util.Formatters
-import id.openhr.ess.util.PayslipCalculator
 import id.openhr.ess.util.PayslipPdfExporter
+import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
 import java.time.LocalDate
-import kotlin.math.roundToInt
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
 fun PayslipsScreen(
     repository: EssRepository,
-    sessionStore: SessionStore
+    sessionStore: SessionStore,
+    onHeroHeightChanged: (Int) -> Unit = {},
+    onBackToHome: () -> Unit = {}
 ) {
     val context = LocalContext.current
     val scope = rememberCoroutineScope()
@@ -97,7 +97,7 @@ fun PayslipsScreen(
     }
 
     fun maskedMoney(amount: Double): String {
-        return if (hideSalary) "Rp \u2022\u2022\u2022\u2022\u2022\u2022\u2022" else Formatters.formatRupiah(amount)
+        return if (hideSalary) "Rp •••••••" else Formatters.formatRupiah(amount)
     }
 
     fun openDetail(id: String, exportPdfImmediately: Boolean = false) {
@@ -121,83 +121,114 @@ fun PayslipsScreen(
 
     Column(
         modifier = Modifier
-            .fillMaxSize()
-            .background(palette.canvas)
-            .padding(horizontal = 16.dp, vertical = 12.dp),
+            .fillMaxSize(),
         verticalArrangement = Arrangement.spacedBy(12.dp)
     ) {
-        // Header + Eye Toggle + Year Selector
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
+        // Colored Hero Header + Eye Toggle + Year Selector (transparent over shared morphing hero backdrop)
+        Box(
+            modifier = Modifier
+                .fillMaxWidth()
+                .onSizeChanged { onHeroHeightChanged(it.height) }
+                .statusBarsPadding()
+                .padding(horizontal = 16.dp, vertical = 14.dp)
         ) {
-            Column(modifier = Modifier.weight(1f)) {
-                Text(tr(lang, "Slip Gaji", "Payslips"), style = MaterialTheme.typography.titleLarge, color = palette.textPrimary)
-                Text("${tr(lang, "Periode Tahun", "Year")} Â· $selectedYear", style = MaterialTheme.typography.bodySmall, color = palette.textSecondary)
-            }
-
             Row(
-                horizontalArrangement = Arrangement.spacedBy(8.dp),
+                modifier = Modifier.fillMaxWidth(),
+                horizontalArrangement = Arrangement.SpaceBetween,
                 verticalAlignment = Alignment.CenterVertically
             ) {
-                Surface(
-                    onClick = { sessionStore.setHideSalary(!hideSalary) },
-                    shape = RoundedCornerShape(12.dp),
-                    color = palette.card,
-                    border = BorderStroke(1.dp, palette.cardBorder),
-                    modifier = Modifier.size(36.dp)
+                Row(
+                    modifier = Modifier.weight(1f),
+                    verticalAlignment = Alignment.CenterVertically,
+                    horizontalArrangement = Arrangement.spacedBy(10.dp)
                 ) {
-                    Box(contentAlignment = Alignment.Center) {
-                        Icon(
-                            imageVector = if (hideSalary) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                            contentDescription = "Toggle salary privacy",
-                            tint = palette.accent,
-                            modifier = Modifier.size(18.dp)
+                    IconButton(
+                        onClick = onBackToHome,
+                        modifier = Modifier
+                            .size(36.dp)
+                            .clip(CircleShape)
+                            .background(palette.onHero.copy(alpha = 0.16f))
+                    ) {
+                        Icon(Icons.AutoMirrored.Filled.ArrowBack, contentDescription = "Back", tint = palette.onHero, modifier = Modifier.size(18.dp))
+                    }
+                    Column(modifier = Modifier.weight(1f)) {
+                        Text(
+                            tr(lang, "Slip Gaji", "Payslips"),
+                            style = MaterialTheme.typography.titleLarge,
+                            color = palette.onHero
+                        )
+                        Text(
+                            "${tr(lang, "Periode Tahun", "Year")} · $selectedYear",
+                            style = MaterialTheme.typography.bodySmall,
+                            color = palette.onHero.copy(alpha = 0.85f)
                         )
                     }
                 }
 
                 Row(
-                    verticalAlignment = Alignment.CenterVertically,
-                    modifier = Modifier
-                        .clip(RoundedCornerShape(12.dp))
-                        .background(palette.card)
-                        .border(1.dp, palette.cardBorder, RoundedCornerShape(12.dp))
+                    horizontalArrangement = Arrangement.spacedBy(8.dp),
+                    verticalAlignment = Alignment.CenterVertically
                 ) {
-                    IconButton(onClick = { selectedYear -= 1 }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Default.ChevronLeft, contentDescription = "Prev year", tint = palette.textPrimary)
+                    Surface(
+                        onClick = { sessionStore.setHideSalary(!hideSalary) },
+                        shape = RoundedCornerShape(12.dp),
+                        color = palette.onHero.copy(alpha = 0.16f),
+                        modifier = Modifier.size(36.dp)
+                    ) {
+                        Box(contentAlignment = Alignment.Center) {
+                            Icon(
+                                imageVector = if (hideSalary) Icons.Default.VisibilityOff else Icons.Default.Visibility,
+                                contentDescription = "Toggle salary privacy",
+                                tint = palette.onHero,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
                     }
-                    Text(
-                        text = selectedYear.toString(),
-                        fontWeight = FontWeight.Bold,
-                        fontSize = 13.sp,
-                        color = palette.textPrimary,
-                        style = TextStyle(fontFeatureSettings = "tnum"),
-                        modifier = Modifier.padding(horizontal = 4.dp)
-                    )
-                    IconButton(onClick = { selectedYear += 1 }, modifier = Modifier.size(34.dp)) {
-                        Icon(Icons.Default.ChevronRight, contentDescription = "Next year", tint = palette.textPrimary)
+
+                    Row(
+                        verticalAlignment = Alignment.CenterVertically,
+                        modifier = Modifier
+                            .clip(RoundedCornerShape(12.dp))
+                            .background(palette.onHero.copy(alpha = 0.16f))
+                    ) {
+                        IconButton(onClick = { selectedYear -= 1 }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ChevronLeft, contentDescription = "Prev year", tint = palette.onHero)
+                        }
+                        Text(
+                            text = selectedYear.toString(),
+                            fontWeight = FontWeight.Bold,
+                            fontSize = 13.sp,
+                            color = palette.onHero,
+                            style = TextStyle(fontFeatureSettings = "tnum"),
+                            modifier = Modifier.padding(horizontal = 4.dp)
+                        )
+                        IconButton(onClick = { selectedYear += 1 }, modifier = Modifier.size(34.dp)) {
+                            Icon(Icons.Default.ChevronRight, contentDescription = "Next year", tint = palette.onHero)
+                        }
                     }
                 }
             }
         }
 
         feedback?.let { (msg, isErr) ->
-            FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
+            Box(modifier = Modifier.padding(horizontal = 16.dp)) {
+                FeedbackBanner(message = msg, isError = isErr, onDismiss = { feedback = null })
+            }
         }
 
         PullToRefreshBox(
             isRefreshing = refreshing,
             onRefresh = { loadPayslips(isPullRefresh = true) },
-            modifier = Modifier.weight(1f)
+            modifier = Modifier
+                .weight(1f)
+                .padding(horizontal = 16.dp)
         ) {
             if (loading) {
                 ListSkeletonCards(count = 4)
             } else if (filtered.isEmpty()) {
                 Surface(
                     modifier = Modifier.fillMaxWidth(),
-                    shape = RoundedCornerShape(20.dp),
+                    shape = RoundedCornerShape(22.dp),
                     color = palette.card,
                     border = BorderStroke(1.dp, palette.cardBorder)
                 ) {
@@ -219,78 +250,59 @@ fun PayslipsScreen(
                     }
                 }
             } else {
-                val latest = filtered.first()
-                val rest = filtered.drop(1)
                 LazyColumn(
                     verticalArrangement = Arrangement.spacedBy(10.dp),
                     contentPadding = PaddingValues(bottom = 16.dp),
                     modifier = Modifier.fillMaxSize()
                 ) {
-                    item(key = "hero_${latest.id}", contentType = "hero_payslip") {
-                        HeroLatestPayslipCard(
-                            item = latest,
-                            hideSalary = hideSalary,
-                            lang = lang,
-                            onToggleHide = { sessionStore.setHideSalary(!hideSalary) },
-                            onOpenDetail = { openDetail(latest.id) },
-                            onDownloadPdf = { openDetail(latest.id, exportPdfImmediately = true) }
-                        )
-                    }
-
-                    if (rest.isNotEmpty()) {
-                        item(key = "header_older", contentType = "section_header") {
-                            Text(
-                                text = tr(lang, "Riwayat Sebelumnya", "Earlier Periods"),
-                                fontSize = 11.sp,
-                                fontWeight = FontWeight.Bold,
-                                color = palette.textMuted,
-                                letterSpacing = 0.6.sp,
-                                modifier = Modifier.padding(top = 6.dp, start = 4.dp)
-                            )
-                        }
-                    }
-
-                    items(rest, key = { it.id }, contentType = { "payslip_row" }) { item ->
+                    items(filtered, key = { it.id }, contentType = { "payslip_row" }) { item ->
                         Surface(
                             modifier = Modifier
                                 .fillMaxWidth()
                                 .pressScale()
                                 .clickable { openDetail(item.id) },
-                            shape = RoundedCornerShape(18.dp),
+                            shape = RoundedCornerShape(22.dp),
                             color = palette.card,
                             border = BorderStroke(1.dp, palette.cardBorder),
-                            shadowElevation = 0.dp
+                            shadowElevation = 1.dp
                         ) {
                             Row(
-                                modifier = Modifier.padding(14.dp),
+                                modifier = Modifier.padding(horizontal = 16.dp, vertical = 14.dp),
                                 verticalAlignment = Alignment.CenterVertically,
-                                horizontalArrangement = Arrangement.spacedBy(12.dp)
+                                horizontalArrangement = Arrangement.spacedBy(10.dp)
                             ) {
-                                Box(
-                                    modifier = Modifier
-                                        .size(44.dp)
-                                        .clip(RoundedCornerShape(14.dp))
-                                        .background(palette.successSurface),
-                                    contentAlignment = Alignment.Center
-                                ) {
-                                    Icon(Icons.Default.AttachMoney, contentDescription = null, tint = palette.success)
-                                }
                                 Column(modifier = Modifier.weight(1f)) {
-                                    Text(item.period_title, fontWeight = FontWeight.Bold, fontSize = 13.sp, color = palette.textPrimary)
                                     Text(
-                                        "${Formatters.formatDisplayDate(item.period_start, lang)} - ${Formatters.formatDisplayDate(item.period_end, lang)}",
-                                        fontSize = 11.sp,
-                                        color = palette.textSecondary
+                                        item.period_title,
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 14.sp,
+                                        color = palette.textPrimary
                                     )
+                                    Text(
+                                        "${Formatters.formatDisplayDate(item.period_start, lang)} – ${Formatters.formatDisplayDate(item.period_end, lang)}",
+                                        fontSize = 11.sp,
+                                        color = palette.textMuted
+                                    )
+                                }
+                                Surface(
+                                    shape = CircleShape,
+                                    color = Color(0xFF10B981)
+                                ) {
                                     Text(
                                         text = maskedMoney(item.take_home_pay),
-                                        fontWeight = FontWeight.Black,
-                                        fontSize = 15.sp,
-                                        color = palette.success,
-                                        style = TextStyle(fontFeatureSettings = "tnum")
+                                        fontWeight = FontWeight.Bold,
+                                        fontSize = 12.sp,
+                                        color = Color.White,
+                                        style = TextStyle(fontFeatureSettings = "tnum"),
+                                        modifier = Modifier.padding(horizontal = 12.dp, vertical = 6.dp)
                                     )
                                 }
-                                Icon(Icons.Default.ChevronRight, contentDescription = null, tint = palette.accent)
+                                Icon(
+                                    Icons.Default.ChevronRight,
+                                    contentDescription = null,
+                                    tint = palette.textMuted,
+                                    modifier = Modifier.size(18.dp)
+                                )
                             }
                         }
                     }
@@ -312,113 +324,6 @@ fun PayslipsScreen(
                 }
             }
         )
-    }
-}
-
-@Composable
-private fun HeroLatestPayslipCard(
-    item: PayslipSummaryItem,
-    hideSalary: Boolean,
-    lang: String,
-    onToggleHide: () -> Unit,
-    onOpenDetail: () -> Unit,
-    onDownloadPdf: () -> Unit
-) {
-    val palette = LocalEssPalette.current
-    Box(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(24.dp))
-            .background(Brush.linearGradient(listOf(palette.heroStart, palette.heroEnd)))
-            .clickable(onClick = onOpenDetail)
-            .padding(18.dp)
-    ) {
-        Column(verticalArrangement = Arrangement.spacedBy(12.dp)) {
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.SpaceBetween,
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                Surface(
-                    shape = RoundedCornerShape(50),
-                    color = Color.White.copy(alpha = 0.14f)
-                ) {
-                    Text(
-                        text = tr(lang, "SLIP TERBARU", "LATEST PAYSLIP"),
-                        color = Color(0xFF93C5FD),
-                        fontSize = 10.sp,
-                        fontWeight = FontWeight.Bold,
-                        letterSpacing = 0.8.sp,
-                        modifier = Modifier.padding(horizontal = 10.dp, vertical = 4.dp)
-                    )
-                }
-                IconButton(onClick = onToggleHide, modifier = Modifier.size(30.dp)) {
-                    Icon(
-                        imageVector = if (hideSalary) Icons.Default.VisibilityOff else Icons.Default.Visibility,
-                        contentDescription = "Mask salary",
-                        tint = Color.White.copy(alpha = 0.85f),
-                        modifier = Modifier.size(18.dp)
-                    )
-                }
-            }
-
-            Column {
-                Text(
-                    text = item.period_title,
-                    color = Color.White.copy(alpha = 0.8f),
-                    fontSize = 12.sp,
-                    fontWeight = FontWeight.Medium
-                )
-                Spacer(modifier = Modifier.height(2.dp))
-                Text(
-                    text = if (hideSalary) "Rp \u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022\u2022" else Formatters.formatRupiah(item.take_home_pay),
-                    color = Color(0xFF34D399),
-                    fontWeight = FontWeight.Black,
-                    fontSize = 26.sp,
-                    style = TextStyle(fontFeatureSettings = "tnum")
-                )
-                Text(
-                    text = "${Formatters.formatDisplayDate(item.period_start, lang)} - ${Formatters.formatDisplayDate(item.period_end, lang)}",
-                    color = Color.White.copy(alpha = 0.65f),
-                    fontSize = 11.sp
-                )
-            }
-
-            Row(
-                modifier = Modifier.fillMaxWidth(),
-                horizontalArrangement = Arrangement.spacedBy(8.dp)
-            ) {
-                Button(
-                    onClick = onOpenDetail,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = Color.White.copy(alpha = 0.16f),
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier.weight(1f).height(40.dp),
-                    contentPadding = PaddingValues(horizontal = 12.dp)
-                ) {
-                    Icon(Icons.Default.Description, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(6.dp))
-                    Text(tr(lang, "Lihat Rincian", "View Breakdown"), fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-
-                Button(
-                    onClick = onDownloadPdf,
-                    shape = RoundedCornerShape(12.dp),
-                    colors = ButtonDefaults.buttonColors(
-                        containerColor = palette.accent,
-                        contentColor = Color.White
-                    ),
-                    modifier = Modifier.height(40.dp),
-                    contentPadding = PaddingValues(horizontal = 14.dp)
-                ) {
-                    Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
-                    Spacer(modifier = Modifier.width(4.dp))
-                    Text("PDF", fontSize = 12.sp, fontWeight = FontWeight.Bold)
-                }
-            }
-        }
     }
 }
 
@@ -488,7 +393,7 @@ private fun PayslipDetailDialog(
                         Button(
                             onClick = onDownloadPdf,
                             shape = RoundedCornerShape(10.dp),
-                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = Color.White),
+                            colors = ButtonDefaults.buttonColors(containerColor = palette.accent, contentColor = palette.onHero),
                             contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp)
                         ) {
                             Icon(Icons.Default.Download, contentDescription = null, modifier = Modifier.size(16.dp))
@@ -544,48 +449,5 @@ private fun PayslipDetailDialog(
                 }
             }
         }
-    }
-}
-
-@Composable
-private fun PayslipLine(label: String, value: String) {
-    val palette = LocalEssPalette.current
-    Row(modifier = Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.SpaceBetween) {
-        Text(label, fontSize = 11.sp, color = palette.textSecondary)
-        Text(value, fontSize = 11.sp, fontWeight = FontWeight.SemiBold, color = palette.textPrimary)
-    }
-}
-
-@Composable
-private fun MoneyRow(label: String, amount: Double, bold: Boolean = false, subLabel: String? = null) {
-    val palette = LocalEssPalette.current
-    Row(
-        modifier = Modifier.fillMaxWidth(),
-        horizontalArrangement = Arrangement.SpaceBetween,
-        verticalAlignment = Alignment.Top
-    ) {
-        Column(modifier = Modifier.weight(1f).padding(end = 8.dp)) {
-            Text(
-                label,
-                fontSize = 12.sp,
-                fontWeight = if (bold) FontWeight.Bold else FontWeight.Normal,
-                color = if (bold) palette.textPrimary else palette.textSecondary
-            )
-            if (!subLabel.isNullOrBlank()) {
-                Text(
-                    subLabel,
-                    fontSize = 10.sp,
-                    color = palette.textMuted,
-                    style = TextStyle(fontFeatureSettings = "tnum")
-                )
-            }
-        }
-        Text(
-            Formatters.formatRupiah(amount),
-            fontSize = 12.sp,
-            fontWeight = if (bold) FontWeight.Bold else FontWeight.SemiBold,
-            color = palette.textPrimary,
-            style = TextStyle(fontFeatureSettings = "tnum")
-        )
     }
 }

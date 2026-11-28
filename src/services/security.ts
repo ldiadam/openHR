@@ -7,6 +7,7 @@ export interface SecurityPolicy {
   block_rooted_devices: boolean;
   enforce_device_binding: boolean;
   max_travel_speed_kmh: number;
+  require_office_ip: boolean;
 }
 
 export interface ClientSecurityPayload {
@@ -23,6 +24,7 @@ export const DEFAULT_SECURITY_POLICY: SecurityPolicy = {
   block_rooted_devices: false,
   enforce_device_binding: false,
   max_travel_speed_kmh: 250,
+  require_office_ip: false,
 };
 
 export function normalizeAntiFakeMode(raw: unknown): AntiFakeGpsMode {
@@ -34,7 +36,7 @@ export async function getSecurityPolicy(db: D1Database): Promise<SecurityPolicy>
   try {
     const row = await db
       .prepare(
-        `SELECT anti_fake_gps_mode, block_rooted_devices, enforce_device_binding, max_travel_speed_kmh
+        `SELECT anti_fake_gps_mode, block_rooted_devices, enforce_device_binding, max_travel_speed_kmh, require_office_ip
          FROM companies LIMIT 1`
       )
       .first<any>();
@@ -44,10 +46,53 @@ export async function getSecurityPolicy(db: D1Database): Promise<SecurityPolicy>
       block_rooted_devices: Boolean(row.block_rooted_devices),
       enforce_device_binding: Boolean(row.enforce_device_binding),
       max_travel_speed_kmh: Math.max(50, Number(row.max_travel_speed_kmh || 250)),
+      require_office_ip: Boolean(row.require_office_ip),
     };
   } catch {
     return DEFAULT_SECURITY_POLICY;
   }
+}
+
+function ipv4ToInt(ip: string): number | null {
+  const parts = ip.trim().split('.');
+  if (parts.length !== 4) return null;
+  let val = 0;
+  for (const p of parts) {
+    if (!/^\d+$/.test(p)) return null;
+    const n = Number(p);
+    if (n < 0 || n > 255) return null;
+    val = (val << 8) | n;
+  }
+  return val >>> 0;
+}
+
+/**
+ * Checks whether `clientIp` matches any comma/newline-separated IPv4, IPv6, or IPv4 CIDR entry.
+ */
+export function isIpAllowed(clientIp: string | null | undefined, allowedIpsRaw: string | null | undefined): boolean {
+  if (!allowedIpsRaw || !allowedIpsRaw.trim()) return true;
+  if (!clientIp || !clientIp.trim()) return false;
+  const candidate = clientIp.split(',')[0].trim();
+  const entries = allowedIpsRaw
+    .split(/[\s,;]+/)
+    .map((s) => s.trim())
+    .filter(Boolean);
+  if (entries.length === 0) return true;
+
+  const candidateInt = ipv4ToInt(candidate);
+  for (const entry of entries) {
+    if (entry === candidate) return true;
+    const slashIdx = entry.indexOf('/');
+    if (slashIdx > 0 && candidateInt !== null) {
+      const baseInt = ipv4ToInt(entry.slice(0, slashIdx));
+      const prefix = Number(entry.slice(slashIdx + 1));
+      if (baseInt !== null && Number.isInteger(prefix) && prefix >= 0 && prefix <= 32) {
+        const mask = prefix === 0 ? 0 : (~0 << (32 - prefix)) >>> 0;
+        if ((candidateInt & mask) === (baseInt & mask)) return true;
+      }
+    }
+  }
+  return false;
 }
 
 export function detectTeleportSpeedKmh(

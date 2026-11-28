@@ -10,8 +10,9 @@ import {
 import { createPurelymailUser } from '../services/purelymail';
 import { sendEmailInBackground } from '../services/smtp';
 import { getWelcomeInviteEmail } from '../services/email-templates';
-import { getFile, putFile } from '../services/storage';
+import { decodeBase64Image, deleteFile, getFile, normalizeStoredImage, putFile } from '../services/storage';
 import { makeId } from '../utils/id';
+import { signBadgeToken } from '../utils/id-card-token';
 import { hasPurelymailConfig, parseModulesConfig } from '../../shared/modules';
 import { getOrgHierarchyConfig, wouldCreateManagerCycle } from '../services/org-hierarchy';
 
@@ -143,7 +144,14 @@ employeeRoutes.get('/:id', async (c) => {
   }
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
-  return c.json({ employee: sanitized });
+  const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
+  return c.json({
+    employee: {
+      ...sanitized,
+      photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
+      badge_token: badgeToken,
+    },
+  });
 });
 
 // 3b. Employee Detail aggregator: profile + leave, payroll history, loans, claims, attendance, documents
@@ -232,10 +240,15 @@ employeeRoutes.get('/:id/profile', async (c) => {
   ]);
 
   const sanitized = sanitizeEmployeeByRole(emp, user.role, user.employeeId);
+  const badgeToken = await signBadgeToken(c.env.JWT_SECRET, emp.id);
   const showMoney = user.role === 'owner_admin' || user.role === 'finance' || emp.id === user.employeeId;
 
   return c.json({
-    employee: sanitized,
+    employee: {
+      ...sanitized,
+      photo_url: emp.photo_key ? `/api/employees/${emp.id}/photo?v=${encodeURIComponent(emp.photo_key)}` : null,
+      badge_token: badgeToken,
+    },
     leaveBalances: balancesRes.results || [],
     payrollHistory: showMoney
       ? payrollRes.results || []
@@ -1210,4 +1223,96 @@ employeeRoutes.post('/:id/unbind-device', requireRole(['owner_admin']), async (c
     .bind(empId)
     .run();
   return c.json({ message: 'Perangkat karyawan berhasil direset.' });
+});
+
+// Serve Employee Profile Photo
+employeeRoutes.get('/:id/photo', async (c) => {
+  const empId = c.req.param('id');
+  const row = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`)
+    .bind(empId)
+    .first<{ photo_key?: string | null }>();
+  if (!row?.photo_key) return c.json({ error: 'Foto profil tidak ditemukan' }, 404);
+
+  const stored = await getFile(c.env, row.photo_key);
+  if (!stored) return c.json({ error: 'File foto tidak ditemukan' }, 404);
+
+  const normalized = normalizeStoredImage(stored);
+  if (!normalized) return c.json({ error: 'Format foto tidak valid' }, 422);
+
+  c.header('Content-Type', normalized.contentType || 'image/jpeg');
+  c.header('Content-Disposition', 'inline');
+  c.header('Cache-Control', 'private, max-age=3600');
+  return c.body(normalized.data as any);
+});
+
+// Update Employee Profile Photo (Admin or Self)
+employeeRoutes.put('/:id/photo', async (c) => {
+  const user = c.get('user');
+  const empId = c.req.param('id');
+  if (user.role !== 'owner_admin' && user.employeeId !== empId) {
+    return c.json({ error: 'Forbidden: Anda hanya dapat mengubah foto profil Anda sendiri' }, 403);
+  }
+
+  const body = await c.req.json().catch(() => ({}));
+  const raw = typeof body.photo_base64 === 'string' ? body.photo_base64 : '';
+  const decoded = decodeBase64Image(raw);
+  if (!decoded || decoded.bytes.byteLength === 0) {
+    return c.json({ error: 'Foto tidak valid.' }, 400);
+  }
+  if (decoded.bytes.byteLength > 2 * 1024 * 1024) {
+    return c.json({ error: 'Ukuran foto maksimal 2 MB.' }, 400);
+  }
+
+  const existing = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`)
+    .bind(empId)
+    .first<{ photo_key?: string | null }>();
+  if (!existing) return c.json({ error: 'Karyawan tidak ditemukan' }, 404);
+
+  const newKey = `employees/${empId}/avatar-${Date.now()}.jpg`;
+  await putFile(c.env, {
+    key: newKey,
+    data: decoded.bytes,
+    contentType: decoded.contentType,
+  });
+
+  await c.env.DB.prepare(
+    `UPDATE employees SET photo_key = ?, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  )
+    .bind(newKey, empId)
+    .run();
+
+  if (existing.photo_key && existing.photo_key !== newKey) {
+    await deleteFile(c.env, existing.photo_key).catch(() => {});
+  }
+
+  return c.json({
+    message: 'Foto profil berhasil diperbarui.',
+    photo_url: `/api/employees/${empId}/photo?v=${encodeURIComponent(newKey)}`,
+  });
+});
+
+// Remove Employee Profile Photo (Admin or Self)
+employeeRoutes.delete('/:id/photo', async (c) => {
+  const user = c.get('user');
+  const empId = c.req.param('id');
+  if (user.role !== 'owner_admin' && user.employeeId !== empId) {
+    return c.json({ error: 'Forbidden' }, 403);
+  }
+
+  const existing = await c.env.DB.prepare(`SELECT photo_key FROM employees WHERE id = ?`)
+    .bind(empId)
+    .first<{ photo_key?: string | null }>();
+  if (!existing) return c.json({ error: 'Karyawan tidak ditemukan' }, 404);
+
+  await c.env.DB.prepare(
+    `UPDATE employees SET photo_key = NULL, updated_at = CURRENT_TIMESTAMP WHERE id = ?`
+  )
+    .bind(empId)
+    .run();
+
+  if (existing.photo_key) {
+    await deleteFile(c.env, existing.photo_key).catch(() => {});
+  }
+
+  return c.json({ message: 'Foto profil berhasil dihapus.' });
 });

@@ -24,6 +24,10 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
     body.smtp_port !== undefined && body.smtp_port !== '' && body.smtp_port !== null
       ? Number(body.smtp_port) || null
       : null;
+  const rawPrimaryColor = typeof body.primary_color === 'string' ? body.primary_color.trim() : '';
+  const primaryColorVal = /^#([0-9a-fA-F]{3}|[0-9a-fA-F]{6})$/.test(rawPrimaryColor)
+    ? rawPrimaryColor.toUpperCase()
+    : null;
 
   const runUpdate = async (withSmtpCols: boolean) => {
     if (withSmtpCols) {
@@ -32,6 +36,7 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
           name = COALESCE(?, name),
           legal_name = COALESCE(?, legal_name),
           logo_url = CASE WHEN ? = 1 THEN ? ELSE logo_url END,
+          primary_color = COALESCE(?, primary_color),
           npwp = COALESCE(?, npwp),
           bpjs_kesehatan_code = COALESCE(?, bpjs_kesehatan_code),
           bpjs_tk_code = COALESCE(?, bpjs_tk_code),
@@ -54,6 +59,7 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
           body.legal_name,
           body.logo_url !== undefined ? 1 : 0,
           body.logo_url !== undefined ? (body.logo_url?.trim() || null) : null,
+          primaryColorVal,
           body.npwp,
           body.bpjs_kesehatan_code,
           body.bpjs_tk_code,
@@ -118,6 +124,7 @@ settingsRoutes.put('/company', requireRole(['owner_admin']), async (c) => {
       await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_host TEXT`).run().catch(() => {});
       await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_port INTEGER`).run().catch(() => {});
       await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN smtp_user TEXT`).run().catch(() => {});
+      await c.env.DB.prepare(`ALTER TABLE companies ADD COLUMN primary_color TEXT`).run().catch(() => {});
       await runUpdate(true);
     } else {
       throw err;
@@ -494,16 +501,16 @@ settingsRoutes.get('/branches', async (c) => {
 
 settingsRoutes.post('/branches', requireRole(['owner_admin']), async (c) => {
   const body = await c.req.json();
-  const { name, address, latitude, longitude, radius_meters, umk_amount, timezone } = body;
+  const { name, address, latitude, longitude, radius_meters, umk_amount, timezone, allowed_ips } = body;
 
   if (!name) return c.json({ error: 'Nama cabang wajib diisi' }, 400);
 
   const id = `branch-${Date.now()}`;
   await c.env.DB.prepare(
     `INSERT INTO branches (
-      id, tenant_id, company_id, name, address, latitude, longitude, radius_meters, umk_amount, timezone
+      id, tenant_id, company_id, name, address, latitude, longitude, radius_meters, umk_amount, timezone, allowed_ips
     ) VALUES (
-      ?, 'default', 'comp-nusantara', ?, ?, ?, ?, ?, ?, ?
+      ?, 'default', 'comp-nusantara', ?, ?, ?, ?, ?, ?, ?, ?
     )`
   )
     .bind(
@@ -514,7 +521,8 @@ settingsRoutes.post('/branches', requireRole(['owner_admin']), async (c) => {
       parseFloat(longitude) || 106.8456,
       parseInt(radius_meters || '100', 10),
       parseFloat(umk_amount) || 5067381,
-      timezone || 'Asia/Jakarta'
+      timezone || 'Asia/Jakarta',
+      allowed_ips ? String(allowed_ips).trim() : null
     )
     .run();
 
@@ -534,6 +542,7 @@ settingsRoutes.put('/branches/:id', requireRole(['owner_admin']), async (c) => {
       radius_meters = COALESCE(?, radius_meters),
       umk_amount = COALESCE(?, umk_amount),
       timezone = COALESCE(?, timezone),
+      allowed_ips = ?,
       updated_at = CURRENT_TIMESTAMP
      WHERE id = ?`
   )
@@ -545,6 +554,7 @@ settingsRoutes.put('/branches/:id', requireRole(['owner_admin']), async (c) => {
       body.radius_meters !== undefined ? parseInt(body.radius_meters, 10) : null,
       body.umk_amount !== undefined ? parseFloat(body.umk_amount) : null,
       body.timezone,
+      body.allowed_ips !== undefined ? (String(body.allowed_ips).trim() || null) : null,
       id
     )
     .run();
@@ -659,12 +669,13 @@ settingsRoutes.put('/security', requireRole(['owner_admin']), async (c) => {
   const blockRooted = body.block_rooted_devices ? 1 : 0;
   const enforceBinding = body.enforce_device_binding ? 1 : 0;
   const maxSpeed = Math.max(50, Number(body.max_travel_speed_kmh || 250));
+  const requireOfficeIp = body.require_office_ip ? 1 : 0;
 
   await c.env.DB.prepare(
     `UPDATE companies
-     SET anti_fake_gps_mode = ?, block_rooted_devices = ?, enforce_device_binding = ?, max_travel_speed_kmh = ?, updated_at = CURRENT_TIMESTAMP`
+     SET anti_fake_gps_mode = ?, block_rooted_devices = ?, enforce_device_binding = ?, max_travel_speed_kmh = ?, require_office_ip = ?, updated_at = CURRENT_TIMESTAMP`
   )
-    .bind(mode, blockRooted, enforceBinding, maxSpeed)
+    .bind(mode, blockRooted, enforceBinding, maxSpeed, requireOfficeIp)
     .run();
 
   const policy = await getSecurityPolicy(c.env.DB);
@@ -767,6 +778,9 @@ settingsRoutes.put('/payroll', requireRole(['owner_admin']), async (c) => {
       prorating_method = COALESCE(?, prorating_method),
       cutoff_day = COALESCE(?, cutoff_day),
       thr_payment_rule = COALESCE(?, thr_payment_rule),
+      thr_progressive_tiers_json = COALESCE(?, thr_progressive_tiers_json),
+      leave_allowance_enabled = COALESCE(?, leave_allowance_enabled),
+      leave_allowance_multiplier = COALESCE(?, leave_allowance_multiplier),
       ter_rules_json = COALESCE(?, ter_rules_json),
       pasal17_rules_json = COALESCE(?, pasal17_rules_json),
       ptkp_rates_json = COALESCE(?, ptkp_rates_json),
@@ -800,6 +814,13 @@ settingsRoutes.put('/payroll', requireRole(['owner_admin']), async (c) => {
       body.prorating_method,
       body.cutoff_day,
       body.thr_payment_rule,
+      body.thr_progressive_tiers_json !== undefined
+        ? (typeof body.thr_progressive_tiers_json === 'string'
+            ? body.thr_progressive_tiers_json
+            : JSON.stringify(body.thr_progressive_tiers_json))
+        : null,
+      body.leave_allowance_enabled !== undefined ? (body.leave_allowance_enabled ? 1 : 0) : null,
+      body.leave_allowance_multiplier !== undefined ? Number(body.leave_allowance_multiplier) : null,
       body.ter_rules_json ? JSON.stringify(body.ter_rules_json) : null,
       body.pasal17_rules_json ? JSON.stringify(body.pasal17_rules_json) : null,
       body.ptkp_rates_json ? JSON.stringify(body.ptkp_rates_json) : null,
@@ -829,4 +850,133 @@ settingsRoutes.get('/audit-logs', requireRole(['owner_admin']), async (c) => {
   ).all<any>();
 
   return c.json({ logs: rows.results || [] });
+});
+
+// 6. Multi NPWP (Company Tax Entities)
+settingsRoutes.get('/tax-entities', async (c) => {
+  const rows = await c.env.DB.prepare(`SELECT * FROM company_tax_entities ORDER BY is_default DESC, name ASC`).all<any>();
+  return c.json({ taxEntities: rows.results || [] });
+});
+
+settingsRoutes.post('/tax-entities', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const name = String(body.name || '').trim();
+  const npwp = String(body.npwp || '').trim();
+  if (!name || !npwp) return c.json({ error: 'Nama entitas dan NPWP wajib diisi.' }, 400);
+  const id = makeId('tax');
+  if (body.is_default) {
+    await c.env.DB.prepare(`UPDATE company_tax_entities SET is_default = 0`).run();
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO company_tax_entities (id, tenant_id, name, npwp, address, is_default) VALUES (?, 'default', ?, ?, ?, ?)`
+  )
+    .bind(id, name, npwp, body.address ? String(body.address).trim() : null, body.is_default ? 1 : 0)
+    .run();
+  return c.json({ message: 'Entitas NPWP berhasil ditambahkan.', id }, 201);
+});
+
+settingsRoutes.delete('/tax-entities/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare(`UPDATE branches SET tax_entity_id = NULL WHERE tax_entity_id = ?`).bind(id).run();
+  await c.env.DB.prepare(`DELETE FROM company_tax_entities WHERE id = ?`).bind(id).run();
+  return c.json({ message: 'Entitas NPWP dihapus.' });
+});
+
+// 7. Multi Bank Accounts (Payroll Disbursement)
+settingsRoutes.get('/bank-accounts', async (c) => {
+  const rows = await c.env.DB.prepare(`SELECT * FROM company_bank_accounts ORDER BY is_default DESC, bank_name ASC`).all<any>();
+  return c.json({ bankAccounts: rows.results || [] });
+});
+
+settingsRoutes.post('/bank-accounts', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const bankName = String(body.bank_name || '').trim();
+  const accountNumber = String(body.account_number || '').trim();
+  const accountHolder = String(body.account_holder || '').trim();
+  if (!bankName || !accountNumber || !accountHolder) {
+    return c.json({ error: 'Nama bank, nomor rekening, dan atas nama wajib diisi.' }, 400);
+  }
+  const id = makeId('bank');
+  if (body.is_default) {
+    await c.env.DB.prepare(`UPDATE company_bank_accounts SET is_default = 0`).run();
+  }
+  await c.env.DB.prepare(
+    `INSERT INTO company_bank_accounts (id, tenant_id, bank_name, account_number, account_holder, branch_name, is_default) VALUES (?, 'default', ?, ?, ?, ?, ?)`
+  )
+    .bind(id, bankName, accountNumber, accountHolder, body.branch_name ? String(body.branch_name).trim() : null, body.is_default ? 1 : 0)
+    .run();
+  return c.json({ message: 'Rekening bank perusahaan berhasil ditambahkan.', id }, 201);
+});
+
+settingsRoutes.delete('/bank-accounts/:id', requireRole(['owner_admin']), async (c) => {
+  const id = c.req.param('id');
+  await c.env.DB.prepare(`UPDATE branches SET bank_account_id = NULL WHERE bank_account_id = ?`).bind(id).run();
+  await c.env.DB.prepare(`DELETE FROM company_bank_accounts WHERE id = ?`).bind(id).run();
+  return c.json({ message: 'Rekening bank dihapus.' });
+});
+
+// 8. Database JSON Backup Snapshot
+settingsRoutes.get('/backup', requireRole(['owner_admin']), async (c) => {
+  const tables = [
+    'companies',
+    'branches',
+    'departments',
+    'employee_levels',
+    'employees',
+    'shift_patterns',
+    'leave_types',
+    'leave_balances',
+    'leave_requests',
+    'attendance_records',
+    'client_visits',
+    'payroll_settings',
+    'payroll_runs',
+    'payroll_items',
+    'company_tax_entities',
+    'company_bank_accounts',
+  ];
+  const snapshot: Record<string, any[]> = {};
+  for (const tbl of tables) {
+    try {
+      const res = await c.env.DB.prepare(`SELECT * FROM ${tbl}`).all<any>();
+      snapshot[tbl] = res.results || [];
+    } catch {
+      snapshot[tbl] = [];
+    }
+  }
+  const payload = JSON.stringify({
+    exported_at: new Date().toISOString(),
+    app: 'openHR',
+    tables: snapshot,
+  }, null, 2);
+  c.header('Content-Type', 'application/json');
+  c.header('Content-Disposition', `attachment; filename="openhr-backup-${new Date().toISOString().slice(0, 10)}.json"`);
+  return c.body(payload);
+});
+
+// 9. Android ESS App Version Config (for in-app auto-update prompt)
+settingsRoutes.get('/app-version', async (c) => {
+  const row = await c.env.DB.prepare(
+    `SELECT android_latest_version_code, android_latest_version_name, android_apk_url, android_release_notes FROM companies LIMIT 1`
+  ).first<any>();
+  return c.json({
+    version_code: Number(row?.android_latest_version_code || 1),
+    version_name: row?.android_latest_version_name || '1.0.0',
+    apk_url: row?.android_apk_url || null,
+    release_notes: row?.android_release_notes || null,
+  });
+});
+
+settingsRoutes.put('/app-version', requireRole(['owner_admin']), async (c) => {
+  const body = await c.req.json();
+  const code = Math.max(1, Number(body.version_code || 1));
+  const name = String(body.version_name || '1.0.0').trim();
+  const url = body.apk_url ? String(body.apk_url).trim() : null;
+  const notes = body.release_notes ? String(body.release_notes).trim() : null;
+  await c.env.DB.prepare(
+    `UPDATE companies SET android_latest_version_code = ?, android_latest_version_name = ?, android_apk_url = ?, android_release_notes = ?, updated_at = CURRENT_TIMESTAMP`
+  )
+    .bind(code, name, url, notes)
+    .run();
+  return c.json({ message: 'Versi rilis Android ESS diperbarui.' });
 });

@@ -26,6 +26,12 @@ import { useCompany } from '../context/CompanyContext';
 import { LocationPickerMap } from '../components/LocationPickerMap';
 import { FormTemplatesManager } from '../components/FormTemplatesManager';
 import {
+  DEFAULT_PRIMARY_COLOR,
+  generateThemePalette,
+  normalizeHexColor,
+  PRESET_THEME_COLORS,
+} from '../utils/themePalette';
+import {
   DEFAULT_MODULES_CONFIG,
   MODULE_DEFINITIONS,
   ModulesConfig,
@@ -52,11 +58,13 @@ export const HRSettings: React.FC = () => {
     block_rooted_devices: boolean;
     enforce_device_binding: boolean;
     max_travel_speed_kmh: number;
+    require_office_ip: boolean;
   }>({
     anti_fake_gps_mode: 'block',
     block_rooted_devices: false,
     enforce_device_binding: false,
     max_travel_speed_kmh: 250,
+    require_office_ip: false,
   });
   const [securityEvents, setSecurityEvents] = useState<any[]>([]);
   const [branches, setBranches] = useState<any[]>([]);
@@ -1131,6 +1139,17 @@ export const HRSettings: React.FC = () => {
                     />
                   </div>
 
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">{tr('IP / CIDR Wi-Fi Kantor (Opsional)', 'Allowed Office IP / CIDR (Optional)')}</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 203.0.113.10, 192.168.1.0/24"
+                      value={(newBranch as any).allowed_ips || ''}
+                      onChange={(e) => setNewBranch({ ...newBranch, allowed_ips: e.target.value } as any)}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-xs"
+                    />
+                  </div>
+
                   <div className="flex justify-end gap-2 pt-3 border-t border-slate-100">
                     <button
                       type="button"
@@ -1286,6 +1305,17 @@ export const HRSettings: React.FC = () => {
                       value={selectedBranch.umk_amount}
                       onChange={(e) => setSelectedBranch({ ...selectedBranch, umk_amount: parseFloat(e.target.value) || 0 })}
                       className="w-full p-2.5 border border-slate-300 rounded-xl font-bold"
+                    />
+                  </div>
+
+                  <div>
+                    <label className="block text-slate-700 font-semibold mb-1">{tr('IP / CIDR Wi-Fi Kantor (Opsional)', 'Allowed Office IP / CIDR (Optional)')}</label>
+                    <input
+                      type="text"
+                      placeholder="e.g. 203.0.113.10, 192.168.1.0/24"
+                      value={selectedBranch.allowed_ips || ''}
+                      onChange={(e) => setSelectedBranch({ ...selectedBranch, allowed_ips: e.target.value })}
+                      className="w-full p-2.5 border border-slate-300 rounded-xl font-mono text-xs"
                     />
                   </div>
 
@@ -1525,6 +1555,14 @@ export const HRSettings: React.FC = () => {
                   />
                   <span>{tr('Ikat 1 Perangkat per Karyawan (Anti-Titip Absen)', 'Enforce 1 Device per Employee')}</span>
                 </label>
+                <label className="flex items-center gap-2 text-xs font-semibold text-slate-800 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={securityPolicy.require_office_ip}
+                    onChange={(e) => setSecurityPolicy({ ...securityPolicy, require_office_ip: e.target.checked })}
+                  />
+                  <span>{tr('Wajibkan IP / Wi-Fi Kantor (Cabang dengan daftar IP)', 'Require Office IP / Wi-Fi (Branches with IP allowlist)')}</span>
+                </label>
               </div>
             </div>
 
@@ -1753,6 +1791,79 @@ export const HRSettings: React.FC = () => {
                 />
               </div>
             </div>
+
+            {/* Primary Brand / Mobile Theme Color */}
+            {(() => {
+              const activeHex = normalizeHexColor(company.primary_color || DEFAULT_PRIMARY_COLOR);
+              const previewPalette = generateThemePalette(activeHex);
+              return (
+                <div className="pt-4 border-t border-slate-100 space-y-3">
+                  <div className="flex flex-wrap items-center justify-between gap-2">
+                    <div>
+                      <label className="text-slate-800 block text-xs font-bold">
+                        {tr('Warna Utama Aplikasi & Mobile ESS', 'Primary Brand & Mobile ESS Theme Color')}
+                      </label>
+                      <p className="text-[11px] text-slate-500">
+                        {tr(
+                          'Pilih satu warna utama — sistem akan membuat palet gelap, lembut, dan teks kontras secara otomatis.',
+                          'Pick one primary color — the system automatically generates darker, soft, and accessible contrast shades.'
+                        )}
+                      </p>
+                    </div>
+                    <div
+                      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-[11px] font-bold shadow-xs"
+                      style={{ background: previewPalette.gradient, color: previewPalette.onPrimary }}
+                    >
+                      <span>{company.name || 'openHR'}</span>
+                      <span className="opacity-80 font-mono">{activeHex}</span>
+                    </div>
+                  </div>
+
+                  <div className="flex flex-wrap items-center gap-2">
+                    {PRESET_THEME_COLORS.map((preset) => {
+                      const selected = activeHex === preset.hex;
+                      return (
+                        <button
+                          key={preset.hex}
+                          type="button"
+                          onClick={() => setCompany({ ...company, primary_color: preset.hex })}
+                          title={preset.name}
+                          className={`h-8 px-2.5 rounded-full border text-[11px] font-semibold inline-flex items-center gap-1.5 transition cursor-pointer ${
+                            selected
+                              ? 'border-slate-900 bg-slate-900 text-white shadow-xs'
+                              : 'border-slate-200 bg-white text-slate-700 hover:bg-slate-50'
+                          }`}
+                        >
+                          <span
+                            className="w-3.5 h-3.5 rounded-full border border-black/10 shrink-0"
+                            style={{ backgroundColor: preset.hex }}
+                          />
+                          <span>{preset.name}</span>
+                        </button>
+                      );
+                    })}
+
+                    <div className="inline-flex items-center gap-1.5 bg-slate-50 border border-slate-200 rounded-full px-2.5 py-1">
+                      <input
+                        type="color"
+                        value={activeHex}
+                        onChange={(e) => setCompany({ ...company, primary_color: e.target.value.toUpperCase() })}
+                        className="w-6 h-6 rounded-full border-0 bg-transparent cursor-pointer p-0"
+                        aria-label={tr('Pilih warna kustom', 'Pick custom color')}
+                      />
+                      <input
+                        type="text"
+                        value={company.primary_color || activeHex}
+                        onChange={(e) => setCompany({ ...company, primary_color: e.target.value })}
+                        placeholder="#E12D53"
+                        maxLength={7}
+                        className="w-20 bg-transparent text-xs font-mono font-bold text-slate-800 focus:outline-none"
+                      />
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
           </div>
 
           {/* 1. Custom Web App Domain */}

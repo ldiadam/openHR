@@ -12,6 +12,7 @@ import { ResetPassword } from './pages/ResetPassword';
 
 const EmployeeHome = React.lazy(() => import('./pages/EmployeeHome').then((m) => ({ default: m.EmployeeHome })));
 const EmployeeAttendance = React.lazy(() => import('./pages/EmployeeAttendance').then((m) => ({ default: m.EmployeeAttendance })));
+const EmployeeCalendar = React.lazy(() => import('./pages/EmployeeCalendar').then((m) => ({ default: m.EmployeeCalendar })));
 const EmployeeRequests = React.lazy(() => import('./pages/EmployeeRequests').then((m) => ({ default: m.EmployeeRequests })));
 const EmployeePayslips = React.lazy(() => import('./pages/EmployeePayslips').then((m) => ({ default: m.EmployeePayslips })));
 const EmployeeProfile = React.lazy(() => import('./pages/EmployeeProfile').then((m) => ({ default: m.EmployeeProfile })));
@@ -35,6 +36,7 @@ const PublicCareersPage = React.lazy(() => import('./pages/PublicCareersPage').t
 const HRDocuments = React.lazy(() => import('./pages/HRDocuments').then((m) => ({ default: m.HRDocuments })));
 const SigningComplete = React.lazy(() => import('./pages/SigningComplete').then((m) => ({ default: m.SigningComplete })));
 const PublicPettyCashVerify = React.lazy(() => import('./pages/PublicPettyCashVerify').then((m) => ({ default: m.PublicPettyCashVerify })));
+const PublicIdVerify = React.lazy(() => import('./pages/PublicIdVerify').then((m) => ({ default: m.PublicIdVerify })));
 const HRReports = React.lazy(() => import('./pages/HRReports').then((m) => ({ default: m.HRReports })));
 const HRSettings = React.lazy(() => import('./pages/HRSettings').then((m) => ({ default: m.HRSettings })));
 const LevelBuilder = React.lazy(() => import('./pages/LevelBuilder').then((m) => ({ default: m.LevelBuilder })));
@@ -98,6 +100,7 @@ export const App: React.FC = () => {
           <Route path="/signing/complete" element={<SigningComplete />} />
           {/* Public: QR code verification & read-only view for Petty Cash PDF reports */}
           <Route path="/verify/petty-cash/:id" element={<PublicPettyCashVerify />} />
+          <Route path="/verify/id-card/:id" element={<PublicIdVerify />} />
           {/* Public: External Careers & Job Application Portal */}
           <Route path="/careers" element={<PublicCareersPage />} />
 
@@ -125,6 +128,14 @@ export const App: React.FC = () => {
             element={
               <ProtectedRoute>
                 <EmployeeAttendance />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/app/calendar"
+            element={
+              <ProtectedRoute>
+                <EmployeeCalendar />
               </ProtectedRoute>
             }
           />
