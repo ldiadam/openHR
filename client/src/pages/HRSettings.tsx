@@ -1535,7 +1535,7 @@ export const HRSettings: React.FC = () => {
                 </div>
                 <div className="space-y-1.5 max-h-48 overflow-y-auto">
                   {securityEvents.slice(0, 10).map((ev) => (
-                    <div key={ev.id} className="flex items-center justify-between text-xs bg-white px-3 py-2 rounded-xl border border-red-100">
+                    <div key={ev.id} className="flex items-center justify-between gap-2 text-xs bg-white px-3 py-2 rounded-xl border border-red-100">
                       <div>
                         <span className="font-bold text-slate-900">{ev.full_name || ev.employee_id || '-'}</span>
                         <span className="ml-2 px-1.5 py-0.5 rounded bg-red-100 text-red-700 font-bold text-[10px]">
@@ -1543,7 +1543,22 @@ export const HRSettings: React.FC = () => {
                         </span>
                         {ev.device_label && <span className="ml-2 text-slate-500">{ev.device_label}</span>}
                       </div>
-                      <span className="text-[11px] text-slate-400">{String(ev.created_at || '').slice(0, 16)}</span>
+                      <div className="flex items-center gap-2">
+                        {ev.event_type === 'DEVICE_MISMATCH' && ev.employee_id && (
+                          <button
+                            type="button"
+                            onClick={async () => {
+                              await apiFetch(`/employees/${ev.employee_id}/unbind-device`, { method: 'POST' });
+                              setMsg({ type: 'success', text: tr('Perangkat karyawan direset.', 'Employee device unbound.') });
+                              loadData();
+                            }}
+                            className="px-2 py-0.5 rounded bg-red-50 border border-red-200 text-[10px] font-bold text-red-700 hover:bg-red-100"
+                          >
+                            {tr('Reset Perangkat', 'Unbind Device')}
+                          </button>
+                        )}
+                        <span className="text-[11px] text-slate-400">{String(ev.created_at || '').slice(0, 16)}</span>
+                      </div>
                     </div>
                   ))}
                 </div>

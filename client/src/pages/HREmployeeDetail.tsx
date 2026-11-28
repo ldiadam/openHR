@@ -279,12 +279,16 @@ export const HREmployeeDetail: React.FC = () => {
               label={tr('Level Karyawan', 'Employee Level')}
               value={emp.level_name ? `${emp.level_code} · ${emp.level_name} (Rank ${emp.level_rank})` : '-'}
             />
-            {emp.bound_device_id && (
-              <div className="col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
-                <div>
-                  <div className="text-[11px] font-semibold text-slate-500">{tr('Perangkat Terikat', 'Bound Mobile Device')}</div>
-                  <div className="text-xs font-bold text-slate-800">{emp.bound_device_label || emp.bound_device_id}</div>
+            <div className="col-span-2 flex items-center justify-between rounded-xl border border-slate-200 bg-slate-50 px-3 py-2">
+              <div>
+                <div className="text-[11px] font-semibold text-slate-500">{tr('Perangkat Terikat', 'Bound Mobile Device')}</div>
+                <div className="text-xs font-bold text-slate-800">
+                  {emp.bound_device_id
+                    ? emp.bound_device_label || emp.bound_device_id
+                    : tr('Belum ada perangkat terikat (otomatis terikat saat presensi)', 'No device bound yet (auto-binds on first clock-in)')}
                 </div>
+              </div>
+              {emp.bound_device_id && (
                 <button
                   type="button"
                   onClick={async () => {
@@ -295,8 +299,8 @@ export const HREmployeeDetail: React.FC = () => {
                 >
                   {tr('Reset Perangkat', 'Unbind Device')}
                 </button>
-              </div>
-            )}
+              )}
+            </div>
             <Field label={tr('Status Kepegawaian', 'Employment Status')} value={`${emp.employment_status} (${emp.lifecycle_status})`} />
             <Field label={t.employees.joinDate} value={emp.join_date ? formatDate(emp.join_date) : '-'} />
             <Field label={tr('Awal Kontrak', 'Contract Start')} value={emp.contract_start_date ? formatDate(emp.contract_start_date) : '-'} />
